@@ -33,6 +33,11 @@ class Settings(BaseSettings):
 
     dev_login_enabled: bool = True  # /api/auth/dev-login — pick a seeded user, no OAuth
 
+    # Startup safety net: if the DB has no active Super Admin, this account is (re)created so a
+    # login is always possible. Change the password after first sign-in.
+    bootstrap_admin_email: str = "melo@agora.ph"
+    bootstrap_admin_password: str = "Agora2026!"
+
     # Google OAuth 2.0 (optional; DEV_LOGIN is the fallback when unset)
     google_client_id: str = ""
     google_client_secret: str = ""

@@ -42,6 +42,57 @@ app = FastAPI(
 def _startup() -> None:
     # Create tables if missing (SQLite zero-setup). Prod uses Alembic migrations.
     create_all()
+    _startup_safeguards()
+
+
+def _startup_safeguards() -> None:
+    """Log which database we're on, and guarantee a login is always possible.
+
+    If the DB ever has no active Super Admin (empty/wiped DB, bad state), recreate the bootstrap
+    admin so no one is ever locked out. On a normal boot this is just a fast count query.
+    """
+    from sqlalchemy import func, select
+
+    from .constants import ROLE_SUPER_ADMIN
+    from .database import SessionLocal
+    from .models import User
+    from .utils.passwords import hash_password
+
+    backend = (
+        "PostgreSQL" if settings.database_url.startswith("postgres")
+        else "SQLite" if settings.database_url.startswith("sqlite") else "other"
+    )
+    print(f"[sentinel] startup: db={backend} env={settings.environment}")
+    if settings.environment == "production" and backend == "SQLite":
+        print("[sentinel] WARNING: production is running on EPHEMERAL SQLite — DATABASE_URL is not set! "
+              "Data will not persist. Set the DATABASE_URL secret.")
+
+    db = SessionLocal()
+    try:
+        active_admins = db.execute(
+            select(func.count(User.id)).where(
+                User.role == ROLE_SUPER_ADMIN, User.is_active.is_(True)
+            )
+        ).scalar() or 0
+        if active_admins == 0:
+            email = settings.bootstrap_admin_email.strip().lower()
+            existing = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
+            if existing:
+                existing.role = ROLE_SUPER_ADMIN
+                existing.is_active = True
+                if not existing.password_hash:
+                    existing.password_hash = hash_password(settings.bootstrap_admin_password)
+            else:
+                db.add(User(
+                    name="Sentinel Admin", email=email, role=ROLE_SUPER_ADMIN, is_active=True,
+                    password_hash=hash_password(settings.bootstrap_admin_password),
+                ))
+            db.commit()
+            print(f"[sentinel] no active Super Admin found — ensured bootstrap admin: {email}")
+    except Exception as exc:  # never let a safeguard crash startup
+        print(f"[sentinel] startup safeguard skipped: {exc}")
+    finally:
+        db.close()
 
 
 # --- API routers -----------------------------------------------------------
