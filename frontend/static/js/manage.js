@@ -141,9 +141,28 @@ window.pageInit = async (S) => {
     S.qsa("[data-del]").forEach((b) => b.onclick = () => del(key, rows.find((r) => r.id == b.dataset.del)));
   }
 
+  // Readable-but-strong password: 12 chars, no ambiguous glyphs (0/O, 1/l/I).
+  function genPassword() {
+    const sets = ["ABCDEFGHJKLMNPQRSTUVWXYZ", "abcdefghijkmnpqrstuvwxyz", "23456789", "!@#$%*?"];
+    const pick = (s) => s[Math.floor(Math.random() * s.length)];
+    let out = sets.map(pick).join("");  // guarantee one of each class
+    const all = sets.join("");
+    while (out.length < 12) out += pick(all);
+    return out.split("").sort(() => Math.random() - 0.5).join("");
+  }
+
   function fieldHtml(f, item) {
     const v = item ? item[f.k] : undefined;
     if (f.type === "textarea") return `<textarea data-mf="${f.k}">${S.esc(v || "")}</textarea>`;
+    if (f.type === "password") {
+      // Text input (not masked) so the admin can read the password they're setting, plus
+      // one-click Generate + Copy — handy when creating accounts for the team.
+      return `<div class="row" style="gap:6px;align-items:stretch">
+        <input type="text" data-mf="${f.k}" value="${S.esc(v == null ? "" : v)}" autocomplete="new-password" placeholder="Blank = leave unchanged" style="flex:1">
+        <button type="button" class="btn sm ghost" data-genpw="${f.k}" title="Generate a strong password">Generate</button>
+        <button type="button" class="btn sm ghost" data-copypw="${f.k}" title="Copy to clipboard">Copy</button>
+      </div>`;
+    }
     if (f.type === "select") {
       return `<select data-mf="${f.k}">${resolveOpts(f).map((o) => `<option value="${S.esc(o.value)}" ${String(o.value) === String(v == null ? "" : v) ? "selected" : ""}>${S.esc(o.label)}</option>`).join("")}</select>`;
     }
@@ -161,6 +180,17 @@ window.pageInit = async (S) => {
       footer: `<button class="btn ghost" id="m-cancel">Cancel</button><button class="btn primary" id="m-save">${editing ? "Save" : "Create"}</button>`,
     });
     S.qs("#m-cancel").onclick = m.close;
+    S.qsa("[data-genpw]").forEach((b) => b.onclick = () => {
+      const inp = S.qs(`[data-mf="${b.dataset.genpw}"]`);
+      inp.value = genPassword(); inp.focus(); inp.select();
+      S.toast("Password generated - copy it before saving", "ok");
+    });
+    S.qsa("[data-copypw]").forEach((b) => b.onclick = async () => {
+      const inp = S.qs(`[data-mf="${b.dataset.copypw}"]`);
+      if (!inp.value) { S.toast("Nothing to copy yet", "err"); return; }
+      try { await navigator.clipboard.writeText(inp.value); S.toast("Password copied", "ok"); }
+      catch (e) { inp.select(); document.execCommand("copy"); S.toast("Password copied", "ok"); }
+    });
     S.qs("#m-save").onclick = async () => {
       const payload = {};
       for (const f of cfg.fields) {

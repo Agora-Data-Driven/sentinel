@@ -34,12 +34,15 @@ gcloud secrets add-iam-policy-binding sentinel-google-client-secret `
   --member="serviceAccount:sentinel-run@agora-data-driven.iam.gserviceaccount.com" `
   --role="roles/secretmanager.secretAccessor" --project agora-data-driven
 
-# deploy with the client id (env) + secret (Secret Manager)
-gcloud run deploy sentinel --project agora-data-driven --region asia-southeast1 `
-  --image asia-southeast1-docker.pkg.dev/agora-data-driven/agora/sentinel:latest `
-  --update-env-vars "GOOGLE_CLIENT_ID=PASTE_CLIENT_ID" `
+# wire the client id + prod redirect URI (env) and the secret (Secret Manager) onto the
+# running service — no rebuild needed, this just updates the current revision's config.
+gcloud run services update sentinel --project agora-data-driven --region asia-southeast1 `
+  --update-env-vars "GOOGLE_CLIENT_ID=PASTE_CLIENT_ID,GOOGLE_REDIRECT_URI=https://sentinel-585951669065.asia-southeast1.run.app/api/auth/google/callback" `
   --update-secrets "GOOGLE_CLIENT_SECRET=sentinel-google-client-secret:latest"
 ```
+
+> ⚠️ `GOOGLE_REDIRECT_URI` **must** be set (as above) and match the redirect URI you added in step 2
+> exactly — it defaults to `localhost` for local dev, so without this the prod flow would fail.
 
 That's it — the login page then shows **Continue with Google** automatically.
 
