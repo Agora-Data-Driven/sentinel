@@ -46,6 +46,7 @@
     sun: P('<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>'),
     moon: P('<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>'),
     wallet: P('<rect x="3" y="6" width="18" height="13" rx="2.5"/><path d="M3 9h18M16 13.5h.01"/><path d="M16 6V4.5a1.5 1.5 0 0 0-2-1.4L4.5 5.5"/>'),
+    compass: P('<circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/>'),
   };
 
   const AGORA_LOGO =
@@ -63,6 +64,7 @@
     { href: "/tasks", label: "Task Board", icon: "board" },
     { href: "/people", label: "People", icon: "users" },
     { href: "/leave", label: "Leave", icon: "calendar" },
+    { href: "/north-star", label: "Our North Star", icon: "compass" },
     { href: "/reports", label: "Reports", icon: "chart", min: "team_lead" },
     { href: "/scanner", label: "Scanner", icon: "qr", roles: ["super_admin"] },
     { href: "/manage", label: "Manage", icon: "sliders", roles: ["super_admin"] },

@@ -142,6 +142,7 @@ _PAGES = {
     "/tasks": "tasks.html",
     "/people": "people.html",
     "/leave": "leave.html",
+    "/north-star": "north-star.html",
     "/reports": "reports.html",
     "/settings": "settings.html",
     "/manage": "manage.html",
