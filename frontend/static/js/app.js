@@ -207,6 +207,7 @@
       document.documentElement.setAttribute("data-theme", t);
       try { localStorage.setItem(THEME_KEY, t); } catch (e) {}
       paintTheme();
+      applyBrandLogo();  // swap to the light/white logo variant for the new theme
     });
     paintTheme();
     const uc = qs("#user-card"); if (uc) uc.onclick = openChangePassword;
@@ -263,15 +264,19 @@
   function applyBrandLogo() {
     const slots = qsa("[data-brand-logo]");
     if (!slots.length) return;
-    tryImg("/static/img/logo.png")
-      .catch(() => tryImg("/static/img/logo.svg"))
-      .then((url) => {
+    // Dark mode uses the white-ink logo so it stays legible on the dark sidebar.
+    const dark = document.documentElement.getAttribute("data-theme") === "dark";
+    const candidates = dark
+      ? ["/static/img/logo-dark.png", "/static/img/logo.png"]
+      : ["/static/img/logo.png", "/static/img/logo.svg"];
+    (function pick(i) {
+      if (i >= candidates.length) return;  // no custom logo — keep the built-in mark + pill
+      tryImg(candidates[i]).then((url) => {
         slots.forEach((s) => { s.innerHTML = `<img class="brand-img" src="${url}" alt="Sentinel">`; });
-        // The Sentinel lockup already carries the "SENTINEL" wordmark, so hide the redundant
-        // "Sentinel" pill — but keep the "Scanner" label on the scanner screen.
+        // The lockup already carries the "SENTINEL" wordmark, so hide the redundant pill (keep "Scanner").
         qsa(".badge-sentinel").forEach((b) => { if (b.textContent.trim().toLowerCase() === "sentinel") b.style.display = "none"; });
-      })
-      .catch(() => {});  // no custom logo — keep the built-in mark + pill
+      }).catch(() => pick(i + 1));
+    })(0);
   }
 
   // ---------------- Change password ----------------
