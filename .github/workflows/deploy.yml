@@ -1,0 +1,51 @@
+name: Deploy Sentinel to Cloud Run
+
+# Auto-deploy: every push to main builds the image and rolls out a new Cloud Run revision.
+# Auth is keyless via Workload Identity Federation (no service-account keys stored anywhere).
+# The new image inherits the service's existing config (runtime SA, Cloud SQL, secrets, env vars).
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}   # lets you trigger a deploy manually from the Actions tab too
+
+permissions:
+  contents: read
+  id-token: write   # required for Workload Identity Federation
+
+env:
+  PROJECT: agora-data-driven
+  REGION: asia-southeast1
+  SERVICE: sentinel
+  IMAGE_BASE: asia-southeast1-docker.pkg.dev/agora-data-driven/agora/sentinel
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        name: Authenticate to Google Cloud (Workload Identity)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/585951669065/locations/global/workloadIdentityPools/github-pool/providers/github
+          service_account: sentinel-deploy@agora-data-driven.iam.gserviceaccount.com
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Build & push image
+        run: |
+          IMG="${IMAGE_BASE}:${GITHUB_SHA}"
+          gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+          docker build -t "$IMG" .
+          docker push "$IMG"
+          echo "IMG=$IMG" >> "$GITHUB_ENV"
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy "$SERVICE" \
+            --project "$PROJECT" --region "$REGION" \
+            --image "$IMG"
+          echo "Deployed $IMG"
+          gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" --format="value(status.url)"
