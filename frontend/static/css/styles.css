@@ -7,22 +7,25 @@
    ===================================================================== */
 
 :root {
-  /* Core brand — mirrors Atrium's runtime palette (dash/brand.py) */
-  --green: #4FAB4A; --green-d: #347A30; --green-bg: #EAF6E9;
-  --violet: #9484FB; --violet-d: #5C4BD0; --violet-bg: #F1EFFE;
+  /* Core brand — Agora website green (bright, premium) */
+  --green: #54B948; --green-d: #3A9A2F; --green-2: #6BCB4E; --green-bg: #E9F7E6;
+  --violet: #9484FB; --violet-d: #5C4BD0; --violet-bg: #F1EFFE;   /* secondary accent, used sparingly */
   --teal: #17C3B2; --teal-bg: #ECFBF9;
 
   /* Sentinel identity */
   --sentinel: #FF6B35; --sentinel-2: #F2820C;
 
   /* Neutrals */
-  --ink: #0E0F12; --charcoal: #353535; --text: #111827;
+  --ink: #0B0D10; --charcoal: #353535; --text: #111827;
   --sub: #6B7280; --muted: #9CA3AF; --white: #fff;
   --line: #E9EAEE; --line-strong: #D1D5DB;
-  --canvas: #F6F7F9; --card: #FFFFFF; --input: #F3F4F6; --row-alt: #F9FAFB; --hover: #F0FDF4;
+  --canvas: #F5F7F6; --card: #FFFFFF; --input: #F3F4F6; --row-alt: #F9FAFB; --hover: #F0FDF4;
+
+  /* Dark surfaces (premium sections + login) */
+  --dark: #0C1410; --dark-2: #0E1A13; --dark-line: rgba(255,255,255,.08);
 
   /* Status */
-  --ok: #4FAB4A; --warn: #F59E0B; --danger: #EF4444; --info: #3B82F6;
+  --ok: #54B948; --warn: #F59E0B; --danger: #EF4444; --info: #3B82F6;
 
   /* Gym day types */
   --push: #EF4444; --push-bg: #FEF2F2;
@@ -33,13 +36,16 @@
   --label-design: #EC4899; --label-copy: #8B5CF6; --label-ads: #F97316;
   --label-seo: #06B6D4; --label-dev: #3B82F6;
 
-  /* Shape + depth (Atrium) */
-  --radius: 14px; --radius-sm: 10px; --pill: 999px;
+  /* Shape + depth */
+  --radius: 16px; --radius-sm: 11px; --pill: 999px;
   --shadow: 0 1px 2px rgba(16,24,40,.04), 0 8px 24px rgba(16,24,40,.06);
   --shadow-lg: 0 2px 6px rgba(16,24,40,.05), 0 18px 42px rgba(16,24,40,.12);
-  --grad-green: linear-gradient(135deg, #57B852 0%, #347A30 100%);
+  /* Green glows — the signature Agora accent */
+  --glow-green: 0 6px 18px rgba(84,185,72,.30);
+  --glow-green-lg: 0 10px 34px rgba(84,185,72,.45);
+  --grad-green: linear-gradient(135deg, #6BCB4E 0%, #3A9A2F 100%);
   --grad-sentinel: linear-gradient(120deg, #FF7A45 0%, #F2820C 100%);
-  --grad-brand: linear-gradient(120deg, #4FAB4A 0%, #4FAB4A 42%, #7E6CF6 100%);
+  --grad-brand: linear-gradient(90deg, #6BCB4E 0%, #54B948 55%, #3A9A2F 100%);
   --sidebar-w: 248px;
 }
 
@@ -50,13 +56,14 @@ body {
   -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; text-rendering: optimizeLegibility;
   font-size: 14px; line-height: 1.5; color: var(--text);
   background:
-    radial-gradient(820px 460px at 6% -8%, rgba(79,171,74,0.06), transparent 60%),
-    radial-gradient(760px 520px at 100% -2%, rgba(255,107,53,0.06), transparent 58%),
+    radial-gradient(900px 480px at 4% -10%, rgba(84,185,72,0.09), transparent 60%),
+    radial-gradient(760px 520px at 100% -4%, rgba(84,185,72,0.05), transparent 58%),
     var(--canvas);
   background-attachment: fixed; min-height: 100vh;
 }
 a { color: inherit; text-decoration: none; }
-h1,h2,h3,h4 { margin: 0; color: var(--ink); letter-spacing: -0.2px; }
+h1,h2,h3,h4 { margin: 0; color: var(--ink); letter-spacing: -0.3px; }
+h2 { letter-spacing: -0.6px; } h1 { letter-spacing: -0.5px; }
 .svg-ic { width: 20px; height: 20px; display: block; flex: none; }
 
 /* ---------- App shell ---------- */
@@ -87,8 +94,8 @@ h1,h2,h3,h4 { margin: 0; color: var(--ink); letter-spacing: -0.2px; }
   display: flex; align-items: center; gap: 11px; padding: 9px 12px; border-radius: 11px;
   color: var(--sub); font-size: 14px; font-weight: 600; transition: background .12s, color .12s;
 }
-.nav a:hover { background: var(--canvas); color: var(--ink); }
-.nav a.active { background: var(--grad-green); color: #fff; box-shadow: 0 8px 20px rgba(79,171,74,.32); }
+.nav a:hover { background: var(--hover); color: var(--green-d); }
+.nav a.active { background: var(--grad-green); color: #fff; box-shadow: var(--glow-green-lg); }
 .nav a.active .svg-ic { color: #fff; }
 .nav a .count {
   margin-left: auto; font-size: 11px; font-weight: 800; min-width: 20px; text-align: center;
@@ -102,12 +109,12 @@ h1,h2,h3,h4 { margin: 0; color: var(--ink); letter-spacing: -0.2px; }
 }
 .user-card .who { min-width: 0; }
 .user-card .who .n { font-weight: 800; font-size: 13px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.user-card .who .r { font-size: 11px; color: var(--violet-d); font-weight: 700; text-transform: uppercase; letter-spacing: .4px; }
+.user-card .who .r { font-size: 11px; color: var(--green-d); font-weight: 700; text-transform: uppercase; letter-spacing: .4px; }
 
 /* Avatar */
 .avatar {
   width: 36px; height: 36px; border-radius: var(--pill); display: grid; place-items: center; flex: none;
-  background: var(--violet-d); color: #fff; font-size: 12.5px; font-weight: 800;
+  background: var(--grad-green); color: #fff; font-size: 12.5px; font-weight: 800; box-shadow: 0 2px 8px rgba(84,185,72,.28);
 }
 .avatar.sm { width: 28px; height: 28px; font-size: 11px; }
 .avatar.lg { width: 64px; height: 64px; font-size: 22px; }
@@ -121,7 +128,7 @@ h1,h2,h3,h4 { margin: 0; color: var(--ink); letter-spacing: -0.2px; }
   padding: 14px 26px; border-bottom: 1px solid var(--line); background: rgba(255,255,255,.78);
   position: sticky; top: 0; z-index: 30; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
 }
-.top::after { content:""; position:absolute; left:0; right:0; bottom:-1px; height:2px; background: var(--grad-brand); opacity:.9; }
+.top::after { content:""; position:absolute; left:0; right:0; bottom:-1px; height:2px; background: var(--grad-brand); box-shadow: 0 2px 14px rgba(84,185,72,.45); }
 .top h1 { font-size: 18px; font-weight: 800; }
 .top .sub { font-size: 12.5px; color: var(--sub); font-weight: 500; margin-top: 1px; }
 .top-right { display: flex; align-items: center; gap: 10px; }
@@ -149,33 +156,43 @@ h1,h2,h3,h4 { margin: 0; color: var(--ink); letter-spacing: -0.2px; }
 
 /* KPI tiles */
 .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; }
-.kpi { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; box-shadow: var(--shadow); position: relative; overflow: hidden; }
+.kpi { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; box-shadow: var(--shadow); position: relative; overflow: hidden; transition: box-shadow .18s, transform .18s, border-color .18s; }
+.kpi::before { content:""; position:absolute; left:0; top:0; height:3px; width:100%; background: var(--grad-brand); opacity:0; transition: opacity .18s; }
+.kpi:hover { transform: translateY(-2px); box-shadow: var(--shadow-lg); border-color: rgba(84,185,72,.35); }
+.kpi:hover::before { opacity:.9; }
 .kpi .k-label { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--sub); }
-.kpi .k-val { font-size: 30px; font-weight: 800; color: var(--ink); margin-top: 6px; letter-spacing: -1px; }
+.kpi .k-val { font-size: 32px; font-weight: 800; color: var(--ink); margin-top: 6px; letter-spacing: -1.2px; }
 .kpi .k-sub { font-size: 12px; color: var(--sub); margin-top: 2px; }
 .kpi .k-ic { position: absolute; top: 14px; right: 14px; width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; background: var(--green-bg); color: var(--green-d); }
 .kpi.warn .k-ic { background: #FEF3E6; color: var(--warn); }
 .kpi.danger .k-ic { background: #FEECEC; color: var(--danger); }
 .kpi.violet .k-ic { background: var(--violet-bg); color: var(--violet-d); }
 
-/* ---------- Buttons ---------- */
+/* ---------- Buttons (Agora pill style) ---------- */
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 7px; cursor: pointer;
-  font-family: inherit; font-size: 13.5px; font-weight: 700; padding: 9px 15px; border-radius: 10px;
-  border: 1px solid var(--line); background: var(--white); color: var(--ink); transition: filter .12s, background .12s, border-color .12s;
-  white-space: nowrap;
+  font-family: inherit; font-size: 13.5px; font-weight: 700; padding: 9px 16px; border-radius: var(--pill);
+  border: 1px solid var(--line); background: var(--white); color: var(--ink);
+  transition: filter .14s, box-shadow .14s, transform .06s, border-color .14s; white-space: nowrap;
 }
 .btn:hover { border-color: var(--line-strong); }
+.btn:active { transform: translateY(1px); }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
 .btn .svg-ic { width: 16px; height: 16px; }
-.btn.primary { background: var(--violet-d); border-color: var(--violet-d); color: #fff; }
-.btn.primary:hover { filter: brightness(1.07); }
-.btn.success { background: var(--green); border-color: var(--green); color: #fff; }
-.btn.success:hover { filter: brightness(1.05); }
+/* Primary = the signature green pill with a soft glow */
+.btn.primary, .btn.success { background: var(--grad-green); border-color: transparent; color: #fff; box-shadow: var(--glow-green); }
+.btn.primary:hover, .btn.success:hover { filter: brightness(1.05); box-shadow: var(--glow-green-lg); }
 .btn.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+.btn.danger:hover { filter: brightness(1.05); }
 .btn.ghost { background: transparent; }
-.btn.sm { padding: 6px 11px; font-size: 12.5px; border-radius: 8px; }
+.btn.sm { padding: 6px 12px; font-size: 12.5px; }
 .btn.block { width: 100%; }
+/* CTA = green pill with a trailing circular arrow badge (like the Agora site) */
+.btn.cta { padding-right: 7px; }
+.btn.cta::after {
+  content: "↗"; display: inline-grid; place-items: center; width: 26px; height: 26px; margin-left: 4px;
+  border-radius: 50%; background: rgba(255,255,255,.22); font-size: 14px; line-height: 1;
+}
 
 /* ---------- Chips / pills / badges ---------- */
 .chip { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 700; padding: 3px 10px; border-radius: var(--pill); background: var(--input); color: var(--sub); }

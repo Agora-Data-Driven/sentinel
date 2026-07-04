@@ -10,65 +10,84 @@
   <link rel="stylesheet" href="/static/css/styles.css">
   <link rel="manifest" href="/manifest.json">
   <style>
+    /* Premium dark backdrop with an Agora-green glow (echoes the site's dark sections). */
+    body {
+      min-height: 100vh; margin: 0;
+      background:
+        radial-gradient(1100px 640px at 12% -12%, rgba(84,185,72,0.26), transparent 55%),
+        radial-gradient(820px 520px at 108% 115%, rgba(84,185,72,0.14), transparent 55%),
+        #0B120E;
+      background-attachment: fixed;
+    }
     .login-wrap { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
-    .login-card { width: 100%; max-width: 420px; background: #fff; border: 1px solid var(--line); border-radius: 18px; box-shadow: var(--shadow-lg); padding: 34px 30px; }
+    .login-shell { width: 100%; max-width: 410px; }
+    .eyebrow { text-align: center; color: #7fd06f; font-size: 11px; font-weight: 800; letter-spacing: .22em; text-transform: uppercase; margin-bottom: 14px; }
+    .login-card {
+      background: #fff; border-radius: 22px; padding: 34px 30px;
+      box-shadow: 0 30px 80px rgba(0,0,0,.55), 0 0 0 1px rgba(255,255,255,.05), 0 12px 50px rgba(84,185,72,.20);
+    }
     .login-logo { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
     .login-logo svg { height: 30px; }
-    .login-card h2 { font-size: 22px; margin: 18px 0 4px; }
+    .login-card h2 { font-size: 23px; margin: 18px 0 4px; letter-spacing: -.6px; }
     .login-card .lead { color: var(--sub); font-size: 13.5px; margin-bottom: 20px; }
-    .g-btn { display:flex; align-items:center; justify-content:center; gap:10px; width:100%; padding:11px; border:1px solid var(--line); border-radius:10px; background:#fff; font-weight:700; cursor:pointer; text-decoration:none; color:var(--ink); }
-    .g-btn:hover { border-color: var(--line-strong); }
+    .g-btn { display:flex; align-items:center; justify-content:center; gap:10px; width:100%; padding:11px; border:1px solid var(--line); border-radius: var(--pill); background:#fff; font-weight:700; cursor:pointer; text-decoration:none; color:var(--ink); transition: border-color .14s, box-shadow .14s; }
+    .g-btn:hover { border-color: var(--line-strong); box-shadow: var(--shadow); }
     .or { text-align: center; color: var(--muted); font-size: 12px; margin: 16px 0; position: relative; }
-    .or::before, .or::after { content: ""; position: absolute; top: 50%; width: 38%; height: 1px; background: var(--line); }
+    .or::before, .or::after { content: ""; position: absolute; top: 50%; width: 40%; height: 1px; background: var(--line); }
     .or::before { left: 0; } .or::after { right: 0; }
-    .err { background: #FEECEC; color: var(--danger); border-radius: 10px; padding: 9px 12px; font-size: 13px; font-weight: 600; margin-bottom: 14px; display: none; }
+    .err { background: #FEECEC; color: var(--danger); border-radius: 12px; padding: 9px 12px; font-size: 13px; font-weight: 600; margin-bottom: 14px; display: none; }
     .err.show { display: block; }
     .devbox { background: var(--canvas); border: 1px dashed var(--line-strong); border-radius: 12px; padding: 14px; margin-top: 16px; }
     .devbox .tag { font-size: 11px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--sentinel-2); }
     #devwrap { display: none; }
+    .foot { text-align: center; color: rgba(255,255,255,.34); font-size: 11.5px; margin-top: 18px; letter-spacing: .02em; }
   </style>
 </head>
 <body data-shell="off">
   <div class="login-wrap">
-    <div class="login-card">
-      <div class="login-logo">
-        <span data-brand-logo><svg viewBox="0 0 150 40" role="img" aria-label="Agora">
-          <g fill="none" stroke="#1A1B1E" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M3 37 L19 4 L35 37" stroke-width="1.8"/><path d="M12 37 L24 12" stroke-width="1.1" opacity="0.5"/>
-            <path d="M11.5 24 L26.5 24" stroke-width="1.6"/></g>
-          <text x="48" y="24.5" font-family="Inter,sans-serif" font-size="21" font-weight="600" letter-spacing="3.2" fill="#1A1B1E">AGORA</text>
-          <text x="49.5" y="35" font-family="Inter,sans-serif" font-size="7.3" font-weight="700" letter-spacing="3.6" fill="#353535">DATA DRIVEN</text>
-        </svg></span>
-        <span class="badge-sentinel">Sentinel</span>
-      </div>
-      <h2>Sign in</h2>
-      <div class="lead">Agora operations command center.</div>
+    <div class="login-shell">
+      <div class="eyebrow">Operations Command Center</div>
+      <div class="login-card">
+        <div class="login-logo">
+          <span data-brand-logo><svg viewBox="0 0 150 40" role="img" aria-label="Agora">
+            <g fill="none" stroke="#1A1B1E" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 37 L19 4 L35 37" stroke-width="1.8"/><path d="M12 37 L24 12" stroke-width="1.1" opacity="0.5"/>
+              <path d="M11.5 24 L26.5 24" stroke-width="1.6"/></g>
+            <text x="48" y="24.5" font-family="Inter,sans-serif" font-size="21" font-weight="600" letter-spacing="3.2" fill="#1A1B1E">AGORA</text>
+            <text x="49.5" y="35" font-family="Inter,sans-serif" font-size="7.3" font-weight="700" letter-spacing="3.6" fill="#353535">DATA DRIVEN</text>
+          </svg></span>
+          <span class="badge-sentinel">Sentinel</span>
+        </div>
+        <h2>Welcome back</h2>
+        <div class="lead">Sign in to continue.</div>
 
-      <div class="err" id="err"></div>
+        <div class="err" id="err"></div>
 
-      <form id="login-form">
-        <label class="field"><span>Email</span><input type="email" id="email" autocomplete="username" placeholder="you@agora.ph" required></label>
-        <label class="field"><span>Password</span><input type="password" id="password" autocomplete="current-password" placeholder="Your password" required></label>
-        <button class="btn primary block" id="signin" type="submit">Sign in</button>
-      </form>
+        <form id="login-form">
+          <label class="field"><span>Email</span><input type="email" id="email" autocomplete="username" placeholder="you@agora.ph" required></label>
+          <label class="field"><span>Password</span><input type="password" id="password" autocomplete="current-password" placeholder="Your password" required></label>
+          <button class="btn primary block" id="signin" type="submit">Sign in</button>
+        </form>
 
-      <div id="google-wrap">
-        <div class="or">or</div>
-        <a class="g-btn" id="google" href="/api/auth/google/login">
-          <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9 3.6l6.7-6.7C35.6 2.6 30.2 0 24 0 14.6 0 6.4 5.4 2.5 13.3l7.9 6.1C12.2 13.5 17.6 9.5 24 9.5z"/><path fill="#4285F4" d="M46.1 24.6c0-1.6-.1-3.1-.4-4.6H24v9.1h12.4c-.5 2.9-2.1 5.3-4.6 7l7.1 5.5c4.2-3.9 6.6-9.6 6.6-16z"/><path fill="#FBBC05" d="M10.4 28.4c-.5-1.5-.8-3.1-.8-4.4s.3-3 .8-4.4l-7.9-6.1C.9 16.3 0 20 0 24s.9 7.7 2.5 10.5l7.9-6.1z"/><path fill="#34A853" d="M24 48c6.2 0 11.4-2 15.2-5.5l-7.1-5.5c-2 1.3-4.6 2.1-8.1 2.1-6.4 0-11.8-4-13.6-9.9l-7.9 6.1C6.4 42.6 14.6 48 24 48z"/></svg>
-          Continue with Google
-        </a>
-      </div>
+        <div id="google-wrap">
+          <div class="or">or</div>
+          <a class="g-btn" id="google" href="/api/auth/google/login">
+            <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9 3.6l6.7-6.7C35.6 2.6 30.2 0 24 0 14.6 0 6.4 5.4 2.5 13.3l7.9 6.1C12.2 13.5 17.6 9.5 24 9.5z"/><path fill="#4285F4" d="M46.1 24.6c0-1.6-.1-3.1-.4-4.6H24v9.1h12.4c-.5 2.9-2.1 5.3-4.6 7l7.1 5.5c4.2-3.9 6.6-9.6 6.6-16z"/><path fill="#FBBC05" d="M10.4 28.4c-.5-1.5-.8-3.1-.8-4.4s.3-3 .8-4.4l-7.9-6.1C.9 16.3 0 20 0 24s.9 7.7 2.5 10.5l7.9-6.1z"/><path fill="#34A853" d="M24 48c6.2 0 11.4-2 15.2-5.5l-7.1-5.5c-2 1.3-4.6 2.1-8.1 2.1-6.4 0-11.8-4-13.6-9.9l-7.9 6.1C6.4 42.6 14.6 48 24 48z"/></svg>
+            Continue with Google
+          </a>
+        </div>
 
-      <div id="devwrap">
-        <div class="devbox">
-          <div class="tag">Dev login (no password)</div>
-          <label class="field" style="margin-top:8px"><span>Sign in as</span>
-            <select id="user-select"></select>
-          </label>
-          <button class="btn ghost block" id="devsignin" type="button">Dev sign in</button>
+        <div id="devwrap">
+          <div class="devbox">
+            <div class="tag">Dev login (no password)</div>
+            <label class="field" style="margin-top:8px"><span>Sign in as</span>
+              <select id="user-select"></select>
+            </label>
+            <button class="btn ghost block" id="devsignin" type="button">Dev sign in</button>
+          </div>
         </div>
       </div>
+      <div class="foot">Agora · Internal use only</div>
     </div>
   </div>
   <script src="/static/js/app.js"></script>
