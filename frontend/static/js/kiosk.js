@@ -66,9 +66,21 @@ window.pageInit = async (S) => {
 
   // --- Camera lifecycle ----------------------------------------------------
   async function startScanner() {
-    if (typeof Html5Qrcode === "undefined") return;
-    try { scanner = new Html5Qrcode("reader"); } catch (e) { return; }
-    const config = { fps: 10, qrbox: { width: 240, height: 240 } };
+    const reader = S.qs("#reader");
+    if (typeof Html5Qrcode === "undefined") {
+      if (reader) reader.innerHTML = '<div class="muted" style="padding:22px 8px">Scanner library didn’t load. Check your connection, or type the badge code below.</div>';
+      return;
+    }
+    try { scanner = new Html5Qrcode("reader", { verbose: false }); } catch (e) { return; }
+    // Scan the middle ~75% of the frame (a bigger target reads far more reliably than a small fixed
+    // box, esp. on low-res laptop webcams) and use the browser's NATIVE BarcodeDetector when present
+    // (Chrome/Edge) — it decodes QR codes much more reliably than the JS fallback.
+    const config = {
+      fps: 15,
+      qrbox: (vw, vh) => { const m = Math.round(Math.min(vw, vh) * 0.75); return { width: m, height: m }; },
+      experimentalFeatures: { useBarCodeDetectorIfSupported: true },
+      rememberLastUsedCamera: true,
+    };
     const onScan = (decoded) => { if (scanning) { scanning = false; handleToken(decoded); } };
     scanning = true;
     try {
