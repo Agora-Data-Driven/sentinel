@@ -31,7 +31,8 @@ window.pageInit = async (S) => {
         { k: "hired_date", label: "Hired date", type: "date" },
         { k: "password", label: "Password (blank = leave unchanged; they can also use Google)", type: "password", omitIfBlank: true },
       ],
-      help: "Everyone in Sentinel — attendance, gym, tasks, leave. Add a person here and they're available across the whole app (they get a QR badge + leave balances automatically).",
+      help: "Everyone in Sentinel — attendance, gym, tasks, leave. Add a person here and they're available across the whole app (they get a QR badge + code automatically). Use Badge to view/print their QR or copy the code if they lost it.",
+      rowActions: [{ label: "Badge", handler: (item) => openBadge(item) }],
     },
     Exercises: {
       api: "/api/manage/exercises", singular: "exercise",
@@ -132,6 +133,7 @@ window.pageInit = async (S) => {
         <tbody>${rows.length ? rows.map((r) => `<tr>
           ${cfg.cols.map((c) => `<td>${c.fmt ? c.fmt(r[c.k]) : S.esc(r[c.k] == null || r[c.k] === "" ? "—" : r[c.k])}</td>`).join("")}
           <td style="text-align:right;white-space:nowrap">
+            ${(cfg.rowActions || []).map((a, ai) => `<button class="btn sm ghost" data-rowact="${ai}" data-id="${r.id}">${S.esc(a.label)}</button>`).join("")}
             <button class="btn sm ghost" data-edit="${r.id}">Edit</button>
             <button class="btn sm danger" data-del="${r.id}">Delete</button></td></tr>`).join("")
         : `<tr><td colspan="${cfg.cols.length + 1}"><div class="empty">No ${cfg.singular}s yet. Add one.</div></td></tr>`}</tbody></table></div>`;
@@ -139,6 +141,37 @@ window.pageInit = async (S) => {
     S.qs("#m-add").onclick = () => openForm(key, null);
     S.qsa("[data-edit]").forEach((b) => b.onclick = () => openForm(key, rows.find((r) => r.id == b.dataset.edit)));
     S.qsa("[data-del]").forEach((b) => b.onclick = () => del(key, rows.find((r) => r.id == b.dataset.del)));
+    S.qsa("[data-rowact]").forEach((b) => b.onclick = () => cfg.rowActions[+b.dataset.rowact].handler(rows.find((r) => r.id == b.dataset.id)));
+  }
+
+  // Employee badge: view/print the QR + copy the typeable code, or reissue if lost.
+  async function openBadge(item) {
+    const m = S.modal({ title: `${item.name} — attendance badge`, body: `<div id="bg" style="text-align:center;min-height:120px">Loading…</div>` });
+    const load = async () => {
+      try {
+        const b = await S.api(`/api/people/${item.id}/badge`);
+        S.qs("#bg").innerHTML = `
+          <img alt="QR badge" src="/api/people/${item.id}/qr?t=${Date.now()}" style="width:190px;height:190px;border:1px solid var(--line);border-radius:12px;padding:8px;background:#fff">
+          <label class="field" style="margin-top:12px;text-align:left"><span>Badge code (type this if they can't scan the QR)</span>
+            <div class="row" style="gap:6px"><input id="bg-code" readonly value="${S.esc(b.code)}" style="flex:1;font-family:monospace">
+              <button class="btn ghost" id="bg-copy">Copy</button></div></label>
+          <div class="row" style="justify-content:center;gap:8px;margin-top:6px">
+            <a class="btn ghost" href="/api/people/${item.id}/qr" download="badge-${item.id}.png">${S.ICON.download}Download / print</a>
+            <button class="btn primary" id="bg-regen">Reissue new code</button></div>
+          <div class="muted" style="font-size:12px;margin-top:8px">Print the QR or send it to their phone. If they lose it, copy the code or reissue a new one.</div>`;
+        S.qs("#bg-copy").onclick = async () => {
+          const inp = S.qs("#bg-code");
+          try { await navigator.clipboard.writeText(inp.value); S.toast("Code copied", "ok"); }
+          catch (e) { inp.select(); document.execCommand("copy"); S.toast("Code copied", "ok"); }
+        };
+        S.qs("#bg-regen").onclick = async () => {
+          if (!confirm("Reissue a new code? Their current QR and code will stop working.")) return;
+          try { await S.api(`/api/people/${item.id}/qr/regenerate`, { method: "POST" }); S.toast("New badge issued", "ok"); load(); }
+          catch (e) { S.toast(e.detail || "Couldn't reissue", "err"); }
+        };
+      } catch (e) { S.qs("#bg").innerHTML = `<div class="empty">${S.esc(e.detail || "Couldn't load badge")}</div>`; }
+    };
+    load();
   }
 
   // Readable-but-strong password: 12 chars, no ambiguous glyphs (0/O, 1/l/I).

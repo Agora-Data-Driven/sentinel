@@ -220,6 +220,23 @@ def qr_badge(user_id: int, actor: User = Depends(require_min_role("admin")), db:
     )
 
 
+@router.get("/{user_id}/badge")
+def badge_code(user_id: int, actor: User = Depends(require_min_role("admin")), db: Session = Depends(get_db)):
+    """The employee's badge CODE (the same token the QR encodes) — for typing when they can't scan,
+    or to re-give if they lost their badge. Admin+ only (a token can punch that person's attendance)."""
+    u = db.get(User, user_id)
+    if not u:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    token_row = db.execute(
+        select(QRToken).where(QRToken.user_id == u.id, QRToken.is_active.is_(True))
+    ).scalar_one_or_none()
+    if not token_row:
+        token_row = QRToken(user_id=u.id, token=new_token())
+        db.add(token_row)
+        db.commit()
+    return {"user_id": u.id, "name": u.name, "code": token_row.token}
+
+
 @router.post("/{user_id}/qr/regenerate")
 def regenerate_qr(user_id: int, actor: User = Depends(require_min_role("admin")), db: Session = Depends(get_db)):
     """Issue a fresh QR token for an employee (revokes the old one). Assigns it to that employee."""

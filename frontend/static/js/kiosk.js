@@ -167,22 +167,33 @@ window.pageInit = async (S) => {
       footer: `<button class="btn ghost" id="qa-close">Close</button>`,
     });
     S.qs("#qa-close").onclick = () => { m.close(); idle(); };
-    S.qs("#qa-user").onchange = (e) => {
+    S.qs("#qa-user").onchange = async (e) => {
       const id = e.target.value;
       const box = S.qs("#qa-preview");
       if (!id) { box.innerHTML = ""; return; }
+      box.innerHTML = '<div class="muted" style="padding:12px">Loading…</div>';
+      let code = "";
+      try { code = (await S.api(`/api/people/${id}/badge`)).code; } catch (err) {}
       box.innerHTML = `
         <img alt="QR" src="/api/people/${id}/qr?t=${Date.now()}" style="width:190px;height:190px;border:1px solid var(--line);border-radius:12px;padding:8px;background:#fff">
-        <div class="row" style="justify-content:center;gap:8px;margin-top:12px">
+        <label class="field" style="margin-top:10px;text-align:left"><span>Badge code (type this instead of scanning)</span>
+          <div class="row" style="gap:6px"><input id="qa-code" readonly value="${S.esc(code)}" style="flex:1;font-family:monospace"><button class="btn ghost" id="qa-copy">Copy</button></div></label>
+        <div class="row" style="justify-content:center;gap:8px;margin-top:6px">
           <a class="btn ghost" href="/api/people/${id}/qr" download="badge-${id}.png">${S.ICON.download}Download / print</a>
           <button class="btn primary" id="qa-regen">Reissue new code</button>
         </div>
-        <div class="muted" style="font-size:12px;margin-top:8px">This is the employee's badge. Print it or download to their phone; the kiosk reads it.</div>`;
+        <div class="muted" style="font-size:12px;margin-top:8px">Print it or send to their phone. The scanner reads the QR, or they can type the code.</div>`;
+      S.qs("#qa-copy").onclick = async () => {
+        const inp = S.qs("#qa-code");
+        try { await navigator.clipboard.writeText(inp.value); S.toast("Code copied", "ok"); }
+        catch (err) { inp.select(); document.execCommand("copy"); S.toast("Code copied", "ok"); }
+      };
       S.qs("#qa-regen").onclick = async () => {
         if (!confirm("Reissue a new QR code? The current badge will stop working.")) return;
         try {
           await S.api(`/api/people/${id}/qr/regenerate`, { method: "POST" });
           S.qs(`#qa-preview img`).src = `/api/people/${id}/qr?t=` + Date.now();
+          const nb = await S.api(`/api/people/${id}/badge`); S.qs("#qa-code").value = nb.code;
           S.toast("New badge issued", "ok");
         } catch (err) { S.toast(err.detail, "err"); }
       };
