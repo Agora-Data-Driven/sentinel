@@ -77,6 +77,13 @@ class GymEndIn(BaseModel):
     notes: str | None = None
 
 
+class GymAdminEditIn(BaseModel):
+    """Super Admin correction of any user's gym session."""
+    day_type: str | None = None
+    status: str | None = None
+    notes: str | None = None
+
+
 class GymSetIn(BaseModel):
     set: int
     kg: float = 0

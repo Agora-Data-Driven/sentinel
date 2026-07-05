@@ -8,12 +8,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..constants import GYM_DAY_TYPES, ROLE_TEAM_LEAD
+from ..constants import GYM_DAY_TYPES, ROLE_SUPER_ADMIN, ROLE_TEAM_LEAD
 from ..database import get_db
 from ..models import ExerciseLibrary, GymExercise, GymLog, User
-from ..schemas import GymEndIn, GymExerciseIn, GymStartIn
-from ..security import get_current_user, require_min_role
+from ..schemas import GymAdminEditIn, GymEndIn, GymExerciseIn, GymStartIn
+from ..security import get_current_user, require_min_role, require_roles
 from ..serializers import gym_log_dict
+from ..services import audit
 from ..services import gym as gym_svc
 from ..services import settings as settings_svc
 from ..utils.time import minutes_between, today_ph, utcnow
@@ -183,6 +184,49 @@ def summary(
             }
         )
     return out
+
+
+@router.patch("/{log_id}")
+def admin_edit_log(
+    log_id: int,
+    payload: GymAdminEditIn,
+    admin: User = Depends(require_roles(ROLE_SUPER_ADMIN)),
+    db: Session = Depends(get_db),
+):
+    """Super Admin correction of any user's session (day type / status / notes)."""
+    log = db.get(GymLog, log_id)
+    if not log:
+        raise HTTPException(status_code=404, detail="Session not found")
+    old = {"day_type": log.day_type, "status": log.status, "notes": log.notes}
+    if payload.day_type:
+        if payload.day_type not in GYM_DAY_TYPES:
+            raise HTTPException(status_code=400, detail="Invalid day type")
+        log.day_type = payload.day_type
+    if payload.status:
+        log.status = payload.status
+    if payload.notes is not None:
+        log.notes = payload.notes
+    audit.record(db, actor_id=admin.id, table_name="gym_logs", record_id=log.id, action="edit",
+                 old=old, new={"day_type": log.day_type, "status": log.status, "notes": log.notes},
+                 commit=False)
+    db.commit()
+    return gym_log_dict(log, db, with_exercises=True)
+
+
+@router.delete("/{log_id}", status_code=204)
+def admin_delete_log(
+    log_id: int,
+    admin: User = Depends(require_roles(ROLE_SUPER_ADMIN)),
+    db: Session = Depends(get_db),
+):
+    """Super Admin: delete any user's gym session."""
+    log = db.get(GymLog, log_id)
+    if not log:
+        raise HTTPException(status_code=404, detail="Session not found")
+    audit.record(db, actor_id=admin.id, table_name="gym_logs", record_id=log.id, action="delete",
+                 old={"user_id": log.user_id, "date": str(log.date), "day_type": log.day_type}, commit=False)
+    db.delete(log)
+    db.commit()
 
 
 @router.get("/{log_id}")

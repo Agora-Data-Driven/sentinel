@@ -1,7 +1,10 @@
 window.pageInit = async (S) => {
   const view = S.view();
   const isMgr = S.can("team_lead");
+  const isSA = S.user.role === "super_admin";
   const SET_TYPES = ["Normal", "Warm-up", "Drop", "To failure"];
+  const GYM_STATUSES = ["Completed", "Incomplete", "Missing"];
+  const GYM_DAYS = ["Push", "Pull", "Legs", "Custom"];
   const DAYS = [
     { t: "Push", d: "Chest · Shoulders · Triceps", c: "push" },
     { t: "Pull", d: "Back · Biceps · Rear delts", c: "pull" },
@@ -195,11 +198,48 @@ window.pageInit = async (S) => {
     S.qs("#tabc").innerHTML = '<div class="skeleton" style="height:200px"></div>';
     const rows = await S.api("/api/gym/summary");
     S.qs("#tabc").innerHTML = `<div class="table-wrap"><table>
-      <thead><tr><th>Employee</th><th>Sessions (wk)</th><th>Completed</th><th>Incomplete</th><th>This week</th></tr></thead>
-      <tbody>${rows.map((r) => `<tr>
+      <thead><tr><th>Employee</th><th>Sessions (wk)</th><th>Completed</th><th>Incomplete</th><th>This week</th>${isSA ? "<th></th>" : ""}</tr></thead>
+      <tbody>${rows.map((r, i) => `<tr>
         <td class="t-name">${S.avatar({ name: r.name }, "sm")}${S.esc(r.name)}</td>
         <td>${r.sessions}</td><td>${r.completed}</td><td>${r.incomplete}</td>
-        <td><div class="row">${r.logs.length ? r.logs.map((g) => `<span class="pill day ${g.day_type}" title="${g.status}">${g.day_type[0]}</span>`).join("") : '<span class="muted">—</span>'}</div></td></tr>`).join("")}</tbody></table></div>`;
+        <td><div class="row">${r.logs.length ? r.logs.map((g) => `<span class="pill day ${g.day_type}" title="${g.day_type} · ${g.status}">${g.day_type[0]}</span>`).join("") : '<span class="muted">—</span>'}</div></td>
+        ${isSA ? `<td style="text-align:right">${r.logs.length ? `<button class="btn sm ghost" data-manage="${i}">Manage</button>` : ""}</td>` : ""}</tr>`).join("")}</tbody></table></div>`;
+    if (isSA) S.qsa("[data-manage]").forEach((b) => b.onclick = () => manageSessions(rows[+b.dataset.manage]));
+  }
+
+  // Super Admin: edit/delete any employee's gym sessions (this week).
+  function manageSessions(r) {
+    const m = S.modal({
+      title: `${S.esc(r.name)} — sessions this week`,
+      body: `<div id="ms-list"></div>`,
+    });
+    const draw = () => {
+      S.qs("#ms-list").innerHTML = r.logs.length ? r.logs.map((g, i) => `
+        <div class="card pad" style="margin-bottom:10px" data-row="${i}">
+          <div class="row between" style="align-items:center">
+            <div><span class="pill day ${g.day_type}">${g.day_type}</span> ${S.statusPill(g.status)}
+              <div class="sub" style="font-size:12px;margin-top:4px">${S.fmtDateFull(g.date + "T00:00:00+08:00")} · ${g.duration_minutes}m · ${g.exercise_count} exercises</div></div>
+            <div class="row" style="gap:6px">
+              <select data-f="day_type" style="max-width:110px">${GYM_DAYS.map((d) => `<option ${d === g.day_type ? "selected" : ""}>${d}</option>`).join("")}</select>
+              <select data-f="status" style="max-width:130px">${GYM_STATUSES.map((s) => `<option ${s === g.status ? "selected" : ""}>${s}</option>`).join("")}</select>
+              <button class="btn sm success" data-save="${g.id}">Save</button>
+              <button class="btn sm danger" data-del="${g.id}">Delete</button>
+            </div></div></div>`).join("") : '<div class="empty">No sessions this week.</div>';
+      S.qsa("[data-save]").forEach((b) => b.onclick = async () => {
+        const row = b.closest("[data-row]");
+        const body = { day_type: row.querySelector('[data-f="day_type"]').value, status: row.querySelector('[data-f="status"]').value };
+        try { const upd = await S.api(`/api/gym/${b.dataset.save}`, { method: "PATCH", body });
+          const idx = r.logs.findIndex((x) => x.id == b.dataset.save); if (idx >= 0) r.logs[idx] = { ...r.logs[idx], ...upd };
+          S.toast("Session updated", "ok"); draw(); } catch (e) { S.toast(e.detail || "Couldn't save", "err"); }
+      });
+      S.qsa("[data-del]").forEach((b) => b.onclick = async () => {
+        if (!confirm("Delete this session? This can't be undone.")) return;
+        try { await S.api(`/api/gym/${b.dataset.del}`, { method: "DELETE" });
+          r.logs = r.logs.filter((x) => x.id != b.dataset.del); S.toast("Session deleted", "ok"); draw(); }
+        catch (e) { S.toast(e.detail || "Couldn't delete", "err"); }
+      });
+    };
+    draw();
   }
 
   function startTimer(startIso) {
