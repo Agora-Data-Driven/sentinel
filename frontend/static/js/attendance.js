@@ -1,12 +1,15 @@
 window.pageInit = async (S) => {
   const view = S.view();
   const isMgr = S.can("team_lead");
+  const isSA = S.user.role === "super_admin";
   const iso = (d) => d.toISOString().slice(0, 10);
+  const toHM = (isoStr) => isoStr ? new Date(isoStr).toLocaleTimeString("en-GB", { timeZone: "Asia/Manila", hour: "2-digit", minute: "2-digit" }) : "";
+  const STATUSES = ["OnTime", "Late", "Absent", "HalfDay", "MissingClockOut", "OnLeave"];
   const from = new Date(Date.now() - 30 * 864e5);
 
   const tabs = isMgr ? ["Team summary", "Approvals", "My attendance"] : ["My attendance"];
   view.innerHTML = `<div class="pagehead"><div><h2>Attendance</h2>
-    <div class="lead">${isMgr ? "Logs, daily summaries, and correction/overtime approvals." : "Your attendance history and correction requests."}</div></div>
+    <div class="lead">${isMgr ? "Time-in / time-out logs, daily summaries, and correction approvals." : "Your attendance history and correction requests."}</div></div>
     <button class="btn primary" id="new-req">${S.ICON.plus}New request</button></div>
     <div class="tabs" id="tabs">${tabs.map((t, i) => `<button class="${i === 0 ? "active" : ""}" data-tab="${t}">${t}</button>`).join("")}</div>
     <div id="tabc"></div>`;
@@ -33,23 +36,46 @@ window.pageInit = async (S) => {
       <select id="f-team"><option value="">All teams</option>${teams.map((t) => `<option value="${t.id}">${S.esc(t.name)}</option>`).join("")}</select>
       <span class="grow"></span>
     </div><div id="sum-table"></div>`;
+    const cols = 7 + (isSA ? 1 : 0);
     const load = async () => {
       const q = new URLSearchParams({ from: S.qs("#f-from").value, to: S.qs("#f-to").value });
       if (S.qs("#f-team").value) q.set("team_id", S.qs("#f-team").value);
       const rows = await S.api("/api/attendance/summary?" + q);
       S.qs("#sum-table").innerHTML = `<div class="table-wrap"><table>
-        <thead><tr><th>Employee</th><th>Date</th><th>In</th><th>Out</th><th>Break</th><th>Hours</th><th>OT</th><th>Status</th><th>Handover</th></tr></thead>
-        <tbody>${rows.length ? rows.map((s) => `<tr>
+        <thead><tr><th>Employee</th><th>Date</th><th>In</th><th>Out</th><th>Hours</th><th>Status</th><th>Handover</th>${isSA ? "<th></th>" : ""}</tr></thead>
+        <tbody>${rows.length ? rows.map((s, i) => `<tr>
           <td class="t-name">${S.avatar(s.user, "sm")}${S.esc(s.user ? s.user.name : "?")}</td>
           <td>${S.fmtDate(s.date + "T00:00:00+08:00")}</td>
           <td>${S.fmtTime(s.clock_in)}</td><td>${S.fmtTime(s.clock_out)}</td>
-          <td>${s.break_duration_min}m</td><td>${s.total_work_hours}h</td>
-          <td>${s.overtime_minutes ? s.overtime_minutes + "m" + (s.overtime_approved ? " ✓" : "") : "—"}</td>
+          <td>${s.total_work_hours}h</td>
           <td>${S.statusPill(s.status)}</td>
-          <td class="sub" style="max-width:220px">${S.esc(s.handover_note || "—")}</td></tr>`).join("") : '<tr><td colspan="9"><div class="empty">No records for this range.</div></td></tr>'}</tbody></table></div>`;
+          <td class="sub" style="max-width:220px">${S.esc(s.handover_note || "—")}</td>
+          ${isSA ? `<td style="text-align:right"><button class="btn sm ghost" data-edit="${i}">Edit</button></td>` : ""}</tr>`).join("") : `<tr><td colspan="${cols}"><div class="empty">No records for this range.</div></td></tr>`}</tbody></table></div>`;
+      if (isSA) S.qsa("[data-edit]").forEach((b) => b.onclick = () => openEdit(rows[+b.dataset.edit], load));
     };
     ["f-from", "f-to", "f-team"].forEach((id) => S.qs("#" + id).onchange = load);
     load();
+  }
+
+  // Super Admin: correct a day's punches / status directly.
+  function openEdit(s, refresh) {
+    const m = S.modal({
+      title: `Edit attendance — ${S.esc(s.user ? s.user.name : "")} · ${S.fmtDate(s.date + "T00:00:00+08:00")}`,
+      body: `<div class="row" style="gap:10px">
+          <label class="field" style="flex:1"><span>Clock in</span><input type="time" id="e-in" value="${toHM(s.clock_in)}"></label>
+          <label class="field" style="flex:1"><span>Clock out</span><input type="time" id="e-out" value="${toHM(s.clock_out)}"></label></div>
+        <label class="field"><span>Status</span><select id="e-status">${STATUSES.map((x) => `<option ${x === s.status ? "selected" : ""}>${x}</option>`).join("")}</select></label>
+        <div class="muted" style="font-size:12px">Times are PH time. Leave blank to clear. Hours recompute automatically (minus the 1-hour lunch).</div>`,
+      footer: `<button class="btn ghost" id="e-cancel">Cancel</button><button class="btn primary" id="e-save">Save</button>`,
+    });
+    S.qs("#e-cancel").onclick = m.close;
+    S.qs("#e-save").onclick = async () => {
+      try {
+        await S.api(`/api/attendance/summary/${s.id}`, { method: "PATCH", body: {
+          clock_in: S.qs("#e-in").value, clock_out: S.qs("#e-out").value, status: S.qs("#e-status").value } });
+        S.toast("Attendance updated", "ok"); m.close(); refresh();
+      } catch (e) { S.toast(e.detail || "Couldn't update", "err"); }
+    };
   }
 
   async function renderApprovals() {
@@ -80,17 +106,17 @@ window.pageInit = async (S) => {
         <span class="sub">Punch at the kiosk — actions available: ${t.valid_actions.length ? t.valid_actions.map((a) => a.replace("_", " ")).join(", ") : "none"}</span></div>
       </div>
       <div class="table-wrap"><table>
-        <thead><tr><th>Date</th><th>In</th><th>Out</th><th>Break</th><th>Hours</th><th>OT</th><th>Status</th></tr></thead>
+        <thead><tr><th>Date</th><th>In</th><th>Out</th><th>Hours</th><th>Status</th></tr></thead>
         <tbody>${d.history.length ? d.history.map((s) => `<tr>
           <td>${S.fmtDateFull(s.date + "T00:00:00+08:00")}</td><td>${S.fmtTime(s.clock_in)}</td><td>${S.fmtTime(s.clock_out)}</td>
-          <td>${s.break_duration_min}m</td><td>${s.total_work_hours}h</td><td>${s.overtime_minutes ? s.overtime_minutes + "m" : "—"}</td><td>${S.statusPill(s.status)}</td></tr>`).join("") : '<tr><td colspan="7"><div class="empty">No attendance yet.</div></td></tr>'}</tbody></table></div>`;
+          <td>${s.total_work_hours}h</td><td>${S.statusPill(s.status)}</td></tr>`).join("") : '<tr><td colspan="5"><div class="empty">No attendance yet.</div></td></tr>'}</tbody></table></div>`;
   }
 
   S.qs("#new-req").onclick = () => {
     const today = iso(new Date());
     const m = S.modal({
       title: "Attendance request",
-      body: `<label class="field"><span>Type</span><select id="r-type"><option value="regularization">Regularization (fix a punch)</option><option value="overtime">Overtime approval</option></select></label>
+      body: `<input type="hidden" id="r-type" value="regularization">
         <label class="field"><span>Date</span><input type="date" id="r-date" value="${today}"></label>
         <div class="row" style="gap:10px"><label class="field" style="flex:1"><span>Old value</span><input id="r-old" placeholder="e.g. — or 8h"></label>
         <label class="field" style="flex:1"><span>New value</span><input id="r-new" placeholder="e.g. 17:10 or 9h40m"></label></div>

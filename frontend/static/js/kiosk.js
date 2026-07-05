@@ -220,8 +220,6 @@ window.pageInit = async (S) => {
       <div class="k-sub">${S.esc(info.team_name || info.role_label)} · <span class="pill grey">${stateLabel}</span></div>
       <div class="k-actions">
         ${btn("clock_in", "in", "check", "Clock In", va.includes("clock_in"))}
-        ${btn("break_start", "brk", "coffee", "Start Break", va.includes("break_start"))}
-        ${btn("break_end", "endbrk", "clock", "End Break", va.includes("break_end"))}
         ${btn("clock_out", "out", "logout", "Clock Out", va.includes("clock_out"))}
       </div>
       <div id="extra" style="margin-top:16px"></div>

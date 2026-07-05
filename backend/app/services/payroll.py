@@ -1,12 +1,11 @@
-"""Payroll computation — turns each employee's monthly salary + the attendance/overtime/leave data
-already in Sentinel into a net-pay figure for a given month (YYYY-MM). Super Admin only (enforced
-at the router). Amounts are plain numbers; the UI formats them as PHP (₱).
+"""Payroll computation — turns each employee's monthly salary + the attendance/leave data already
+in Sentinel into a net-pay figure for a given month (YYYY-MM). Super Admin only (enforced at the
+router). Amounts are plain numbers; the UI formats them as PHP (₱). Overtime is NOT tracked.
 
 Model (simple, transparent, editable):
   daily_rate   = monthly_salary / working_days_in_month
-  overtime_pay = approved_overtime_hours * (daily_rate / 8) * OT_MULTIPLIER
   deductions   = (absent_days + unpaid_leave_days) * daily_rate  +  manual_deduction
-  net_pay      = monthly_salary + overtime_pay + bonus - deductions
+  net_pay      = monthly_salary + bonus - deductions
 The Super Admin can override with a per-person bonus/deduction (stored in payroll_entries).
 """
 from __future__ import annotations
@@ -20,7 +19,6 @@ from sqlalchemy.orm import Session
 from ..models import DailyAttendanceSummary, LeaveRequest, LeaveType, PayrollEntry, User
 from . import settings as settings_svc
 
-OT_MULTIPLIER = 1.25
 _WD = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
 
 
@@ -40,7 +38,6 @@ def _working_days(period: str, work_days_csv: str) -> int:
 def compute_period(db: Session, period: str) -> dict:
     smap = settings_svc.get_map(db)
     wdays = _working_days(period, smap.get("work_days", "Mon,Tue,Wed,Thu,Fri"))
-    ot_needs_approval = str(smap.get("overtime_requires_approval", "true")).lower() == "true"
     first, last = month_bounds(period)
 
     users = db.execute(select(User).where(User.is_active.is_(True)).order_by(User.name)).scalars().all()
@@ -48,12 +45,11 @@ def compute_period(db: Session, period: str) -> dict:
         lt.id for lt in db.execute(select(LeaveType).where(LeaveType.name.ilike("%unpaid%"))).scalars()
     }
     rows = []
-    totals = {"base": 0.0, "overtime": 0.0, "bonus": 0.0, "deductions": 0.0, "net": 0.0}
+    totals = {"base": 0.0, "bonus": 0.0, "deductions": 0.0, "net": 0.0}
 
     for u in users:
         salary = float(u.monthly_salary or 0)
         daily = salary / wdays if wdays else 0
-        hourly = daily / 8 if daily else 0
 
         summaries = db.execute(
             select(DailyAttendanceSummary).where(
@@ -65,11 +61,6 @@ def compute_period(db: Session, period: str) -> dict:
         present = sum(1 for s in summaries if s.clock_in and s.status not in ("Absent",))
         late = sum(1 for s in summaries if s.status == "Late")
         absent = sum(1 for s in summaries if s.status == "Absent")
-        ot_min = sum(
-            s.overtime_minutes for s in summaries
-            if s.overtime_minutes and (s.overtime_approved or not ot_needs_approval)
-        )
-        ot_hours = round(ot_min / 60.0, 2)
 
         # Unpaid leave days overlapping the month (approved).
         unpaid_days = 0
@@ -95,13 +86,11 @@ def compute_period(db: Session, period: str) -> dict:
         note = entry.note if entry else None
         finalized = bool(entry.finalized) if entry else False
 
-        overtime_pay = round(ot_hours * hourly * OT_MULTIPLIER, 2)
         absence_ded = round((absent + unpaid_days) * daily, 2)
         deductions = round(absence_ded + manual_ded, 2)
-        net = round(salary + overtime_pay + bonus - deductions, 2)
+        net = round(salary + bonus - deductions, 2)
 
         totals["base"] += salary
-        totals["overtime"] += overtime_pay
         totals["bonus"] += bonus
         totals["deductions"] += deductions
         totals["net"] += net
@@ -111,11 +100,10 @@ def compute_period(db: Session, period: str) -> dict:
             "monthly_salary": salary,
             "present_days": present, "late_days": late, "absent_days": absent,
             "unpaid_leave_days": unpaid_days,
-            "overtime_hours": ot_hours, "overtime_pay": overtime_pay,
             "absence_deduction": absence_ded,
             "bonus": bonus, "deduction": manual_ded, "note": note, "finalized": finalized,
             "net_pay": net,
         })
 
     totals = {k: round(v, 2) for k, v in totals.items()}
-    return {"period": period, "working_days": wdays, "ot_multiplier": OT_MULTIPLIER, "rows": rows, "totals": totals}
+    return {"period": period, "working_days": wdays, "rows": rows, "totals": totals}

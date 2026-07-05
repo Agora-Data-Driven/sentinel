@@ -18,7 +18,7 @@ window.pageInit = async (S) => {
   view.innerHTML = `
     <div class="pagehead"><div>
       <h2>Payroll &amp; Accounting</h2>
-      <div class="lead">Net pay computed from attendance, overtime and leave. Adjust salaries and bonuses, then finalize the month.</div>
+      <div class="lead">Net pay computed from salary, attendance and leave. Adjust salaries and bonuses, then finalize the month.</div>
     </div></div>
 
     <div class="row between wrap" style="gap:12px;margin-bottom:16px">
@@ -58,7 +58,6 @@ window.pageInit = async (S) => {
   function renderStats(t) {
     S.qs("#pr-stats").innerHTML = `
       <div class="pr-stat"><div class="k">Base salaries</div><div class="v">${peso(t.base)}</div></div>
-      <div class="pr-stat"><div class="k">Overtime pay</div><div class="v">${peso(t.overtime)}</div></div>
       <div class="pr-stat"><div class="k">Bonuses</div><div class="v">${peso(t.bonus)}</div></div>
       <div class="pr-stat"><div class="k">Deductions</div><div class="v">${peso(t.deductions)}</div></div>
       <div class="pr-stat net"><div class="k">Net payout — ${S.esc(monthLabel(period))}</div><div class="v">${peso(t.net)}</div></div>`;
@@ -68,7 +67,7 @@ window.pageInit = async (S) => {
     const body = S.qs("#pr-body");
     if (!rows.length) { body.innerHTML = `<div class="empty">No active employees to pay.</div>`; return; }
     body.innerHTML = `
-      <div class="lead" style="margin-bottom:8px">${workingDays} working days this month · overtime paid at 1.25× · unpaid leave and absences are deducted at the daily rate.</div>
+      <div class="lead" style="margin-bottom:8px">${workingDays} working days this month · unpaid leave and absences are deducted at the daily rate.</div>
       <div class="table-wrap"><table>
         <thead><tr>
           <th>Employee</th>
@@ -76,8 +75,6 @@ window.pageInit = async (S) => {
           <th class="num">Present</th>
           <th class="num">Absent</th>
           <th class="num">Unpaid</th>
-          <th class="num">OT (h)</th>
-          <th class="num">OT pay</th>
           <th class="num">Bonus</th>
           <th class="num">Deductions</th>
           <th class="num">Net pay</th>
@@ -93,8 +90,6 @@ window.pageInit = async (S) => {
             <td class="num">${r.present_days}</td>
             <td class="num">${r.absent_days || 0}</td>
             <td class="num">${r.unpaid_leave_days || 0}</td>
-            <td class="num">${r.overtime_hours || 0}</td>
-            <td class="num">${peso(r.overtime_pay)}</td>
             <td class="num">${peso(r.bonus)}</td>
             <td class="num">${peso(ded)}</td>
             <td class="num pr-net">${peso(r.net_pay)}</td>
@@ -121,7 +116,6 @@ window.pageInit = async (S) => {
           <input type="text" id="pr-note" value="${S.esc(r.note || "")}" placeholder="e.g. 13th month advance, cash advance"></label>
         <div class="card pad" style="background:var(--canvas);font-size:13px">
           <div class="row between"><span>Auto deduction (absences + unpaid leave)</span><strong>${peso(r.absence_deduction)}</strong></div>
-          <div class="row between"><span>Overtime pay (${r.overtime_hours || 0}h)</span><strong>${peso(r.overtime_pay)}</strong></div>
         </div>
         <label class="chip" style="cursor:pointer;margin-top:12px;display:inline-flex;align-items:center;gap:8px">
           <input type="checkbox" id="pr-final" style="width:auto" ${r.finalized ? "checked" : ""}> Mark this month finalized (locks the row)</label>`,

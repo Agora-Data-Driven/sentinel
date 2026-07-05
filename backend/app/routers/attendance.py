@@ -20,6 +20,7 @@ from ..constants import (
     REQ_OVERTIME,
     REQ_PENDING,
     ROLE_LABELS,
+    ROLE_SUPER_ADMIN,
 )
 from ..database import get_db
 from ..models import (
@@ -30,13 +31,13 @@ from ..models import (
     Team,
     User,
 )
-from ..schemas import AttendanceRequestIn, EventIn, OfflineSyncIn, RequestDecisionIn, ScanIn
-from ..security import get_current_user, require_min_role
+from ..schemas import AttendanceEditIn, AttendanceRequestIn, EventIn, OfflineSyncIn, RequestDecisionIn, ScanIn
+from ..security import get_current_user, require_min_role, require_roles
 from ..serializers import attendance_request_dict, summary_dict, user_public
 from ..services import attendance as att
 from ..services import audit
 from ..services import notifications as notif
-from ..utils.time import PH_TZ, minutes_between, to_ph, today_ph, utcnow
+from ..utils.time import PH_TZ, minutes_between, parse_hhmm, to_ph, today_ph, utcnow
 from ..constants import ROLE_TEAM_LEAD
 
 router = APIRouter(prefix="/api/attendance", tags=["attendance"])
@@ -233,17 +234,6 @@ def decide_request(
     req.reviewed_by_id = reviewer.id
     req.reviewed_at = utcnow()
 
-    # Approving an overtime request flips the day's summary flag so it counts in reports.
-    if req.request_type == REQ_OVERTIME and payload.status == REQ_APPROVED:
-        summary = db.execute(
-            select(DailyAttendanceSummary).where(
-                DailyAttendanceSummary.user_id == req.user_id,
-                DailyAttendanceSummary.date == req.date,
-            )
-        ).scalar_one_or_none()
-        if summary:
-            summary.overtime_approved = True
-
     db.commit()
     notif.notify(
         db, user_id=req.user_id, type=NOTIF_APPROVAL,
@@ -280,6 +270,51 @@ def summaries(
             continue
         out.append(summary_dict(s, u))
     return out
+
+
+def _ph_to_utc(day: date, hhmm: str) -> datetime:
+    """PH-local 'HH:MM' on ``day`` -> naive UTC datetime (matches how punches are stored)."""
+    t = parse_hhmm(hhmm)
+    local = datetime(day.year, day.month, day.day, t.hour, t.minute, tzinfo=PH_TZ)
+    return local.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+@router.patch("/summary/{summary_id}")
+def edit_summary(
+    summary_id: int,
+    payload: AttendanceEditIn,
+    admin: User = Depends(require_roles(ROLE_SUPER_ADMIN)),
+    db: Session = Depends(get_db),
+):
+    """Super Admin manual correction of a day's attendance (fix a wrong/missed scan)."""
+    s = db.get(DailyAttendanceSummary, summary_id)
+    if not s:
+        raise HTTPException(status_code=404, detail="Attendance record not found")
+    old = {"clock_in": to_ph(s.clock_in).strftime("%H:%M") if s.clock_in else None,
+           "clock_out": to_ph(s.clock_out).strftime("%H:%M") if s.clock_out else None,
+           "status": s.status}
+    if payload.clock_in is not None:
+        s.clock_in = _ph_to_utc(s.date, payload.clock_in) if payload.clock_in.strip() else None
+    if payload.clock_out is not None:
+        s.clock_out = _ph_to_utc(s.date, payload.clock_out) if payload.clock_out.strip() else None
+
+    user = db.get(User, s.user_id)
+    shift = att.effective_shift(db, user)
+    if s.clock_in and s.clock_out:
+        s.total_work_hours = round(max(0, minutes_between(s.clock_in, s.clock_out) - shift.break_min) / 60.0, 2)
+        s.break_duration_min = shift.break_min
+    else:
+        s.total_work_hours = 0.0
+        s.break_duration_min = 0
+    s.overtime_minutes = 0
+    if payload.status:
+        s.status = payload.status
+    audit.record(db, actor_id=admin.id, table_name="daily_attendance_summary", record_id=s.id,
+                 action="edit", old=old,
+                 new={"clock_in": payload.clock_in, "clock_out": payload.clock_out, "status": s.status},
+                 commit=False)
+    db.commit()
+    return summary_dict(s, user)
 
 
 @router.get("/my")

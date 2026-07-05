@@ -114,26 +114,36 @@ window.pageInit = async (S) => {
   }
 
   function openLibrary() {
-    const items = state.library;
+    const items = state.library;  // already scoped to the current day type (Push/Pull/Legs)
+    // Muscle groups present for THIS day — e.g. Push -> Chest / Shoulders / Triceps.
+    const muscles = [...new Set(items.map((e) => e.muscle_group).filter(Boolean))].sort();
     const m = S.modal({
       title: "Add exercise",
-      body: `<input id="lib-search" placeholder="Search exercises…" style="margin-bottom:12px">
+      body: `<div class="row" style="gap:8px;margin-bottom:12px">
+          <input id="lib-search" placeholder="Search exercises…" style="flex:1">
+          <select id="lib-muscle" style="max-width:170px"><option value="">All muscles</option>${muscles.map((mg) => `<option value="${S.esc(mg)}">${S.esc(mg)}</option>`).join("")}</select>
+        </div>
         <div id="lib-list" style="max-height:360px;overflow:auto"></div>`,
       wide: false,
     });
-    const draw = (q) => {
-      S.qs("#lib-list").innerHTML = items.filter((e) => !q || e.name.toLowerCase().includes(q.toLowerCase())).map((e) => `
+    const draw = () => {
+      const q = (S.qs("#lib-search").value || "").toLowerCase();
+      const mg = S.qs("#lib-muscle").value;
+      const list = items.filter((e) => (!q || e.name.toLowerCase().includes(q)) && (!mg || e.muscle_group === mg));
+      S.qs("#lib-list").innerHTML = list.length ? list.map((e) => `
         <div class="row between" style="padding:9px 4px;border-bottom:1px solid var(--line)">
           <div><strong>${S.esc(e.name)}</strong> <span class="chip">${S.esc(e.muscle_group || "")}</span>
             <div class="muted" style="font-size:12px">${e.previous ? "Last: " + S.esc(e.previous.display) : "No history"}</div></div>
-          <button class="btn sm success" data-add="${S.esc(e.name)}" data-m="${S.esc(e.muscle_group || "")}">Add</button></div>`).join("");
+          <button class="btn sm success" data-add="${S.esc(e.name)}" data-m="${S.esc(e.muscle_group || "")}">Add</button></div>`).join("")
+        : '<div class="empty" style="padding:20px">No matching exercises.</div>';
       S.qsa("[data-add]", S.qs("#lib-list")).forEach((b) => b.onclick = () => {
         state.exercises.push({ name: b.dataset.add, muscle: b.dataset.m, sets: [{ set: 1, kg: 0, reps: 0, type: "Warm-up", done: false }], notes: "" });
         m.close(); renderExercises();
       });
     };
-    S.qs("#lib-search").oninput = (e) => draw(e.target.value);
-    draw("");
+    S.qs("#lib-search").oninput = draw;
+    S.qs("#lib-muscle").onchange = draw;
+    draw();
   }
 
   async function save() {

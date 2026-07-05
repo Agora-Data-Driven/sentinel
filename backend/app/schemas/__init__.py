@@ -61,6 +61,13 @@ class RequestDecisionIn(BaseModel):
     status: str  # Approved | Rejected
 
 
+class AttendanceEditIn(BaseModel):
+    """Super Admin manual correction of a day's summary. Times are PH 'HH:MM' (blank = clear)."""
+    clock_in: str | None = None
+    clock_out: str | None = None
+    status: str | None = None
+
+
 # --- Gym -------------------------------------------------------------------
 class GymStartIn(BaseModel):
     day_type: str = "Custom"

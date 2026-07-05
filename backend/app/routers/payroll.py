@@ -48,10 +48,10 @@ def get_payroll(
     result = payroll_svc.compute_period(db, period)
     if export == "csv":
         headers = ["Employee", "Email", "Monthly Salary", "Present", "Absent",
-                   "Unpaid Leave", "OT Hours", "OT Pay", "Bonus", "Deduction", "Net Pay", "Finalized"]
+                   "Unpaid Leave", "Bonus", "Deduction", "Net Pay", "Finalized"]
         rows = [
             [r["name"], r["email"], r["monthly_salary"], r["present_days"], r["absent_days"],
-             r["unpaid_leave_days"], r["overtime_hours"], r["overtime_pay"], r["bonus"],
+             r["unpaid_leave_days"], r["bonus"],
              r["deduction"] + r["absence_deduction"], r["net_pay"], "Yes" if r["finalized"] else "No"]
             for r in result["rows"]
         ]

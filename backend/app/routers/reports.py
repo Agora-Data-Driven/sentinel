@@ -60,14 +60,14 @@ def _build(db: Session, report: str, user: User, from_: date | None, to: date | 
             q = q.where(DailyAttendanceSummary.date >= from_)
         if to:
             q = q.where(DailyAttendanceSummary.date <= to)
-        headers = ["Employee", "Date", "In", "Out", "Status", "Hours", "OT Min", "Handover"]
+        headers = ["Employee", "Date", "In", "Out", "Status", "Hours", "Handover"]
         rows = []
         for s in db.execute(q).scalars().all():
             u = db.get(User, s.user_id)
             if team_id and (not u or u.team_id != team_id):
                 continue
             rows.append([u.name if u else "?", s.date.isoformat(), _fmt_dt(s.clock_in),
-                         _fmt_dt(s.clock_out), s.status, s.total_work_hours, s.overtime_minutes,
+                         _fmt_dt(s.clock_out), s.status, s.total_work_hours,
                          (s.handover_note or "")[:120]])
         return headers, rows
 

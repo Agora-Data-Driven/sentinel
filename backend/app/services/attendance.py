@@ -83,10 +83,8 @@ def valid_actions(events: list[AttendanceEvent]) -> list[str]:
     state = current_state(events)
     if state == "none":
         return [ACTION_CLOCK_IN]
-    if state == "in":
-        return [ACTION_BREAK_START, ACTION_CLOCK_OUT]
-    if state == "on_break":
-        return [ACTION_BREAK_END, ACTION_CLOCK_OUT]  # clock-out auto-ends the break
+    if state in ("in", "on_break"):  # breaks aren't tracked; only clock-out is offered
+        return [ACTION_CLOCK_OUT]
     return []  # already clocked out
 
 
@@ -162,17 +160,17 @@ def recompute_summary(db: Session, user: User, day: date, commit: bool = True) -
     summary.clock_out = clock_out
     summary.break_start = break_start
     summary.break_end = break_end
-    summary.break_duration_min = break_minutes
+    # Breaks aren't punched anymore — deduct the shift's fixed unpaid lunch from worked hours.
+    lunch = shift.break_min if (clock_in and clock_out) else 0
+    summary.break_duration_min = lunch
     summary.handover_note = handover
 
-    # Work hours + overtime.
-    worked_minutes = 0
-    if clock_in and clock_out:
-        worked_minutes = max(0, minutes_between(clock_in, clock_out) - break_minutes)
+    # Work hours = clock-in -> clock-out minus the fixed lunch. Overtime is NOT tracked in Sentinel.
+    worked_minutes = max(0, minutes_between(clock_in, clock_out) - lunch) if (clock_in and clock_out) else 0
     summary.total_work_hours = round(worked_minutes / 60.0, 2)
+    summary.overtime_minutes = 0
 
-    shift_minutes = _shift_minutes(shift)
-    summary.overtime_minutes = max(0, worked_minutes - shift_minutes) if clock_out else 0
+    shift_minutes = _shift_minutes(shift)  # used only for the half-day status check below
 
     # Status.
     if not clock_in:

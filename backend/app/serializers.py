@@ -194,8 +194,6 @@ def summary_dict(s: DailyAttendanceSummary, user: User | None = None) -> dict:
         "clock_out": _iso(s.clock_out),
         "break_duration_min": s.break_duration_min,
         "total_work_hours": s.total_work_hours,
-        "overtime_minutes": s.overtime_minutes,
-        "overtime_approved": s.overtime_approved,
         "status": s.status,
         "handover_note": s.handover_note,
     }

@@ -6,7 +6,7 @@ window.pageInit = async (S) => {
   const FIELDS = [
     ["work_start", "time"], ["work_end", "time"], ["late_grace", "number"],
     ["break_duration", "number"], ["gym_required_hours", "number"], ["work_days", "text"],
-    ["timezone", "text"], ["overtime_requires_approval", "bool"],
+    ["timezone", "text"],
   ];
   const nice = (k) => k.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 

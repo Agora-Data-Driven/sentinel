@@ -14,7 +14,6 @@ DEFAULTS: dict[str, str] = {
     "work_days": "Mon,Tue,Wed,Thu,Fri",
     "timezone": "Asia/Manila",
     "gym_required_hours": "1",
-    "overtime_requires_approval": "true",
 }
 
 DESCRIPTIONS: dict[str, str] = {
@@ -25,7 +24,6 @@ DESCRIPTIONS: dict[str, str] = {
     "work_days": "Working days of the week",
     "timezone": "Display + rules timezone",
     "gym_required_hours": "Minimum gym session hours to count as compliant",
-    "overtime_requires_approval": "Whether overtime must be approved to count in reports",
 }
 
 
