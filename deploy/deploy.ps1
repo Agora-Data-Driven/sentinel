@@ -51,9 +51,11 @@ $deployArgs = @(
   "--set-secrets", "JWT_SECRET=${JwtSecretName}:latest"
 )
 
-# DEV_LOGIN stays on until Google OAuth is wired (otherwise no one can sign in). Flip to
-# false in this string once OAuth works, and redeploy.
-$envVars = "ENVIRONMENT=production,SECURE_COOKIES=true,DEV_LOGIN_ENABLED=true,TIMEZONE=Asia/Manila"
+# Production posture: passwordless DEV_LOGIN is OFF. Sign in with the bootstrap admin
+# (melo@agora.ph — change the password immediately) or wire Google OAuth (see
+# GOOGLE-SIGNIN-SETUP.md). If you MUST keep the dev-login dropdown temporarily, append
+# ",ALLOW_DEV_LOGIN_IN_PROD=true" below — the app will boot with a loud SECURITY warning.
+$envVars = "ENVIRONMENT=production,SECURE_COOKIES=true,DEV_LOGIN_ENABLED=false,TIMEZONE=Asia/Manila"
 
 if ($DemoSqlite) {
   Write-Host "DEMO mode: ephemeral SQLite, single instance (data resets on restart)." -ForegroundColor Yellow

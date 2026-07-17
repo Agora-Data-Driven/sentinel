@@ -53,6 +53,28 @@ def _startup() -> None:
     _startup_safeguards()
 
 
+def _production_security_warnings() -> None:
+    """Loudly flag insecure prod config at boot. Warn-only so a misconfig never causes lockout."""
+    if not settings.is_production:
+        return
+    checks = [
+        (settings.jwt_secret_is_default,
+         "JWT_SECRET is the built-in dev default - anyone can forge sessions. "
+         "Set a strong JWT_SECRET secret and redeploy."),
+        (settings.dev_login_active,
+         "passwordless DEV_LOGIN is ACTIVE (ALLOW_DEV_LOGIN_IN_PROD=true) - anyone can sign in as "
+         "any user. Wire Google OAuth / password login, then remove the override."),
+        (not settings.secure_cookies,
+         "SECURE_COOKIES is false - session cookies will be sent over plain HTTP. "
+         "Set SECURE_COOKIES=true behind HTTPS."),
+        (settings.bootstrap_admin_password == "Agora2026!",
+         "bootstrap admin is using the default password - sign in and change it now."),
+    ]
+    for triggered, message in checks:
+        if triggered:
+            print(f"[sentinel] SECURITY (production): {message}")
+
+
 def _startup_safeguards() -> None:
     """Log which database we're on, and guarantee a login is always possible.
 
@@ -74,6 +96,7 @@ def _startup_safeguards() -> None:
     if settings.environment == "production" and backend == "SQLite":
         print("[sentinel] WARNING: production is running on EPHEMERAL SQLite — DATABASE_URL is not set! "
               "Data will not persist. Set the DATABASE_URL secret.")
+    _production_security_warnings()
 
     db = SessionLocal()
     try:

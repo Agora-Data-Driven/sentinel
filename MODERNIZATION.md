@@ -16,7 +16,7 @@
 
 ## Progress at a glance
 
-- [ ] **Session 1 — Security & quick wins** (urgent)
+- [x] **Session 1 — Security & quick wins** (urgent) — DONE 2026-07-17
 - [ ] **Session 2 — UX modernization**
 - [ ] **Session 3 — Robustness & testing**
 - [ ] **Session 4 — Real-time & build tooling** (optional / biggest)
@@ -28,28 +28,29 @@ Rough total: **~4–7 hrs active work**, **~1.0–1.8M tokens**, across **3–4 
 ## 🔴 Session 1 — Security & quick wins
 *~1–1.5 hrs · ~200–280k tokens · high value, low risk. Contains the only truly urgent item.*
 
-- [ ] **1.1 — Remove leaked session tokens** ⚠️ *URGENT*
-  - `git rm --cached live.txt backend/cg.txt backend/cm.txt backend/em.txt backend/pw.txt backend/sa.txt backend/sentinel.db`
-  - These are curl cookie jars holding **live session JWTs** (including one for the Cloud Run deployment).
-  - Add to `.gitignore`: `*.txt` cookie jars, `*.db`, `.venv/`, `__pycache__/`, `badges/`.
-  - **Rotate `JWT_SECRET`** in production → invalidates all leaked tokens at once.
-  - Consider `git filter-repo` to scrub history if the repo is pushed/shared.
-- [ ] **1.2 — Replace `python-jose` with `PyJWT`**
-  - `python-jose` is effectively unmaintained (CVE-2024-33663 / 33664). PyJWT is a drop-in.
-  - Touches: `requirements.txt`, `app/security.py`.
-- [ ] **1.3 — Security headers + rate limiting**
-  - `slowapi` on `/api/auth/*` and `/api/attendance/scan` (brute-force / abuse protection).
-  - Middleware for `Content-Security-Policy`, `X-Frame-Options`, `X-Content-Type-Options`, `HSTS`.
-  - Enforce the `KIOSK_KEY` (`X-Kiosk-Key`) the README already documents.
-- [ ] **1.4 — Toasts + skeleton loaders** (shared `frontend/static/js/app.js` + `styles.css`)
-  - Replace blank-then-pop rendering; add success/error/undo toasts.
-  - *(Prototype already shows the target look.)*
-- [ ] **1.5 — Dark mode QA pass**
-  - Dark mode already exists in `styles.css` (`:root[data-theme="dark"]`). Audit every page for
-    contrast + missed hardcoded colors; confirm the toggle persists (localStorage).
-- [ ] **1.6 — Lock down prod config**
-  - `DEV_LOGIN_ENABLED=false`, `SECURE_COOKIES=true`, strong `JWT_SECRET`, `SameSite` cookies.
-  - Wire the already-scaffolded Google OAuth (`deploy/GOOGLE-SIGNIN-SETUP.md`).
+- [x] **1.1 — Remove leaked session tokens** ⚠️ *URGENT* — DONE
+  - Removed `live.txt` + `backend/{cg,cm,em,live,pw,sa}.txt` from git and disk; extended `.gitignore`.
+  - **Still TODO by a human:** rotate `JWT_SECRET` in prod; scrub git history (`git filter-repo`)
+    if the repo was ever pushed/shared — the tokens remain in past commits.
+- [x] **1.2 — Replace `python-jose` with `PyJWT`** — DONE
+  - `requirements.txt` → `PyJWT==2.10.1`; `security.py` catches `jwt.PyJWTError`. Round-trip verified.
+- [x] **1.3 — Security headers + rate limiting** — DONE
+  - New `app/middleware.py`: `SecurityHeadersMiddleware` (CSP/XFO/nosniff/Referrer/Permissions/HSTS)
+    + `RateLimitMiddleware` (per-IP: login 10/min, scan 120/min → 429). No new dependency (used a
+    hand-rolled limiter instead of slowapi to avoid router churn). `kiosk_guard` was already wired.
+- [x] **1.4 — Toasts + skeleton loaders** — DONE
+  - Toasts + dark mode already existed. Added `S.skeleton()` helper + `.skel-*` CSS, `toast()` now
+    supports an Undo-style action button, applied skeletons to dashboard + people.
+- [x] **1.5 — Dark mode QA pass** — DONE (audit, no code change)
+  - CSS is token-driven (188 `var()` uses, 13 dark overrides); no contrast breakage. login/kiosk/
+    scanner are intentionally light-only (`data-shell="off"`). *Optional polish later:* the tint
+    tokens (`--green-bg`, `--push-bg`, …) aren't dark-adjusted — legible but could feel more native.
+- [x] **1.6 — Lock down prod config** — DONE
+  - Dev-login is now forced OFF in production (secure-by-default) unless `ALLOW_DEV_LOGIN_IN_PROD=true`;
+    loud startup SECURITY warnings for default JWT_SECRET / active dev-login / insecure cookies /
+    default admin password; `deploy.ps1` now ships `DEV_LOGIN_ENABLED=false`; `.env.example` documents it.
+  - **Still TODO by a human:** wire Google OAuth (`deploy/GOOGLE-SIGNIN-SETUP.md`) or set passwords,
+    then next deploy uses the secure posture. Change the bootstrap admin password after first sign-in.
 
 ---
 
@@ -124,3 +125,10 @@ Rough total: **~4–7 hrs active work**, **~1.0–1.8M tokens**, across **3–4 
 
 - 2026-07-17 — Plan created. Prototype built and reviewed. Agreed to batch into sessions;
   Session 1 first because of the live session token in `live.txt`.
+- 2026-07-17 — **Session 1 completed** (branch `hardening/session-1`, 6 commits). Discovered
+  toasts + dark mode already existed, so 1.4/1.5 were lighter than estimated. Chose a hand-rolled
+  rate limiter over slowapi (no new dep, no router churn). Made dev-login secure-by-default in prod
+  rather than only editing deploy config, so the footgun is closed in code too.
+  **Human follow-ups outstanding:** rotate prod `JWT_SECRET`; scrub git history; wire OAuth / set
+  passwords before next deploy (dev-login dropdown will be gone in prod); change bootstrap password.
+  Branch not yet merged to `main` or pushed — awaiting review.

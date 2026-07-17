@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     secure_cookies: bool = False  # set true behind https in prod
 
     dev_login_enabled: bool = True  # /api/auth/dev-login — pick a seeded user, no OAuth
+    # Dev-login is a PASSWORDLESS "become any user" door — fine locally, dangerous in prod.
+    # It is forced OFF when environment == "production" unless this escape hatch is set true.
+    allow_dev_login_in_prod: bool = False
 
     # Startup safety net: if the DB has no active Super Admin, this account is (re)created so a
     # login is always possible. Change the password after first sign-in.
@@ -61,6 +64,22 @@ class Settings(BaseSettings):
     rate_limit_scan_per_min: int = 120   # /api/attendance/scan + /event, per IP (busy kiosk-friendly)
     # Send HSTS only when actually behind HTTPS. Defaults to follow secure_cookies.
     hsts_enabled: bool | None = None
+
+    # --- Derived --------------------------------------------------------------
+    @property
+    def is_production(self) -> bool:
+        return self.environment.strip().lower() == "production"
+
+    @property
+    def dev_login_active(self) -> bool:
+        """Effective dev-login switch. Off in production unless explicitly allowed."""
+        if self.is_production and not self.allow_dev_login_in_prod:
+            return False
+        return self.dev_login_enabled
+
+    @property
+    def jwt_secret_is_default(self) -> bool:
+        return self.jwt_secret == "dev-only-change-me-in-production"
 
 
 @lru_cache
