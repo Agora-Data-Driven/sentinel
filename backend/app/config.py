@@ -88,6 +88,12 @@ class Settings(BaseSettings):
     rate_limit_scan_per_min: int = 120   # /api/attendance/scan + /event, per IP (busy kiosk-friendly)
     # Send HSTS only when actually behind HTTPS. Defaults to follow secure_cookies.
     hsts_enabled: bool | None = None
+    # Who may frame Sentinel pages (CSP `frame-ancestors`). Sentinel embeds its own same-origin
+    # pages (North Star's who-we-are.html) and is itself meant to live inside the Agora portal, so
+    # the default allows 'self' plus the agoradatadriven.com ecosystem. Set to "'none'" to forbid
+    # all framing, or tighten to specific hosts. Note: `*.agoradatadriven.com` does NOT cover the
+    # bare apex, so both are listed.
+    csp_frame_ancestors: str = "'self' https://*.agoradatadriven.com https://agoradatadriven.com"
 
     # --- Observability ----------------------------------------------------
     log_level: str = "INFO"  # DEBUG|INFO|WARNING|ERROR

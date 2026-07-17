@@ -30,29 +30,36 @@ from .config import settings
 # - PWA service worker -> worker-src 'self'
 # - frame-src: North Star embeds a same-origin page; the Academy tab embeds the mastery engine on
 #   an *.agoradatadriven.com host (see SKILL_MASTERY_URL) — both must be allowed to load in an iframe.
-_CSP = (
-    "default-src 'self'; "
-    "script-src 'self'; "
-    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-    "font-src 'self' https://fonts.gstatic.com; "
-    "img-src 'self' data: blob:; "
-    "connect-src 'self'; "
-    "worker-src 'self'; "
-    "manifest-src 'self'; "
-    "frame-src 'self' https://*.agoradatadriven.com; "
-    "object-src 'none'; "
-    "base-uri 'self'; "
-    "form-action 'self'; "
-    "frame-ancestors 'none'"
-)
+# - frame-ancestors: who may frame US. Sentinel frames its own same-origin who-we-are.html and is
+#   meant to live inside the Agora portal, so this is driven by CSP_FRAME_ANCESTORS (not a hard
+#   'none', which would break the North Star embed).
+def _csp() -> str:
+    return (
+        "default-src 'self'; "
+        "script-src 'self'; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com; "
+        "img-src 'self' data: blob:; "
+        "connect-src 'self'; "
+        "worker-src 'self'; "
+        "manifest-src 'self'; "
+        "frame-src 'self' https://*.agoradatadriven.com; "
+        "object-src 'none'; "
+        "base-uri 'self'; "
+        "form-action 'self'; "
+        f"frame-ancestors {settings.csp_frame_ancestors}"
+    )
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         response: Response = await call_next(request)
         h = response.headers
-        h.setdefault("Content-Security-Policy", _CSP)
-        h.setdefault("X-Frame-Options", "DENY")
+        h.setdefault("Content-Security-Policy", _csp())
+        # frame-ancestors (above) is the source of truth and, per spec, browsers ignore X-Frame-
+        # Options when it's present. Keep XFO only as legacy defence-in-depth, and don't let a hard
+        # DENY here contradict a frame-ancestors that allows framing: SAMEORIGIN unless we forbid all.
+        h.setdefault("X-Frame-Options", "DENY" if settings.csp_frame_ancestors == "'none'" else "SAMEORIGIN")
         h.setdefault("X-Content-Type-Options", "nosniff")
         h.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
         # Kiosk needs the camera on its own origin; nothing else is granted.
