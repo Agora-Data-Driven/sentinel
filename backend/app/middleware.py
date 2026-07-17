@@ -28,6 +28,8 @@ from .config import settings
 # - font files come from fonts.gstatic.com
 # - QR PNGs / kiosk camera canvas -> img-src allows data: and blob:
 # - PWA service worker -> worker-src 'self'
+# - frame-src: North Star embeds a same-origin page; the Academy tab embeds the mastery engine on
+#   an *.agoradatadriven.com host (see SKILL_MASTERY_URL) — both must be allowed to load in an iframe.
 _CSP = (
     "default-src 'self'; "
     "script-src 'self'; "
@@ -37,6 +39,7 @@ _CSP = (
     "connect-src 'self'; "
     "worker-src 'self'; "
     "manifest-src 'self'; "
+    "frame-src 'self' https://*.agoradatadriven.com; "
     "object-src 'none'; "
     "base-uri 'self'; "
     "form-action 'self'; "

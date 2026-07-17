@@ -4,9 +4,9 @@
 # create_all still runs on app startup as an idempotent safety net for zero-setup/demo modes.
 set -e
 
-echo "[entrypoint] applying database migrations (alembic upgrade head)…"
-alembic upgrade head || {
-  echo "[entrypoint] WARNING: alembic upgrade failed; the app's create_all will still bootstrap tables."
+echo "[entrypoint] applying database migrations…"
+python migrate.py || {
+  echo "[entrypoint] WARNING: migration step failed; the app's create_all will still bootstrap tables."
 }
 
 echo "[entrypoint] starting uvicorn on port ${PORT:-8080}…"
