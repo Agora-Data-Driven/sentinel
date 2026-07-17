@@ -23,7 +23,14 @@ param(
   [switch]$DemoSqlite,
   [string]$ServiceAccount   = "sentinel-run@agora-data-driven.iam.gserviceaccount.com",
   [string]$JwtSecretName    = "sentinel-jwt-secret",    # Secret Manager secret name
-  [string]$DbUrlSecretName  = "sentinel-database-url"   # Secret Manager secret name (prod)
+  [string]$DbUrlSecretName  = "sentinel-database-url",  # Secret Manager secret name (prod)
+  # Portal SSO + cross-app links. These MUST be set on every deploy: `gcloud run deploy
+  # --set-*` replaces each category wholesale, so leaving them out silently wipes them and
+  # breaks "sign in via the portal" (the ag_sso handoff) until someone re-adds them by hand.
+  [string]$SsoSecretName    = "platform-sso-key",       # Secret Manager secret (portal ag_sso HMAC key)
+  [string]$PortalLoginUrl   = "https://portal.agoradatadriven.com/login",
+  [string]$SkillMasteryUrl  = "https://mastery.agoradatadriven.com",
+  [string]$GoogleRedirectUri = "https://sentinel-585951669065.asia-southeast1.run.app/api/auth/google/callback"
 )
 $ErrorActionPreference = "Stop"
 
@@ -48,14 +55,15 @@ $deployArgs = @(
   "--port", "8080",
   "--memory", "512Mi",
   "--service-account", $ServiceAccount,
-  "--set-secrets", "JWT_SECRET=${JwtSecretName}:latest"
+  "--set-secrets", "JWT_SECRET=${JwtSecretName}:latest",
+  "--set-secrets", "PLATFORM_SSO_SECRET=${SsoSecretName}:latest"   # portal SSO handoff — see note above
 )
 
 # Production posture: passwordless DEV_LOGIN is OFF. Sign in with the bootstrap admin
 # (melo@agora.ph — change the password immediately) or wire Google OAuth (see
 # GOOGLE-SIGNIN-SETUP.md). If you MUST keep the dev-login dropdown temporarily, append
 # ",ALLOW_DEV_LOGIN_IN_PROD=true" below — the app will boot with a loud SECURITY warning.
-$envVars = "ENVIRONMENT=production,SECURE_COOKIES=true,DEV_LOGIN_ENABLED=false,TIMEZONE=Asia/Manila"
+$envVars = "ENVIRONMENT=production,SECURE_COOKIES=true,DEV_LOGIN_ENABLED=false,TIMEZONE=Asia/Manila,PORTAL_LOGIN_URL=$PortalLoginUrl,SKILL_MASTERY_URL=$SkillMasteryUrl,GOOGLE_REDIRECT_URI=$GoogleRedirectUri"
 
 if ($DemoSqlite) {
   Write-Host "DEMO mode: ephemeral SQLite, single instance (data resets on restart)." -ForegroundColor Yellow
