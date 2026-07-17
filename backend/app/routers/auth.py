@@ -38,9 +38,23 @@ def _user_by_email(db: Session, email: str) -> User | None:
     return db.execute(select(User).where(User.email == email.strip().lower())).scalar_one_or_none()
 
 
+def _sso_reachable(request: Request) -> bool:
+    """True only when the portal's cookie can actually reach THIS host.
+
+    `ag_sso` is scoped to `.agoradatadriven.com`, so on a raw *.run.app host (or localhost) the
+    browser never sends it. Telling the login page to redirect to the portal from such a host would
+    loop forever: portal -> back here -> still no cookie -> portal. So the redirect turns itself on
+    only where SSO can work, and everywhere else the normal login stands. Same fail-safe posture the
+    portal's platform_sso.py documents for dashboards.
+    """
+    host = (request.headers.get("host") or "").split(":")[0].strip().lower()
+    return host == "agoradatadriven.com" or host.endswith(".agoradatadriven.com")
+
+
 @router.get("/config")
-def auth_config():
+def auth_config(request: Request):
     """Tells the login page which sign-in methods are available."""
+    sso_ready = bool(settings.platform_sso_secret and settings.portal_login_url)
     return {
         "dev_login_enabled": settings.dev_login_enabled,
         "google_enabled": bool(settings.google_client_id),
@@ -48,7 +62,9 @@ def auth_config():
         # When the portal is the front door the login page redirects there instead of
         # showing its own form. Empty = keep the local form (dev, or portal not wired yet).
         "portal_login_url": settings.portal_login_url,
-        "sso_enabled": bool(settings.platform_sso_secret and settings.portal_login_url),
+        # Gated on the host too, so this can be configured BEFORE the custom domain exists
+        # without ever stranding anyone in a redirect loop.
+        "sso_enabled": sso_ready and _sso_reachable(request),
     }
 
 
