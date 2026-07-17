@@ -7,12 +7,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, Request
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy.orm import Session
 
 from .config import settings
-from .database import create_all
+from .database import create_all, get_db
+from .security import create_access_token, user_from_sso
 from .middleware import CSRFMiddleware, RateLimitMiddleware, SecurityHeadersMiddleware
 from .observability import ExceptionLoggingMiddleware, configure_observability, get_logger
 from .routers import (
@@ -235,8 +237,30 @@ def root():
     return RedirectResponse(url="/dashboard")
 
 
+@app.get("/login", include_in_schema=False)
+def login_page(request: Request, db: Session = Depends(get_db)):
+    """Serve the login screen — but skip it entirely for anyone already signed in to Agora.
+
+    If the visitor arrives with a valid portal `ag_sso` cookie AND is an active Sentinel user, we
+    drop them straight on the dashboard instead of showing a login form they don't need (no second
+    sign-in, no login-page flash). We mint the normal Sentinel session on the way so the app behaves
+    exactly like a password login afterwards (logout works, no per-request HMAC). Everyone else --
+    no portal session, or a portal email that isn't a Sentinel user -- still gets the login page,
+    where login.js handles the portal bounce / "not a Sentinel user" message.
+    """
+    user = user_from_sso(request, db)
+    if user:
+        resp = RedirectResponse(url="/dashboard", status_code=302)
+        resp.set_cookie(
+            key=settings.cookie_name, value=create_access_token(user.id), httponly=True,
+            secure=settings.secure_cookies, samesite="lax",
+            max_age=settings.jwt_expire_minutes * 60, path="/",
+        )
+        return resp
+    return _page("login.html")
+
+
 _PAGES = {
-    "/login": "login.html",
     "/dashboard": "dashboard.html",
     "/attendance": "attendance.html",
     "/gym": "gym.html",
