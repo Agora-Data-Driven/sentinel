@@ -82,6 +82,13 @@ class Settings(BaseSettings):
     # Send HSTS only when actually behind HTTPS. Defaults to follow secure_cookies.
     hsts_enabled: bool | None = None
 
+    # --- Observability ----------------------------------------------------
+    log_level: str = "INFO"  # DEBUG|INFO|WARNING|ERROR
+    # Optional Sentry error tracking. Empty = off (Cloud Logging / Error Reporting still work from
+    # structured stdout logs). Requires `sentry-sdk` installed to take effect.
+    sentry_dsn: str = ""
+    sentry_traces_sample_rate: float = 0.0
+
     # --- CSRF (double-submit token) ---------------------------------------
     # Only enforced for cookie-authenticated, state-changing requests. Bearer-token API clients and
     # the QR-token kiosk endpoints are exempt (they don't rely on the ambient session cookie).

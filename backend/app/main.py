@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from .config import settings
 from .database import create_all
 from .middleware import CSRFMiddleware, RateLimitMiddleware, SecurityHeadersMiddleware
+from .observability import ExceptionLoggingMiddleware, configure_observability, get_logger
 from .routers import (
     admin,
     attendance,
@@ -34,6 +35,10 @@ from .routers import (
 FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
 PAGES_DIR = FRONTEND_DIR / "pages"
 
+# Structured logging + optional Sentry, configured at import so startup logs are formatted too.
+configure_observability()
+log = get_logger()
+
 app = FastAPI(
     title="Sentinel API",
     version="1.0.0",
@@ -42,7 +47,10 @@ app = FastAPI(
 
 # Hardening middleware. The last-added runs outermost, so SecurityHeaders wraps everything and
 # decorates every response — including the 403/429s produced by the guards it wraps.
-# Effective order (outer -> inner): SecurityHeaders -> RateLimit -> CSRF -> app.
+# Effective order (outer -> inner): SecurityHeaders -> RateLimit -> CSRF -> ExceptionLogging -> app.
+# ExceptionLogging is innermost so a route's 500 is caught, logged with a traceback, and still
+# flows back out through the header/CSRF middleware.
+app.add_middleware(ExceptionLoggingMiddleware)
 app.add_middleware(CSRFMiddleware)
 app.add_middleware(RateLimitMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
