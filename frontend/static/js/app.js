@@ -101,7 +101,19 @@
     const ct = res.headers.get("content-type") || "";
     const data = ct.includes("application/json") ? await res.json() : await res.text();
     if (!res.ok) {
-      const detail = (data && data.detail) || res.statusText;
+      // FastAPI hands back a string detail for HTTPExceptions but a list of
+      // {loc, msg} objects for 422 validation errors — flatten those to a
+      // readable message so the toast never shows a bare "[object Object]".
+      let detail = data && data.detail;
+      if (Array.isArray(detail)) {
+        detail = detail.map((e) => {
+          const field = Array.isArray(e.loc) ? e.loc[e.loc.length - 1] : "";
+          return field ? `${field}: ${e.msg}` : e.msg;
+        }).join("; ");
+      } else if (detail && typeof detail === "object") {
+        detail = detail.msg || JSON.stringify(detail);
+      }
+      detail = detail || res.statusText;
       const err = new Error(detail); err.status = res.status; err.detail = detail;
       throw err;
     }
