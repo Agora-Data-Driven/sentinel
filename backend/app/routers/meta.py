@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..config import settings
 from ..constants import (
     ALL_ROLES,
     GYM_DAY_TYPES,
@@ -20,6 +21,24 @@ from ..security import get_current_user, require_roles
 from ..serializers import client_dict, team_dict
 
 router = APIRouter(prefix="/api", tags=["meta"])
+
+
+@router.get("/academy/config")
+def academy_config(user: User = Depends(get_current_user)):
+    """Where the Academy tab points its iframe (the mastery engine).
+
+    Signed-in only: the URL is not a secret, but there's no reason to publish our internal
+    topology. `embed=1` asks the engine to drop its own header/nav since Sentinel supplies the
+    shell. The engine authenticates the viewer itself from the shared portal cookie, which reaches
+    it because both hosts sit under agoradatadriven.com.
+    """
+    base = (settings.skill_mastery_url or "").rstrip("/")
+    return {
+        "url": (base + "/?embed=1") if base else "",
+        "configured": bool(base),
+        # A same-site host is what makes the shared cookie (and so the seamless embed) work.
+        "same_site": base.endswith(".agoradatadriven.com") or ".agoradatadriven.com/" in base + "/",
+    }
 
 
 @router.get("/teams")

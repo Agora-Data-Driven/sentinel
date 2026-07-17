@@ -140,6 +140,7 @@ _PAGES = {
     "/attendance": "attendance.html",
     "/gym": "gym.html",
     "/tasks": "tasks.html",
+    "/academy": "academy.html",
     "/people": "people.html",
     "/leave": "leave.html",
     "/north-star": "north-star.html",
