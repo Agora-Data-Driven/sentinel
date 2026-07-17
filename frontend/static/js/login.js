@@ -20,12 +20,19 @@ window.pageInit = async (S) => {
      portal outage or a misconfiguration: an explicit ?local=1, and dev login (which stays behind
      DEV_LOGIN_ENABLED and is off in production). */
   if (cfg.sso_enabled && q.get("local") !== "1" && !q.get("error")) {
+    let ssoErr = null;
     try {
       await S.api("/api/auth/sso", { method: "POST" });
       location.replace("/dashboard");
       return;
-    } catch (e) { /* no portal cookie (or not a Sentinel user) — fall through to the redirect */ }
-    if (cfg.portal_login_url) {
+    } catch (e) { ssoErr = e; }
+
+    // 403 = a VALID portal login whose email isn't a user here. Bouncing to the portal would
+    // return instantly (already signed in there) and loop forever, so stop and say so.
+    if (ssoErr && ssoErr.status === 403) {
+      showErr(ssoErr.detail || "Your portal account isn't registered in Sentinel.");
+    } else if (cfg.portal_login_url) {
+      // 401 = no portal session. Sending them to sign in is exactly right.
       const next = encodeURIComponent(location.origin + "/dashboard");
       location.replace(cfg.portal_login_url + (cfg.portal_login_url.includes("?") ? "&" : "?") + "next=" + next);
       return;

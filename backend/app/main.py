@@ -48,6 +48,36 @@ app.add_middleware(RateLimitMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 
 
+@app.middleware("http")
+async def _canonical_host_redirect(request, call_next):
+    """Send browsers from the raw run.app URL to the real hostname.
+
+    The portal's `ag_sso` cookie is scoped to `.agoradatadriven.com`, so on `*.run.app` it is never
+    sent: single sign-on silently can't work and the visitor is asked to log in again with no
+    explanation. An old bookmark is enough to hit this. Redirecting closes that trap for good.
+
+    Deliberately narrow, so this can't take the service down:
+      - only GET, and only real browser navigations (Accept: text/html) -- APIs and probes untouched;
+      - only when CANONICAL_HOST is configured AND we're being served from a different host;
+      - the run.app URL still answers everything else, so it stays a working fallback.
+    """
+    host = (request.headers.get("host") or "").split(":")[0].strip().lower()
+    canonical = (settings.canonical_host or "").strip().lower()
+    if (
+        canonical
+        and host
+        and host != canonical
+        and host.endswith(".run.app")
+        and request.method == "GET"
+        and "text/html" in (request.headers.get("accept") or "")
+    ):
+        target = f"https://{canonical}{request.url.path}"
+        if request.url.query:
+            target += f"?{request.url.query}"
+        return RedirectResponse(url=target, status_code=307)
+    return await call_next(request)
+
+
 @app.on_event("startup")
 def _startup() -> None:
     # Create tables if missing (SQLite zero-setup). Prod uses Alembic migrations.

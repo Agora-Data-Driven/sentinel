@@ -54,6 +54,11 @@ class Settings(BaseSettings):
     platform_sso_secret: str = ""
     # Where /login sends people (the portal). Unset = Sentinel keeps its own login form.
     portal_login_url: str = ""
+    # The host Sentinel should be reached on. The shared cookie is scoped to
+    # .agoradatadriven.com, so on the raw *.run.app URL (an old bookmark, a stale link) SSO simply
+    # cannot work and you get asked to sign in again for no visible reason. Set this and browsers
+    # hitting the run.app host are sent to the real one. Unset = no redirect (safe default).
+    canonical_host: str = ""
     # The mastery engine, embedded in the Academy tab. Must be a *.agoradatadriven.com host or the
     # shared session cookie won't reach it inside the iframe.
     skill_mastery_url: str = "https://mastery.agoradatadriven.com"

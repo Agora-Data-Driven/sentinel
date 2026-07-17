@@ -15,6 +15,7 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .. import sso
 from ..config import settings
 from ..database import get_db
 from ..models import Team, User
@@ -80,11 +81,23 @@ def sso_exchange(request: Request, response: Response, db: Session = Depends(get
     login (logout works, no HMAC check per request).
     """
     user = user_from_sso(request, db)
-    if not user:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="No valid portal session")
-    _set_cookie(response, user.id)
-    team = db.get(Team, user.team_id) if user.team_id else None
-    return {"ok": True, "user": user_full(user, team)}
+    if user:
+        _set_cookie(response, user.id)
+        team = db.get(Team, user.team_id) if user.team_id else None
+        return {"ok": True, "user": user_full(user, team)}
+
+    # Distinguish the two failures, because they need OPPOSITE handling and conflating them
+    # loops forever: with no cookie the fix is "go to the portal and sign in", but with a valid
+    # cookie whose email isn't a user here, going to the portal just bounces straight back
+    # (you're already signed in there) -> portal -> Sentinel -> portal...
+    email = sso.email_from_cookie(settings.platform_sso_secret, request.cookies.get(sso.COOKIE_NAME))
+    if email:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"You're signed in to the portal as {email}, but that address isn't a Sentinel"
+                   " user. Ask an admin to add you (SSO never creates accounts).",
+        )
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="No valid portal session")
 
 
 # --- Password login --------------------------------------------------------
