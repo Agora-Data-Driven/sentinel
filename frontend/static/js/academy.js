@@ -1,50 +1,106 @@
-/* Academy — embeds the AGORA Mastery Engine (the team's learning app) inside the Sentinel shell.
+/* Academy — a native Sentinel dashboard of the worker's enrolled courses, plus the
+   Assignment of the Day. Courses/progress come from the mastery engine via a
+   server-to-server call (/api/academy/courses); clicking a course opens the engine
+   itself (embedded, carrying the same portal ag_sso cookie — no second sign-in).
 
-   Same pattern as Our North Star: an iframe carrying its own designed UI while the Sentinel
-   sidebar/topbar stay around it. The engine is asked for `?embed=1` so it drops its own header and
-   Sentinel supplies the chrome.
-
-   There is NO second sign-in: the engine reads the same portal `ag_sso` cookie this page was
-   authenticated with. That works because both hosts live under agoradatadriven.com, so the cookie
-   is same-site and rides along into the frame. If the engine ever moves off that domain the cookie
-   stops arriving and it would render its own login inside the frame — which is why the backend
-   reports `same_site` and we warn instead of silently showing a login box. */
+   Assignment of the Day is a Phase-E placeholder (a scenario you explain aloud, AI-graded). */
 window.pageInit = async (S) => {
   const view = S.view();
-  S.qs("#top-sub").textContent = "Build your skills — quizzes, flashcards, and your progress";
+  const esc = S.esc;
+  S.qs("#top-sub").textContent = "Your courses and today's assignment";
 
-  const panel = (title, body) => `
-    <div class="card" style="padding:28px;text-align:center">
-      <h2 style="margin:0 0 8px">${title}</h2>
-      <p style="margin:0;color:var(--muted)">${body}</p>
-    </div>`;
-
-  let cfg;
+  let data;
   try {
-    cfg = await S.api("/api/academy/config");
+    data = await S.api("/api/academy/courses");
   } catch (e) {
-    view.innerHTML = panel("Academy is unavailable", "Couldn't reach the learning engine. Try again shortly.");
+    view.innerHTML = `<div class="card" style="padding:28px;text-align:center">
+      <h2 style="margin:0 0 8px">Academy is unavailable</h2>
+      <p style="margin:0;color:var(--muted)">Couldn't reach the learning engine. Try again shortly.</p></div>`;
     return;
   }
 
-  if (!cfg || !cfg.configured) {
-    view.innerHTML = panel(
-      "Academy isn't configured yet",
-      "The mastery engine URL is not set on this deployment (SKILL_MASTERY_URL).",
-    );
-    return;
-  }
+  const courses = data.courses || [];
+  const engineUrl = data.engineUrl || "";
 
-  const warn = cfg.same_site ? "" : `
-    <div class="card" style="padding:12px 14px;margin-bottom:12px;border-color:#c9a227;background:#fffbe9">
-      <strong>Heads up:</strong> the learning engine isn't on an agoradatadriven.com address, so the
-      shared sign-in can't reach it and it may ask you to log in again inside the frame.
+  const ringColor = (p) => (p >= 80 ? "#2E7D32" : p >= 50 ? "#C9A227" : "#B3261E");
+  const ring = (pct) => {
+    const p = Math.max(0, Math.min(100, Math.round(pct || 0)));
+    return `<div class="ac-ring" style="background:conic-gradient(${ringColor(p)} ${p * 3.6}deg, var(--line) 0deg)">
+      <span>${p}<i>%</i></span></div>`;
+  };
+  const card = (c) => `
+    <button class="ac-course" data-course="${esc(c.course)}" title="Open ${esc(c.course)} in the mastery engine">
+      ${ring(c.pct)}
+      <div class="ac-cinfo">
+        <div class="ac-cname">${esc(c.course)}</div>
+        <div class="ac-csub">${esc(c.track)} &middot; ${c.topicsPracticed || 0}/${c.topicsTotal || 0} topics practised</div>
+      </div>
+      <span class="ac-open">Open &rarr;</span>
+    </button>`;
+
+  view.innerHTML = `
+    <style>
+      .ac-wrap { max-width: 900px; }
+      .ac-assign { padding: 20px 22px; margin-bottom: 22px; display:flex; align-items:center; gap:18px; flex-wrap:wrap;
+        background: linear-gradient(120deg, rgba(79,168,74,.10), rgba(24,86,201,.08)); border:1px solid var(--line); }
+      .ac-badge { display:inline-block; font-size:11px; font-weight:800; letter-spacing:.6px; text-transform:uppercase;
+        color:#fff; background:#4FA84A; padding:3px 10px; border-radius:999px; }
+      .ac-assign h3 { margin:8px 0 4px; font-size:18px; }
+      .ac-h { font-size:15px; text-transform:uppercase; letter-spacing:.5px; color:var(--muted); margin:0 0 12px; }
+      .ac-courses { display:grid; gap:12px; }
+      .ac-course { display:flex; align-items:center; gap:16px; width:100%; text-align:left; cursor:pointer;
+        background:var(--card,#fff); border:1px solid var(--line); border-radius:16px; padding:14px 16px;
+        transition: box-shadow .15s, transform .05s; font:inherit; color:inherit; }
+      .ac-course:hover { box-shadow: var(--shadow); }
+      .ac-course:active { transform: translateY(1px); }
+      .ac-ring { width:52px; height:52px; border-radius:50%; flex:none; display:grid; place-items:center; }
+      .ac-ring::after { content:""; position:absolute; width:38px; height:38px; border-radius:50%; background:var(--card,#fff); }
+      .ac-ring span { position:relative; z-index:1; font-weight:800; font-size:13px; }
+      .ac-ring i { font-style:normal; font-size:9px; opacity:.7; }
+      .ac-cinfo { flex:1; min-width:0; }
+      .ac-cname { font-weight:700; font-size:15px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .ac-csub { color:var(--muted); font-size:13px; margin-top:2px; }
+      .ac-open { color:#4FA84A; font-weight:700; font-size:13px; flex:none; }
+      #ac-engine { display:none; }
+      #ac-engine.on { display:block; }
+      .ac-back { margin-bottom:12px; }
+    </style>
+
+    <div class="ac-wrap" id="ac-dash">
+      <div class="card ac-assign">
+        <div style="flex:1;min-width:220px">
+          <span class="ac-badge">Assignment of the Day</span>
+          <h3>Situational assessment</h3>
+          <p style="margin:0;color:var(--muted)">A real scenario you explain out loud, graded by AI. Launching with Phase E.</p>
+        </div>
+        <button class="btn" disabled title="Coming soon">Coming soon</button>
+      </div>
+
+      <h2 class="ac-h">Currently enrolled courses</h2>
+      ${courses.length
+        ? `<div class="ac-courses">${courses.map(card).join("")}</div>`
+        : `<div class="card" style="padding:22px;text-align:center;color:var(--muted)">
+             You're not enrolled in any courses yet. Ask an admin to assign you a program in the Academy admin.
+           </div>`}
+    </div>
+
+    <div id="ac-engine">
+      <button class="btn ac-back" id="ac-back">&larr; Back to courses</button>
+      <iframe id="ac-frame" title="AGORA Mastery Engine" allow="microphone" loading="eager"
+        style="width:100%;height:calc(100vh - 190px);min-height:520px;border:1px solid var(--line);
+               border-radius:18px;box-shadow:var(--shadow);background:#fff;display:block"></iframe>
     </div>`;
 
-  view.innerHTML = `${warn}
-    <iframe src="${cfg.url}" title="AGORA Mastery Engine"
-      style="width:100%;height:calc(100vh - 132px);min-height:560px;border:1px solid var(--line);
-             border-radius:18px;box-shadow:var(--shadow);background:#fff;display:block"
-      allow="microphone"
-      loading="eager"></iframe>`;
+  const dash = S.qs("#ac-dash");
+  const eng = S.qs("#ac-engine");
+  const frame = S.qs("#ac-frame");
+
+  const openEngine = (course) => {
+    if (!engineUrl) { S.toast ? S.toast("Learning engine not configured") : alert("Learning engine not configured"); return; }
+    frame.src = engineUrl + (course ? "&course=" + encodeURIComponent(course) : "");
+    dash.style.display = "none";
+    eng.classList.add("on");
+  };
+  view.querySelectorAll(".ac-course").forEach((b) => { b.onclick = () => openEngine(b.dataset.course); });
+  S.qs("#ac-back").onclick = () => { eng.classList.remove("on"); dash.style.display = ""; frame.src = "about:blank"; };
 };

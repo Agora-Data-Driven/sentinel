@@ -1,6 +1,14 @@
 """Reference data for the frontend: teams, clients, and the enum vocabularies used in dropdowns."""
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -38,6 +46,38 @@ def academy_config(user: User = Depends(get_current_user)):
         "configured": bool(base),
         # A same-site host is what makes the shared cookie (and so the seamless embed) work.
         "same_site": base.endswith(".agoradatadriven.com") or ".agoradatadriven.com/" in base + "/",
+    }
+
+
+@router.get("/academy/courses")
+def academy_courses(user: User = Depends(get_current_user)):
+    """The signed-in worker's enrolled courses + progress, for the native Academy dashboard.
+
+    Fetched server-to-server from the mastery engine's HMAC-gated internal endpoint (shared
+    platform-sso-key both apps mount). No CORS, no browser credentials. Degrades to an empty
+    list (the dashboard then shows an empty state) if the engine is unreachable or unconfigured.
+    """
+    base = (settings.skill_mastery_url or "").rstrip("/")
+    secret = (settings.platform_sso_secret or "").strip()
+    embed = (base + "/?embed=1") if base else ""
+    if not base or not secret:
+        return {"courses": [], "program": "", "engineUrl": embed, "error": "not configured"}
+    ts = str(int(time.time()))
+    sig = hmac.new(secret.encode(), f"enrollment-progress:{ts}".encode(), hashlib.sha256).hexdigest()
+    qs = urllib.parse.urlencode({"email": user.email})
+    req = urllib.request.Request(
+        f"{base}/api/internal/enrollment-progress?{qs}",
+        headers={"x-academy-ts": ts, "x-academy-sig": sig},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=8) as r:
+            data = json.loads(r.read().decode())
+    except (urllib.error.URLError, ValueError, TimeoutError) as e:
+        return {"courses": [], "program": "", "engineUrl": embed, "error": str(e)[:120]}
+    return {
+        "courses": data.get("courses", []),
+        "program": data.get("program", ""),
+        "engineUrl": embed,
     }
 
 
