@@ -21,6 +21,16 @@ def test_state_change_without_token_is_rejected(client, make_user):
     assert "csrf" in r.json()["detail"].lower()
 
 
+def test_rejection_reseeds_token_so_client_self_heals(client, make_user):
+    # Persistent session cookie but no CSRF cookie (e.g. the token cookie was dropped on browser
+    # close): the request is rejected, but the 403 response issues a fresh token so the retry works.
+    user = make_user(C.ROLE_ACCOUNT_MANAGER)
+    client.cookies.set(settings.cookie_name, create_access_token(user.id))
+    r = client.patch("/api/tasks/1/priority", json={"priority": C.PRIORITY_URGENT})
+    assert r.status_code == 403
+    assert r.cookies.get(settings.csrf_cookie_name)  # reseeded on the rejection itself
+
+
 def test_state_change_with_mismatched_token_is_rejected(client, make_user):
     user = make_user(C.ROLE_ACCOUNT_MANAGER)
     client.cookies.set(settings.cookie_name, create_access_token(user.id))
