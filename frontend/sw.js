@@ -3,7 +3,7 @@
    always win when online, while the kiosk still works offline from cache. API calls are never
    cached — attendance punches queue in IndexedDB (see kiosk.js) instead.
    Bump CACHE on each meaningful change so old caches are purged on activate. */
-const CACHE = "sentinel-v16";
+const CACHE = "sentinel-v17";
 const CORE = [
   "/static/css/styles.css",
   "/static/js/app.js",
@@ -33,7 +33,24 @@ self.addEventListener("fetch", (e) => {
   if (e.request.method !== "GET" || url.origin !== self.location.origin) return; // never touch API/mutations/cross-origin
   if (url.pathname.startsWith("/api/")) return;
 
-  // Network-first: fresh copy when online (cache it for offline), fall back to cache when offline.
+  // Page navigations MUST reach the server so its auth redirects are authoritative -- e.g. /login
+  // 302s an already-signed-in user straight to /dashboard. Serving a cached HTML page here would
+  // show a stale login screen that flashes for ~2s before the client-side SSO forward finishes.
+  // So don't intercept navigations (browser -> network directly), EXCEPT keep the attendance kiosk
+  // booting offline from cache.
+  if (e.request.mode === "navigate") {
+    if (url.pathname === "/kiosk") {
+      e.respondWith(
+        fetch(e.request)
+          .then((res) => { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(e.request, copy)); return res; })
+          .catch(() => caches.match("/kiosk"))
+      );
+    }
+    return; // every other navigation: straight to the network, no cached-HTML flash
+  }
+
+  // Static assets (css/js/img): network-first -- fresh copy when online (cache it for offline),
+  // fall back to cache when offline.
   e.respondWith(
     fetch(e.request)
       .then((res) => { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(e.request, copy)); return res; })
