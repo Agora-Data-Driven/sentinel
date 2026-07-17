@@ -19,7 +19,7 @@ window.pageInit = async (S) => {
     return;
   }
 
-  const courses = data.courses || [];
+  const programs = data.programs || [];
   const engineUrl = data.engineUrl || "";
 
   const ringColor = (p) => (p >= 80 ? "#2E7D32" : p >= 50 ? "#C9A227" : "#B3261E");
@@ -28,12 +28,12 @@ window.pageInit = async (S) => {
     return `<div class="ac-ring" style="background:conic-gradient(${ringColor(p)} ${p * 3.6}deg, var(--line) 0deg)">
       <span>${p}<i>%</i></span></div>`;
   };
-  const card = (c) => `
-    <button class="ac-course" data-course="${esc(c.course)}" title="Open ${esc(c.course)} in the mastery engine">
-      ${ring(c.pct)}
+  const card = (p) => `
+    <button class="ac-course" data-program="${esc(p.id)}" title="Open ${esc(p.name)} in the mastery engine">
+      ${ring(p.pct)}
       <div class="ac-cinfo">
-        <div class="ac-cname">${esc(c.course)}</div>
-        <div class="ac-csub">${esc(c.track)} &middot; ${c.topicsPracticed || 0}/${c.topicsTotal || 0} topics practised</div>
+        <div class="ac-cname">${esc(p.name)}</div>
+        <div class="ac-csub">${p.courseCount || 0} courses &middot; ${p.topicsPracticed || 0}/${p.topicsTotal || 0} topics practised</div>
       </div>
       <span class="ac-open">Open &rarr;</span>
     </button>`;
@@ -76,11 +76,11 @@ window.pageInit = async (S) => {
         <button class="btn" disabled title="Coming soon">Coming soon</button>
       </div>
 
-      <h2 class="ac-h">Currently enrolled courses</h2>
-      ${courses.length
-        ? `<div class="ac-courses">${courses.map(card).join("")}</div>`
+      <h2 class="ac-h">Programs assigned</h2>
+      ${programs.length
+        ? `<div class="ac-courses">${programs.map(card).join("")}</div>`
         : `<div class="card" style="padding:22px;text-align:center;color:var(--muted)">
-             You're not enrolled in any courses yet. Ask an admin to assign you a program in the Academy admin.
+             You're not assigned to any programs yet. Ask an admin to assign you one in the Academy admin.
            </div>`}
     </div>
 
@@ -95,12 +95,12 @@ window.pageInit = async (S) => {
   const eng = S.qs("#ac-engine");
   const frame = S.qs("#ac-frame");
 
-  const openEngine = (course) => {
+  const openEngine = (program) => {
     if (!engineUrl) { S.toast ? S.toast("Learning engine not configured") : alert("Learning engine not configured"); return; }
-    frame.src = engineUrl + (course ? "&course=" + encodeURIComponent(course) : "");
+    frame.src = engineUrl + (program ? "&program=" + encodeURIComponent(program) : "");
     dash.style.display = "none";
     eng.classList.add("on");
   };
-  view.querySelectorAll(".ac-course").forEach((b) => { b.onclick = () => openEngine(b.dataset.course); });
+  view.querySelectorAll(".ac-course").forEach((b) => { b.onclick = () => openEngine(b.dataset.program); });
   S.qs("#ac-back").onclick = () => { eng.classList.remove("on"); dash.style.display = ""; frame.src = "about:blank"; };
 };

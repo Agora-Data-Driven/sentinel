@@ -73,10 +73,9 @@ def academy_courses(user: User = Depends(get_current_user)):
         with urllib.request.urlopen(req, timeout=8) as r:
             data = json.loads(r.read().decode())
     except (urllib.error.URLError, ValueError, TimeoutError) as e:
-        return {"courses": [], "program": "", "engineUrl": embed, "error": str(e)[:120]}
+        return {"programs": [], "engineUrl": embed, "error": str(e)[:120]}
     return {
-        "courses": data.get("courses", []),
-        "program": data.get("program", ""),
+        "programs": data.get("programs", []),
         "engineUrl": embed,
     }
 
