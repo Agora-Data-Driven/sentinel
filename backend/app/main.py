@@ -152,6 +152,27 @@ def _startup_safeguards() -> None:
                 ))
             db.commit()
             print(f"[sentinel] no active Super Admin found — ensured bootstrap admin: {email}")
+
+        # Ensure the ecosystem owner(s) are always an active Super Admin. They sign in through the
+        # portal (SSO), which never creates accounts, so without this the owner is locked out of
+        # their own Sentinel with the "you're signed in to the portal but not a Sentinel user"
+        # message. Idempotent: create if missing, elevate/reactivate if present; no password needed
+        # (login is via SSO — password_hash stays null).
+        for raw in settings.platform_admin_emails.split(","):
+            owner = raw.strip().lower()
+            if not owner:
+                continue
+            u = db.execute(select(User).where(User.email == owner)).scalar_one_or_none()
+            if u:
+                if u.role != ROLE_SUPER_ADMIN or not u.is_active:
+                    u.role = ROLE_SUPER_ADMIN
+                    u.is_active = True
+                    db.commit()
+                    print(f"[sentinel] elevated platform owner to active Super Admin: {owner}")
+            else:
+                db.add(User(name="Agora Admin", email=owner, role=ROLE_SUPER_ADMIN, is_active=True))
+                db.commit()
+                print(f"[sentinel] created platform owner as Super Admin (SSO-only): {owner}")
     except Exception as exc:  # never let a safeguard crash startup
         print(f"[sentinel] startup safeguard skipped: {exc}")
     finally:
