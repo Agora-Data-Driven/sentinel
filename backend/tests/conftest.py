@@ -84,9 +84,12 @@ def make_user(db):
 
 @pytest.fixture
 def auth(client):
-    """Authenticate the client as a given user by setting the session cookie directly."""
+    """Authenticate the client: set the session cookie + a matching CSRF cookie/header pair."""
     def _auth(user):
         client.cookies.set(settings.cookie_name, create_access_token(user.id))
+        csrf = "test-csrf-token"
+        client.cookies.set(settings.csrf_cookie_name, csrf)
+        client.headers[settings.csrf_header_name] = csrf
         return user
     return _auth
 

@@ -77,10 +77,23 @@
   const qs = (s, r = document) => r.querySelector(s);
   const qsa = (s, r = document) => Array.from(r.querySelectorAll(s));
 
+  const CSRF_COOKIE = "sentinel_csrf";
+  const CSRF_HEADER = "X-CSRF-Token";
+  const readCookie = (name) => {
+    const m = document.cookie.match("(?:^|; )" + name.replace(/([.*+?^${}()|[\]\\])/g, "\\$1") + "=([^;]*)");
+    return m ? decodeURIComponent(m[1]) : "";
+  };
+
   async function api(path, opts = {}) {
-    const o = { method: opts.method || "GET", headers: {}, credentials: "same-origin" };
+    const method = opts.method || "GET";
+    const o = { method, headers: {}, credentials: "same-origin" };
     if (opts.body !== undefined) { o.headers["Content-Type"] = "application/json"; o.body = JSON.stringify(opts.body); }
     if (opts.form) { o.body = opts.form; } // FormData: let browser set the boundary
+    // Double-submit CSRF token on state-changing requests (server issues the cookie).
+    if (!["GET", "HEAD", "OPTIONS"].includes(method.toUpperCase())) {
+      const tok = readCookie(CSRF_COOKIE);
+      if (tok) o.headers[CSRF_HEADER] = tok;
+    }
     const res = await fetch(path, o);
     if (res.status === 204) return null;
     const ct = res.headers.get("content-type") || "";

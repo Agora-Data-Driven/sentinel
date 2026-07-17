@@ -65,6 +65,13 @@ class Settings(BaseSettings):
     # Send HSTS only when actually behind HTTPS. Defaults to follow secure_cookies.
     hsts_enabled: bool | None = None
 
+    # --- CSRF (double-submit token) ---------------------------------------
+    # Only enforced for cookie-authenticated, state-changing requests. Bearer-token API clients and
+    # the QR-token kiosk endpoints are exempt (they don't rely on the ambient session cookie).
+    csrf_enabled: bool = True
+    csrf_cookie_name: str = "sentinel_csrf"
+    csrf_header_name: str = "X-CSRF-Token"
+
     # --- Derived --------------------------------------------------------------
     @property
     def is_production(self) -> bool:

@@ -10,6 +10,8 @@ Both are pure-stdlib (no extra dependencies) and self-contained so routers stay 
 """
 from __future__ import annotations
 
+import hmac
+import secrets
 import time
 from collections import defaultdict, deque
 from threading import Lock
@@ -115,3 +117,44 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 )
             q.append(now)
         return await call_next(request)
+
+
+# Kiosk endpoints identify the employee by scanned QR token, not the session cookie, so CSRF is
+# meaningless there — exempt them (they're already gated by KIOSK_KEY when configured).
+_CSRF_EXEMPT_PREFIXES = (
+    "/api/attendance/scan",
+    "/api/attendance/event",
+    "/api/attendance/offline-sync",
+)
+_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
+
+
+class CSRFMiddleware(BaseHTTPMiddleware):
+    """Double-submit-token CSRF guard for cookie-authenticated, state-changing requests.
+
+    A non-httponly ``csrf`` cookie is issued on responses; the frontend echoes it back in the
+    ``X-CSRF-Token`` header on unsafe requests. Requests without the session cookie (Bearer-token
+    API clients, the unauthenticated kiosk) are not cookie-authenticated and are left alone.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        needs_check = (
+            settings.csrf_enabled
+            and request.method not in _SAFE_METHODS
+            and request.cookies.get(settings.cookie_name)          # cookie-authenticated only
+            and not request.url.path.startswith(_CSRF_EXEMPT_PREFIXES)
+        )
+        if needs_check:
+            cookie_tok = request.cookies.get(settings.csrf_cookie_name)
+            header_tok = request.headers.get(settings.csrf_header_name)
+            if not cookie_tok or not header_tok or not hmac.compare_digest(cookie_tok, header_tok):
+                return JSONResponse(status_code=403, content={"detail": "CSRF token missing or invalid"})
+
+        response: Response = await call_next(request)
+        # Issue a token the first time we see a client without one, so the SPA can read + echo it.
+        if settings.csrf_enabled and not request.cookies.get(settings.csrf_cookie_name):
+            response.set_cookie(
+                key=settings.csrf_cookie_name, value=secrets.token_urlsafe(32),
+                httponly=False, secure=settings.secure_cookies, samesite="lax", path="/",
+            )
+        return response

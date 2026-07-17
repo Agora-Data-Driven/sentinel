@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import settings
 from .database import create_all
-from .middleware import RateLimitMiddleware, SecurityHeadersMiddleware
+from .middleware import CSRFMiddleware, RateLimitMiddleware, SecurityHeadersMiddleware
 from .routers import (
     admin,
     attendance,
@@ -41,7 +41,9 @@ app = FastAPI(
 )
 
 # Hardening middleware. The last-added runs outermost, so SecurityHeaders wraps everything and
-# decorates every response — including the 429s produced by the rate limiter it wraps.
+# decorates every response — including the 403/429s produced by the guards it wraps.
+# Effective order (outer -> inner): SecurityHeaders -> RateLimit -> CSRF -> app.
+app.add_middleware(CSRFMiddleware)
 app.add_middleware(RateLimitMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 
