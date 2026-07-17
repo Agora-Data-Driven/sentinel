@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import settings
 from .database import create_all
+from .middleware import RateLimitMiddleware, SecurityHeadersMiddleware
 from .routers import (
     admin,
     attendance,
@@ -38,6 +39,11 @@ app = FastAPI(
     version="1.0.0",
     description="Internal operations command center for Agora — attendance, gym, tasks, people, leave.",
 )
+
+# Hardening middleware. The last-added runs outermost, so SecurityHeaders wraps everything and
+# decorates every response — including the 429s produced by the rate limiter it wraps.
+app.add_middleware(RateLimitMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 
 
 @app.on_event("startup")
