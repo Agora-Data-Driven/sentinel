@@ -29,6 +29,7 @@
     bell: P('<path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/>'),
     logout: P('<path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3"/><path d="M10 17l-5-5 5-5M5 12h12"/>'),
     menu: P('<path d="M3.5 6h17M3.5 12h17M3.5 18h17"/>'),
+    chev: P('<path d="M9 6l6 6-6 6"/>'),
     check: P('<path d="M20 6L9 17l-5-5"/>'),
     plus: P('<path d="M12 5v14M5 12h14"/>'),
     x: P('<path d="M18 6L6 18M6 6l12 12"/>'),
@@ -58,20 +59,30 @@
     '<text x="48" y="24.5" font-family="Inter,sans-serif" font-size="21" font-weight="600" letter-spacing="3.2" fill="#1A1B1E">AGORA</text>' +
     '<text x="49.5" y="35" font-family="Inter,sans-serif" font-size="7.3" font-weight="700" letter-spacing="3.6" fill="#353535">OPERATIONS</text></svg>';
 
+  // Navigation is a shallow tree: at most 4 top-level entries. "Dashboard" is a plain
+  // leaf; the rest are collapsible groups whose children carry the real page links.
+  // Item gating: `roles` = allow-list, `min` = minimum rank, `hideRoles` = deny-list
+  // (e.g. leave/gym/scanner are personal/kiosk tools a super_admin doesn't use).
   const NAV = [
     { href: "/dashboard", label: "Dashboard", icon: "grid" },
-    { href: "/attendance", label: "Attendance", icon: "clock" },
-    { href: "/gym", label: "Gym Tracker", icon: "dumbbell" },
-    { href: "/tasks", label: "Task Board", icon: "board" },
-    { href: "/people", label: "People", icon: "users" },
-    { href: "/leave", label: "Leave", icon: "calendar" },
-    { href: "/academy", label: "Academy", icon: "cap" },
-    { href: "/north-star", label: "Our North Star", icon: "compass" },
-    { href: "/reports", label: "Reports", icon: "chart", min: "team_lead" },
-    { href: "/scanner", label: "Scanner", icon: "qr", roles: ["super_admin"] },
-    { href: "/manage", label: "Manage", icon: "sliders", roles: ["super_admin"] },
-    { href: "/payroll", label: "Payroll", icon: "wallet", roles: ["super_admin"] },
-    { href: "/settings", label: "Settings", icon: "gear", min: "admin" },
+    { group: "Workspace", icon: "board", children: [
+      { href: "/tasks", label: "Task Board", icon: "board" },
+      { href: "/north-star", label: "Our North Star", icon: "compass" },
+      { href: "/academy", label: "Academy", icon: "cap" },
+    ] },
+    { group: "Team", icon: "users", children: [
+      { href: "/people", label: "People", icon: "users" },
+      { href: "/attendance", label: "Attendance", icon: "clock" },
+      { href: "/leave", label: "Leave", icon: "calendar", hideRoles: ["super_admin"] },
+      { href: "/gym", label: "Gym Tracker", icon: "dumbbell", hideRoles: ["super_admin"] },
+      { href: "/scanner", label: "Scanner", icon: "qr", hideRoles: ["super_admin"] },
+    ] },
+    { group: "Admin", icon: "sliders", children: [
+      { href: "/reports", label: "Reports", icon: "chart", min: "team_lead" },
+      { href: "/payroll", label: "Payroll", icon: "wallet", roles: ["super_admin"] },
+      { href: "/manage", label: "Manage", icon: "sliders", roles: ["super_admin"] },
+      { href: "/settings", label: "Settings", icon: "gear", min: "admin" },
+    ] },
   ];
 
   // ---------------- Helpers ----------------
@@ -221,8 +232,7 @@
     const title = document.body.dataset.title || "Sentinel";
     const path = location.pathname;
 
-    const navItems = NAV.filter(navAllowed)
-      .map((n) => `<a href="${n.href}" class="${path === n.href ? "active" : ""}">${ICON[n.icon]}<span>${n.label}</span>${n.href === "/tasks" ? '<span class="count" id="nav-tasks" style="display:none"></span>' : ""}</a>`).join("");
+    const navItems = renderNav(path);
 
     const shell = document.createElement("div");
     shell.className = "app";
@@ -270,6 +280,12 @@
     const side = qs("#side");
     const toggle = () => { side.classList.toggle("open"); scrim.classList.toggle("open"); };
     qs("#ham").onclick = toggle; scrim.onclick = toggle;
+    // Collapsible nav groups: clicking a header expands/collapses its children.
+    qsa(".nav-group-head").forEach((btn) => btn.onclick = () => {
+      const g = btn.closest(".nav-group");
+      const open = g.classList.toggle("open");
+      btn.setAttribute("aria-expanded", open ? "true" : "false");
+    });
     qs("#logout").onclick = doLogout;
     // Light/dark toggle (setTheme is shared with the command palette)
     qsa("#theme-toggle button").forEach((b) => b.onclick = () => setTheme(b.dataset.setTheme));
@@ -375,9 +391,33 @@
   const currentTheme = () => document.documentElement.getAttribute("data-theme") || "light";
   async function doLogout() { try { await api("/api/auth/logout", { method: "POST" }); } finally { location.href = "/login"; } }
   function navAllowed(n) {
+    if (n.hideRoles && n.hideRoles.includes(USER.role)) return false;
     if (n.roles) return n.roles.includes(USER.role);
     if (n.min) return (ROLE_RANK[USER.role] || 0) >= ROLE_RANK[n.min];
     return true;
+  }
+
+  // A single sidebar link. The task count badge rides on the Task Board link.
+  function navLink(n, path) {
+    return `<a href="${n.href}" class="${path === n.href ? "active" : ""}">${ICON[n.icon]}<span>${n.label}</span>${n.href === "/tasks" ? '<span class="count" id="nav-tasks" style="display:none"></span>' : ""}</a>`;
+  }
+
+  // Renders the nav tree: leaves as links, groups as collapsible sections.
+  // A group auto-expands (and its header lights up) when it holds the active page,
+  // and is dropped entirely when the current user can see none of its children.
+  function renderNav(path) {
+    return NAV.map((n) => {
+      if (!n.children) return navAllowed(n) ? navLink(n, path) : "";
+      const kids = n.children.filter(navAllowed);
+      if (!kids.length) return "";
+      const here = kids.some((k) => k.href === path);
+      return `<div class="nav-group${here ? " open" : ""}">
+        <button type="button" class="nav-group-head${here ? " here" : ""}" aria-expanded="${here ? "true" : "false"}">
+          ${ICON[n.icon]}<span>${esc(n.group)}</span>${ICON.chev}
+        </button>
+        <div class="nav-group-body">${kids.map((k) => navLink(k, path)).join("")}</div>
+      </div>`;
+    }).join("");
   }
 
   // ---------------- Command palette (Ctrl/Cmd + K) ----------------
@@ -417,7 +457,10 @@
       return a;
     }
     function pages() {
-      return NAV.filter(navAllowed).map((n) => ({ group: "Pages", icon: n.icon, label: n.label, hint: n.href, run: () => go(n.href) }));
+      // Flatten the nav tree to its allowed leaf pages (groups themselves aren't navigable).
+      const leaves = NAV.flatMap((n) => (n.children ? n.children : [n]));
+      return leaves.filter((n) => n.href && navAllowed(n))
+        .map((n) => ({ group: "Pages", icon: n.icon, label: n.label, hint: n.href, run: () => go(n.href) }));
     }
     function peopleItems() {
       return (cache.people || []).map((p) => ({

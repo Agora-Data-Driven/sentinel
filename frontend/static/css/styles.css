@@ -137,6 +137,33 @@ h2 { letter-spacing: -0.6px; } h1 { letter-spacing: -0.5px; }
   background: var(--sentinel); color: #fff; border-radius: var(--pill); padding: 1px 6px;
 }
 .nav a.active .count { background: rgba(255,255,255,.28); }
+
+/* ---------- Collapsible nav groups ---------- */
+.nav-group { display: flex; flex-direction: column; }
+.nav-group-head {
+  display: flex; align-items: center; gap: 11px; width: 100%; padding: 9px 12px; border: none;
+  background: none; border-radius: 11px; cursor: pointer; text-align: left;
+  color: var(--sub); font-size: 14px; font-weight: 600; font-family: inherit;
+  transition: background .12s, color .12s;
+}
+.nav-group-head:hover { background: var(--hover); color: var(--green-d); }
+/* Header lights up (subtle) when it holds the active page, so you can see the section
+   you're in even at a glance. The active child link still carries the full green pill. */
+.nav-group-head.here { color: var(--green-d); background: var(--hover); }
+.nav-group-head > span { flex: 1; }
+.nav-group-head .chev, .nav-group-head > svg:last-child {
+  width: 16px; height: 16px; margin-left: auto; flex: none; opacity: .55;
+  transition: transform .18s ease;
+}
+.nav-group.open .nav-group-head > svg:last-child { transform: rotate(90deg); }
+/* Children slide open; collapsed by default via max-height so it animates cleanly. */
+.nav-group-body {
+  display: flex; flex-direction: column; gap: 3px; overflow: hidden;
+  max-height: 0; opacity: 0; transition: max-height .22s ease, opacity .18s ease;
+  padding-left: 12px; margin-left: 11px; border-left: 1px solid var(--line);
+}
+.nav-group.open .nav-group-body { max-height: 420px; opacity: 1; margin-top: 3px; }
+.nav-group-body a { padding: 8px 12px; font-size: 13.5px; }
 .side-foot { margin-top: auto; }
 .user-card {
   display: flex; align-items: center; gap: 10px; padding: 10px; border: 1px solid var(--line);
