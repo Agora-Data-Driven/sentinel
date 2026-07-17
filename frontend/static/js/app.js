@@ -239,7 +239,7 @@
     shell.innerHTML = `
       <aside class="side" id="side">
         <div class="brand">
-          <div class="brand-logo" data-brand-logo>${AGORA_LOGO}</div>
+          <a class="brand-logo" data-brand-logo href="https://agoradatadriven.com" title="Agora Data Driven">${AGORA_LOGO}</a>
           <span class="badge-sentinel">Sentinel</span>
         </div>
         <nav class="nav">${navItems}</nav>
@@ -389,7 +389,7 @@
     applyBrandLogo();
   }
   const currentTheme = () => document.documentElement.getAttribute("data-theme") || "light";
-  async function doLogout() { try { await api("/api/auth/logout", { method: "POST" }); } finally { location.href = "/login"; } }
+  async function doLogout() { try { await api("/api/auth/logout", { method: "POST" }); } finally { location.href = "https://agoradatadriven.com"; } }
   function navAllowed(n) {
     if (n.hideRoles && n.hideRoles.includes(USER.role)) return false;
     if (n.roles) return n.roles.includes(USER.role);
