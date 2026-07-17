@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+import jwt
 from fastapi import Depends, HTTPException, Request, status
-from jose import JWTError, jwt
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -31,7 +31,7 @@ def _decode(token: str) -> int | None:
     try:
         payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
         return int(payload.get("sub"))
-    except (JWTError, TypeError, ValueError):
+    except (jwt.PyJWTError, TypeError, ValueError):
         return None
 
 
