@@ -289,6 +289,18 @@ textarea { resize: vertical; min-height: 78px; }
 .overlay.open { display: flex; }
 .modal { background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow-lg); width: 100%; max-width: 520px; }
 .modal.wide { max-width: 920px; }
+/* Right-side slide-in drawer (task detail). Anchored right, full height, scrolls internally. */
+.overlay.drawer-ov { justify-content: flex-end; align-items: stretch; padding: 0; overflow: hidden; }
+.modal.as-drawer {
+  max-width: min(560px, 96vw); width: min(560px, 96vw); height: 100vh; border-radius: 0;
+  display: flex; flex-direction: column; box-shadow: -8px 0 40px rgba(16,24,40,.18);
+  animation: drawer-in .2s ease-out;
+}
+.modal.as-drawer .modal-head { position: sticky; top: 0; background: var(--card); z-index: 1; }
+.modal.as-drawer .modal-body { flex: 1; overflow-y: auto; }
+.modal.as-drawer .modal-foot { position: sticky; bottom: 0; background: var(--card); }
+@keyframes drawer-in { from { transform: translateX(28px); opacity: .5; } }
+@media (prefers-reduced-motion: reduce) { .modal.as-drawer { animation: none; } }
 .modal-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid var(--line); }
 .modal-head h3 { font-size: 16px; }
 .modal-body { padding: 20px; }

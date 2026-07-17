@@ -139,7 +139,7 @@ window.pageInit = async (S) => {
     const t = await S.api("/api/tasks/" + id);
     const done = t.checklist.filter((i) => i.done).length;
     const pct = t.checklist.length ? Math.round(100 * done / t.checklist.length) : 0;
-    const body = `<div class="grid" style="grid-template-columns:1.1fr 1fr;gap:22px">
+    const body = `<div class="stack" style="gap:22px">
       <div>
         <div class="labels" style="margin-bottom:8px">${S.labelPills(t.labels)}</div>
         <h2 style="margin-bottom:6px">${S.esc(t.title)}</h2>
@@ -177,7 +177,7 @@ window.pageInit = async (S) => {
       ${canCreate ? `<button class="btn ghost" id="d-atrium">${t.atrium_visible ? "✓ In Atrium" : "Send to Atrium"}</button>
       <button class="btn ghost" id="d-edit">Edit</button>` : ""}
       <button class="btn primary" id="d-close">Close</button>`;
-    const m = S.modal({ title: "Task #" + t.id, body, footer, wide: true });
+    const m = S.modal({ title: "Task #" + t.id, body, footer, drawer: true });
     S.qs("#d-close").onclick = m.close;
 
     // Checklist toggle
