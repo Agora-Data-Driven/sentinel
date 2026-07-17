@@ -17,7 +17,7 @@
 ## Progress at a glance
 
 - [x] **Session 1 — Security & quick wins** (urgent) — DONE 2026-07-17
-- [ ] **Session 2 — UX modernization**
+- [~] **Session 2 — UX modernization** — 3 of 4 done (2.3 drawer deferred), 2026-07-17
 - [ ] **Session 3 — Robustness & testing**
 - [ ] **Session 4 — Real-time & build tooling** (optional / biggest)
 
@@ -55,18 +55,26 @@ Rough total: **~4–7 hrs active work**, **~1.0–1.8M tokens**, across **3–4 
 ---
 
 ## 🟢 Session 2 — UX modernization
-*~1.5 hrs · ~300–390k tokens · the "feels modern" batch.*
+*Partially done 2026-07-17 (branch `hardening/session-1`). 2.1/2.2/2.4 shipped; 2.3 deferred.*
 
-- [ ] **2.1 — Command palette (Ctrl+K)**
-  - Jump to any person / task / page + run actions. ~200–300 lines, self-contained.
-  - Highest-impact single feature. Lives in `app.js`, works on every page.
-- [ ] **2.2 — Optimistic drag-and-drop with SortableJS** (`frontend/static/js/tasks.js`)
-  - Move card instantly, sync in background, roll back + toast on failure.
-  - Replace hand-rolled HTML5 DnD with SortableJS for smoother feel.
-- [ ] **2.3 — Task detail drawer polish**
-  - Slide-in drawer with checklist + comments + activity + labels; keep AM-only priority lock.
-- [ ] **2.4 — Board filters + quick-add polish**
-  - Client / Department / Priority / Assignee filter chips; inline "+ new task".
+- [x] **2.1 — Command palette (Ctrl+K)** — DONE
+  - `initCommandPalette()` in `app.js`: searches Pages / Actions / People / Tasks; subsequence
+    scorer; keyboard nav; topbar "Search" trigger. Deep-links via `/tasks?open=`, `/people?open=`
+    (added), `/tasks?new=1` (added). Verified with a jsdom harness (13/13 checks).
+- [x] **2.2 — Optimistic drag-and-drop** (`tasks.js`) — DONE
+  - Card moves instantly, syncs in background, rolls back + error toast on failure, Undo toast on
+    success, live column counts. Kept the built-in HTML5 DnD (no SortableJS needed — CSP blocks
+    CDNs and it works well). Verified with jsdom (move / counts / PATCH / Undo / rollback).
+- [ ] **2.3 — Task detail drawer polish** — DEFERRED
+  - The detail is a functional wide modal (checklist + comments + activity + AM priority lock).
+    Converting to a right-side slide-in is a layout rewrite that really wants real-browser visual
+    verification (jsdom can't validate layout), so deferring to a focused session. No functionality lost.
+- [x] **2.4 — Board quick-add** — DONE (filters already existed)
+  - Per-column inline "Add card" (AM+): Enter creates `{title, status}`, Esc/empty cancels.
+    The Client/Department/Priority/Assignee filter selects were already present and working.
+    Verified with jsdom (button present, input appears, POST with title+status).
+  - Note: added a defensive `scrollIntoView` guard in `app.js` + `tasks.js` (harmless in browsers,
+    keeps the palette/quick-add robust and headless-testable).
 
 ---
 
@@ -132,3 +140,8 @@ Rough total: **~4–7 hrs active work**, **~1.0–1.8M tokens**, across **3–4 
   **Human follow-ups outstanding:** rotate prod `JWT_SECRET`; scrub git history; wire OAuth / set
   passwords before next deploy (dev-login dropdown will be gone in prod); change bootstrap password.
   Branch not yet merged to `main` or pushed — awaiting review.
+- 2026-07-17 — **Session 2 (UX): 2.1, 2.2, 2.4 shipped** on the same branch. Built a jsdom test
+  harness (installed in scratchpad, not the repo) to functionally verify the palette (13 checks)
+  and board DnD + quick-add (17 checks) headlessly. Kept HTML5 DnD instead of SortableJS (CSP blocks
+  CDNs; the built-in works). 2.3 (modal→drawer) deferred as a layout rewrite needing browser visual
+  QA. Two jsdom-surfaced robustness fixes shipped: guarded `scrollIntoView` in the palette + quick-add.

@@ -134,4 +134,7 @@ window.pageInit = async (S) => {
   }
 
   await load();
+  // Deep-link: /people?open=<id> (from the command palette / a notification).
+  const open = new URLSearchParams(location.search).get("open");
+  if (open) profile(open);
 };
