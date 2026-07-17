@@ -17,9 +17,9 @@
 ## Progress at a glance
 
 - [x] **Session 1 — Security & quick wins** (urgent) — DONE 2026-07-17
-- [~] **Session 2 — UX modernization** — 3 of 4 done (2.3 drawer deferred), 2026-07-17
-- [~] **Session 3 — Robustness & testing** — 3.1–3.4 done; 3.5/3.6 (ops) pending, 2026-07-17
-- [ ] **Session 4 — Real-time & build tooling** (optional / biggest)
+- [x] **Session 2 — UX modernization** — all 4 done (2.3 drawer completed 2026-07-17)
+- [~] **Session 3 — Robustness & testing** — 3.1–3.5 done; 3.6 (ops, needs GCP) pending
+- [~] **Session 4 — Real-time & build tooling** — 4.1 SSE done; 4.2 Vite+TS & 4.3 object storage deferred
 
 Rough total: **~4–7 hrs active work**, **~1.0–1.8M tokens**, across **3–4 sessions**.
 
@@ -65,7 +65,7 @@ Rough total: **~4–7 hrs active work**, **~1.0–1.8M tokens**, across **3–4 
   - Card moves instantly, syncs in background, rolls back + error toast on failure, Undo toast on
     success, live column counts. Kept the built-in HTML5 DnD (no SortableJS needed — CSP blocks
     CDNs and it works well). Verified with jsdom (move / counts / PATCH / Undo / rollback).
-- [ ] **2.3 — Task detail drawer polish** — DEFERRED
+- [x] **2.3 — Task detail drawer** — DONE (modal→right-side slide-in; jsdom 10/10)
   - The detail is a functional wide modal (checklist + comments + activity + AM priority lock).
     Converting to a right-side slide-in is a layout rewrite that really wants real-browser visual
     verification (jsdom can't validate layout), so deferring to a focused session. No functionality lost.
@@ -97,8 +97,10 @@ Rough total: **~4–7 hrs active work**, **~1.0–1.8M tokens**, across **3–4 
 - [x] **3.4 — CI pipeline** (`.github/workflows/ci.yml`) — DONE
   - Jobs: backend (ruff error-level lint + pytest), frontend (node --check every page script),
     docker (build the image). Runs on push-to-main + PRs.
-- [ ] **3.5 — Error tracking + structured logging** — not started
-  - Sentry free tier (or GCP Error Reporting since we're on Cloud Run).
+- [x] **3.5 — Error tracking + structured logging** — DONE
+  - `app/observability.py`: JSON logs in prod (Cloud Logging/Error Reporting), readable locally;
+    ExceptionLoggingMiddleware logs unhandled errors with traceback; optional Sentry (inert unless
+    SENTRY_DSN + sentry-sdk). 3 tests.
 - [ ] **3.6 — Cloud SQL automated backups + a restore test** — not started (ops task, needs GCP access)
   - Attendance/payroll data can't be regenerated from `seed.py`.
 
@@ -107,7 +109,11 @@ Rough total: **~4–7 hrs active work**, **~1.0–1.8M tokens**, across **3–4 
 ## 🟣 Session 4 — Real-time & build tooling
 *Biggest items — each may want its own session. Optional / defer if tokens are tight.*
 
-- [ ] **4.1 — Real-time board via SSE (or WebSockets)**
+- [x] **4.1 — Real-time board via SSE** — DONE
+  - `app/events.py` broker + `GET /api/stream`; tasks router broadcasts create/update/move/priority;
+    `tasks.js` EventSource reloads on others' changes. Verified real-time through the middleware
+    (hello 0.02s, event ~right after change). Per-process pub/sub (fine for one warm instance).
+  - *(original text below)*
   - FastAPI supports both natively. Push card moves + notifications instantly.
   - Makes the notification bell live and stops two-editor clobbering.
 - [ ] **4.2 — Vite + TypeScript build step** ⚠️ *most expensive — defer unless needed*
@@ -154,3 +160,10 @@ Rough total: **~4–7 hrs active work**, **~1.0–1.8M tokens**, across **3–4 
   + Academy tab) — auto-merged with no conflicts, verified all suites still green. Added
   `.gitattributes` (LF for `.sh`). 3.5 (Sentry) and 3.6 (Cloud SQL backups) are ops tasks left for a
   human with GCP access. Branch `hardening/session-1` still unpushed/unmerged.
+- 2026-07-17 — **Session 4 + leftovers (branch `modernization/session-4`).** Shipped 2.3 (task
+  detail → right-side slide-in drawer), 3.5 (structured JSON logging + ExceptionLoggingMiddleware +
+  optional Sentry), and 4.1 (SSE real-time board: `/api/stream` + EventBroker + board auto-reload).
+  Verified: 53 backend tests; frontend jsdom palette 13 / board 17 / drawer 10; and a live SSE
+  timing test proving events stream in real-time through the four BaseHTTPMiddleware. **Deferred:**
+  3.6 Cloud SQL backups (ops/GCP), 4.2 Vite+TS (largest — separate effort), 4.3 object storage
+  (needs a GCS bucket). All modernization code items are now complete.
