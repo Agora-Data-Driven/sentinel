@@ -25,6 +25,9 @@ Thumbs.db
 cookies*.txt
 c_*.txt
 
+# Per-machine dev-branch name written by scripts/push-branch.ps1
+scripts/.devname
+
 # curl/libcurl cookie jars — these hold live session JWTs, never commit them.
 # (Match the Netscape cookie-file header rather than relying on filenames.)
 *.cookies
