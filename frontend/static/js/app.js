@@ -93,14 +93,53 @@
     return data;
   }
 
-  function toast(msg, kind) {
+  // toast(msg, kind) — kind: "ok" | "err" | undefined.
+  // toast(msg, kind, { action: { label, onClick }, duration }) — optional action button (e.g. Undo).
+  // Returns { dismiss } so callers can close it early.
+  function toast(msg, kind, opts) {
+    opts = opts || {};
     let box = qs("#toasts");
     if (!box) { box = document.createElement("div"); box.id = "toasts"; document.body.appendChild(box); }
     const t = document.createElement("div");
     t.className = "toast" + (kind ? " " + kind : "");
-    t.innerHTML = (kind === "ok" ? ICON.check : kind === "err" ? ICON.x : ICON.bell) + "<span>" + esc(msg) + "</span>";
-    box.appendChild(t);
-    setTimeout(() => { t.style.opacity = "0"; t.style.transition = "opacity .3s"; setTimeout(() => t.remove(), 300); }, kind === "err" ? 4200 : 2600);
+    const icon = kind === "ok" ? ICON.check : kind === "err" ? ICON.x : ICON.bell;
+    t.innerHTML = icon + '<span class="toast-msg">' + esc(msg) + "</span>";
+    let done = false;
+    const dismiss = () => {
+      if (done) return; done = true;
+      t.style.opacity = "0"; t.style.transition = "opacity .3s"; setTimeout(() => t.remove(), 300);
+    };
+    if (opts.action && opts.action.label) {
+      const btn = document.createElement("button");
+      btn.type = "button"; btn.className = "toast-action"; btn.textContent = opts.action.label;
+      btn.onclick = () => { try { opts.action.onClick && opts.action.onClick(); } finally { dismiss(); } };
+      t.appendChild(btn);
+      box.appendChild(t);
+    } else {
+      box.appendChild(t);
+    }
+    const life = opts.duration != null ? opts.duration : opts.action ? 6000 : kind === "err" ? 4200 : 2600;
+    if (life > 0) setTimeout(dismiss, life);
+    return { dismiss };
+  }
+
+  // skeleton(opts) -> placeholder HTML string while data loads.
+  //   { rows: n }                    -> n stacked skeleton lines
+  //   { cards: n, cardHeight: px }   -> n card-shaped blocks
+  //   { height: px }                 -> one block of a given height
+  // Pages set el.innerHTML = S.skeleton({...}) before an await, then replace on resolve.
+  function skeleton(opts) {
+    opts = opts || {};
+    if (opts.cards) {
+      const h = opts.cardHeight || 84;
+      return `<div class="skel-stack">${Array.from({ length: opts.cards }, () =>
+        `<div class="skeleton skel-card" style="height:${h}px"></div>`).join("")}</div>`;
+    }
+    if (opts.rows) {
+      return `<div class="skel-stack">${Array.from({ length: opts.rows }, (_, i) =>
+        `<div class="skeleton skel-line"${i % 3 === 2 ? ' style="width:60%"' : ""}></div>`).join("")}</div>`;
+    }
+    return `<div class="skeleton" style="height:${opts.height || 200}px"></div>`;
   }
 
   const initials = (name) => (String(name || "?").split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("") || "?").toUpperCase();
@@ -327,7 +366,7 @@
   }
 
   const Sentinel = {
-    api, toast, modal, esc, qs, qsa, ICON, avatar, initials,
+    api, toast, skeleton, modal, esc, qs, qsa, ICON, avatar, initials,
     fmtTime, fmtDate, fmtDateFull, timeAgo, priorityDot, labelPills, statusPill,
     roleRank: ROLE_RANK,
     get user() { return USER; }, set user(u) { USER = u; },
