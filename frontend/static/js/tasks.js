@@ -260,4 +260,19 @@ window.pageInit = async (S) => {
   const params = new URLSearchParams(location.search);
   if (params.get("open")) openDetail(params.get("open"));
   if (params.get("new") && canCreate) taskForm(null);
+
+  // Live board: reload when someone ELSE changes a task (SSE). Our own changes are already
+  // reflected optimistically, so we skip events we caused. Debounced to coalesce bursts.
+  if (window.EventSource) {
+    let reloadTimer;
+    const es = new EventSource("/api/stream");
+    es.addEventListener("task", (e) => {
+      let actor = null;
+      try { actor = JSON.parse(e.data).actor_id; } catch (_) { /* ignore */ }
+      if (actor === S.user.id) return;
+      clearTimeout(reloadTimer);
+      reloadTimer = setTimeout(load, 400);
+    });
+    window.addEventListener("beforeunload", () => es.close());
+  }
 };

@@ -28,6 +28,7 @@ from .routers import (
     payroll,
     people,
     reports,
+    stream,
     tasks,
 )
 
@@ -91,6 +92,15 @@ def _startup() -> None:
     # Create tables if missing (SQLite zero-setup). Prod uses Alembic migrations.
     create_all()
     _startup_safeguards()
+
+
+@app.on_event("startup")
+async def _bind_event_broker() -> None:
+    # Capture the running loop so sync request handlers can publish SSE events across threads.
+    import asyncio
+
+    from .events import broker
+    broker.bind_loop(asyncio.get_running_loop())
 
 
 def _production_security_warnings() -> None:
@@ -167,7 +177,7 @@ def _startup_safeguards() -> None:
 
 
 # --- API routers -----------------------------------------------------------
-for r in (auth, attendance, gym, tasks, people, leave, notifications, reports, admin, meta, manage, payroll, cron):
+for r in (auth, attendance, gym, tasks, people, leave, notifications, reports, admin, meta, manage, payroll, cron, stream):
     app.include_router(r.router)
 
 

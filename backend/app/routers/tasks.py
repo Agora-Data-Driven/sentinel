@@ -11,6 +11,8 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..events import broker
+
 from ..constants import (
     ADMIN_ROLES,
     NOTIF_TASK_ASSIGNED,
@@ -59,6 +61,14 @@ def _log(db: Session, task_id: int, actor_id: int, field: str, old, new) -> None
             new_value=None if new is None else str(new),
         )
     )
+
+
+def _broadcast(action: str, task: Task, actor_id: int) -> None:
+    """Notify live boards that a task changed (SSE). Best-effort; never fails the request."""
+    broker.publish({
+        "type": "task", "action": action, "task_id": task.id,
+        "status": task.status, "actor_id": actor_id,
+    })
 
 
 @router.get("")
@@ -129,6 +139,7 @@ def create_task(payload: TaskCreateIn, user: User = Depends(get_current_user), d
     if task.assigned_to_id:
         notif.notify(db, user_id=task.assigned_to_id, type=NOTIF_TASK_ASSIGNED,
                      title=f"New task assigned: {task.title}", link=f"/tasks?open={task.id}")
+    _broadcast("created", task, user.id)
     return task_detail(task, db)
 
 
@@ -156,6 +167,7 @@ def update_task(task_id: int, payload: TaskUpdateIn, user: User = Depends(get_cu
     if task.assigned_to_id and task.assigned_to_id != prev_assignee:
         notif.notify(db, user_id=task.assigned_to_id, type=NOTIF_TASK_ASSIGNED,
                      title=f"Task assigned to you: {task.title}", link=f"/tasks?open={task.id}")
+    _broadcast("updated", task, user.id)
     return task_detail(task, db)
 
 
@@ -182,6 +194,7 @@ def move_status(task_id: int, payload: TaskStatusIn, user: User = Depends(get_cu
     if payload.status == TASK_FOR_REVIEW and task.account_manager_id:
         notif.notify(db, user_id=task.account_manager_id, type=NOTIF_TASK_REVIEW,
                      title=f"Task ready for review: {task.title}", link=f"/tasks?open={task.id}")
+    _broadcast("moved", task, user.id)
     return task_detail(task, db)
 
 
@@ -201,6 +214,7 @@ def set_priority(task_id: int, payload: TaskPriorityIn, user: User = Depends(get
     db.commit()
     audit.record(db, actor_id=user.id, table_name="tasks", record_id=task.id, action="priority",
                  old={"priority": old}, new={"priority": payload.priority})
+    _broadcast("priority", task, user.id)
     return task_detail(task, db)
 
 
