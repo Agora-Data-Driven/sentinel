@@ -43,6 +43,18 @@ class Settings(BaseSettings):
     google_client_secret: str = ""
     google_redirect_uri: str = "http://localhost:8000/api/auth/google/callback"
 
+    # --- Central portal SSO (the Agora portal is the one front door) --------
+    # The HMAC key the portal signs `ag_sso` with (Secret Manager `platform-sso-key`). Unset =
+    # SSO is inert and the existing login paths are unchanged, so a default/local run is unaffected.
+    # NOTE: the cookie is scoped to `.agoradatadriven.com`, so it only ever reaches Sentinel on its
+    # custom domain — on a raw *.run.app host SSO is silently inert (fail-safe, by design).
+    platform_sso_secret: str = ""
+    # Where /login sends people (the portal). Unset = Sentinel keeps its own login form.
+    portal_login_url: str = ""
+    # The mastery engine, embedded in the Academy tab. Must be a *.agoradatadriven.com host or the
+    # shared session cookie won't reach it inside the iframe.
+    skill_mastery_url: str = "https://mastery.agoradatadriven.com"
+
     # --- Cron / scheduled jobs --------------------------------------------
     # Daily auto-processing endpoint (/api/cron/daily) requires this shared secret in the
     # X-Cron-Key header. Cloud Scheduler sends it. Super Admins can also trigger it while logged in.
