@@ -13,6 +13,7 @@ from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from . import sso
 from .config import settings
 from .constants import ADMIN_ROLES, MANAGER_ROLES, ROLE_ACCOUNT_MANAGER, ROLE_RANK
 from .database import get_db
@@ -46,22 +47,45 @@ def _extract_token(request: Request) -> str | None:
     return None
 
 
+def user_from_sso(request: Request, db: Session) -> User | None:
+    """The active user named by a valid portal `ag_sso` cookie, or None.
+
+    Identity comes from the portal; authorization stays here. An email with no ACTIVE row in
+    `users` gets nothing — SSO never creates a user and never grants a role (the same contract as
+    the Google OAuth path). Inert unless PLATFORM_SSO_SECRET is configured.
+    """
+    email = sso.email_from_cookie(settings.platform_sso_secret, request.cookies.get(sso.COOKIE_NAME))
+    if not email:
+        return None
+    user = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
+    return user if (user and user.is_active) else None
+
+
 # --- Current-user dependencies --------------------------------------------
 def get_current_user(request: Request, db: Session = Depends(get_db)) -> User:
     token = _extract_token(request)
     uid = _decode(token) if token else None
-    if not uid:
+    if uid:
+        user = db.get(User, uid)
+        if not user or not user.is_active:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session")
+        return user
+    # No Sentinel session — accept a portal login instead, so arriving from the portal (or being
+    # embedded beside it) just works without a second sign-in.
+    user = user_from_sso(request, db)
+    if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
-    user = db.get(User, uid)
-    if not user or not user.is_active:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session")
     return user
 
 
 def get_current_user_optional(request: Request, db: Session = Depends(get_db)) -> User | None:
     token = _extract_token(request)
     uid = _decode(token) if token else None
-    return db.get(User, uid) if uid else None
+    if uid:
+        user = db.get(User, uid)
+        if user and user.is_active:
+            return user
+    return user_from_sso(request, db)
 
 
 # --- RBAC guards -----------------------------------------------------------

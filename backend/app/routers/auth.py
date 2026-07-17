@@ -19,7 +19,7 @@ from ..config import settings
 from ..database import get_db
 from ..models import Team, User
 from ..schemas import ChangePasswordIn, DevLoginIn, LoginIn
-from ..security import create_access_token, get_current_user
+from ..security import create_access_token, get_current_user, user_from_sso
 from ..serializers import user_full
 from ..utils.passwords import hash_password, verify_password
 
@@ -38,14 +38,53 @@ def _user_by_email(db: Session, email: str) -> User | None:
     return db.execute(select(User).where(User.email == email.strip().lower())).scalar_one_or_none()
 
 
+def _sso_reachable(request: Request) -> bool:
+    """True only when the portal's cookie can actually reach THIS host.
+
+    `ag_sso` is scoped to `.agoradatadriven.com`, so on a raw *.run.app host (or localhost) the
+    browser never sends it. Telling the login page to redirect to the portal from such a host would
+    loop forever: portal -> back here -> still no cookie -> portal. So the redirect turns itself on
+    only where SSO can work, and everywhere else the normal login stands. Same fail-safe posture the
+    portal's platform_sso.py documents for dashboards.
+    """
+    host = (request.headers.get("host") or "").split(":")[0].strip().lower()
+    return host == "agoradatadriven.com" or host.endswith(".agoradatadriven.com")
+
+
 @router.get("/config")
-def auth_config():
+def auth_config(request: Request):
     """Tells the login page which sign-in methods are available."""
+    sso_ready = bool(settings.platform_sso_secret and settings.portal_login_url)
     return {
         "dev_login_enabled": settings.dev_login_active,
         "google_enabled": bool(settings.google_client_id),
         "app_name": settings.app_name,
+        # When the portal is the front door the login page redirects there instead of
+        # showing its own form. Empty = keep the local form (dev, or portal not wired yet).
+        "portal_login_url": settings.portal_login_url,
+        # Gated on the host too, so this can be configured BEFORE the custom domain exists
+        # without ever stranding anyone in a redirect loop.
+        "sso_enabled": sso_ready and _sso_reachable(request),
     }
+
+
+# --- Central portal SSO ----------------------------------------------------
+@router.post("/sso")
+def sso_exchange(request: Request, response: Response, db: Session = Depends(get_db)):
+    """Trade a valid portal `ag_sso` cookie for a normal Sentinel session.
+
+    Mirrors the Google OAuth path exactly: the portal vouches for WHO you are, and you get in only
+    if that email is already an active user here — SSO never creates an account. Requests are
+    authenticated by the cookie alone even without this call (see security.user_from_sso); this
+    endpoint just mints the usual session so the rest of the app behaves identically to a password
+    login (logout works, no HMAC check per request).
+    """
+    user = user_from_sso(request, db)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="No valid portal session")
+    _set_cookie(response, user.id)
+    team = db.get(Team, user.team_id) if user.team_id else None
+    return {"ok": True, "user": user_full(user, team)}
 
 
 # --- Password login --------------------------------------------------------

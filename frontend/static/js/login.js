@@ -10,6 +10,27 @@ window.pageInit = async (S) => {
   // Which methods are available?
   let cfg = { google_enabled: false, dev_login_enabled: false };
   try { cfg = await S.api("/api/auth/config"); } catch (e) {}
+
+  /* The Agora portal is the ONE front door. When SSO is wired up, first try trading the portal's
+     shared cookie for a session — someone already signed in there lands straight on the dashboard
+     and never sees this page. Failing that, send them to the portal to sign in, with ?next= so
+     they come back here.
+
+     Two deliberate escape hatches, so nobody can ever be locked out of an internal tool by a
+     portal outage or a misconfiguration: an explicit ?local=1, and dev login (which stays behind
+     DEV_LOGIN_ENABLED and is off in production). */
+  if (cfg.sso_enabled && q.get("local") !== "1" && !q.get("error")) {
+    try {
+      await S.api("/api/auth/sso", { method: "POST" });
+      location.replace("/dashboard");
+      return;
+    } catch (e) { /* no portal cookie (or not a Sentinel user) — fall through to the redirect */ }
+    if (cfg.portal_login_url) {
+      const next = encodeURIComponent(location.origin + "/dashboard");
+      location.replace(cfg.portal_login_url + (cfg.portal_login_url.includes("?") ? "&" : "?") + "next=" + next);
+      return;
+    }
+  }
   if (!cfg.google_enabled) {
     const gw = S.qs("#google-wrap"); if (gw) gw.style.display = "none";  // hide until OAuth is configured
   }
