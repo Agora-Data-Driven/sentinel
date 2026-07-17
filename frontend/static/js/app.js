@@ -181,10 +181,13 @@
   }
 
   // ---------------- Modal ----------------
-  function modal({ title, body, footer, wide }) {
+  // modal({ title, body, footer, wide })            -> centered dialog
+  // modal({ ..., drawer: true })                     -> right-side slide-in panel (full height)
+  function modal({ title, body, footer, wide, drawer }) {
     let ov = qs("#modal-ov");
-    if (!ov) { ov = document.createElement("div"); ov.id = "modal-ov"; ov.className = "overlay"; document.body.appendChild(ov); }
-    ov.innerHTML = `<div class="modal ${wide ? "wide" : ""}">
+    if (!ov) { ov = document.createElement("div"); ov.id = "modal-ov"; document.body.appendChild(ov); }
+    ov.className = "overlay" + (drawer ? " drawer-ov" : "");
+    ov.innerHTML = `<div class="modal ${wide ? "wide" : ""}${drawer ? " as-drawer" : ""}">
       <div class="modal-head"><h3>${esc(title)}</h3><span class="x-close" id="modal-x">${ICON.x}</span></div>
       <div class="modal-body">${body}</div>
       ${footer ? `<div class="modal-foot">${footer}</div>` : ""}</div>`;
@@ -192,6 +195,9 @@
     const close = () => ov.classList.remove("open");
     qs("#modal-x", ov).onclick = close;
     ov.onclick = (e) => { if (e.target === ov) close(); };
+    // Esc closes the drawer/modal.
+    const onKey = (e) => { if (e.key === "Escape") { close(); document.removeEventListener("keydown", onKey); } };
+    document.addEventListener("keydown", onKey);
     return { close, root: ov };
   }
 
