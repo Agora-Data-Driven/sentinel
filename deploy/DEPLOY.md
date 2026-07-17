@@ -126,3 +126,18 @@ Cloud SQL bills while the instance exists (it doesn't scale to zero) — stop it
 - **Build fails:** check `gcloud builds list` / the build log link it prints.
 - **DB connection errors:** confirm `--add-cloudsql-instances` matches the secret's `host=/cloudsql/…`
   connection name exactly, and that the runtime service account has `roles/cloudsql.client`.
+- **GitHub auto-deploy fails with `unauthorized_client … rejected by the attribute condition`:**
+  the Workload Identity provider doesn't trust this repo's OIDC token (it was set up for a
+  different repo/org). Fix it once, logged in as an IAM admin:
+  ```powershell
+  .\deploy\fix-github-oidc.ps1            # dry run: shows the current config + planned changes
+  .\deploy\fix-github-oidc.ps1 -Apply     # apply (scopes trust to Agora-Data-Driven/sentinel)
+  ```
+  Then re-run **Actions → "Deploy Sentinel to Cloud Run" → Run workflow**. Until it's fixed, deploy
+  manually with `deploy.ps1` above (that uses your own `gcloud auth login`, not the GitHub identity).
+
+## Applying database migrations
+The container runs `alembic`-based migrations at startup via `backend/entrypoint.sh` →
+`backend/migrate.py`, which is safe on any DB state: it runs `alembic upgrade head` on a fresh or
+already-stamped database, and `alembic stamp head` to adopt an existing schema that was originally
+built by `create_all` (no data touched). Nothing extra to run by hand.

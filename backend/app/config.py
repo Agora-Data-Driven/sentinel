@@ -41,6 +41,13 @@ class Settings(BaseSettings):
     bootstrap_admin_email: str = "melo@agora.ph"
     bootstrap_admin_password: str = "Agora2026!"
 
+    # The Agora ecosystem's owner — the same super admin that runs the portal. Ensured as an active
+    # Sentinel Super Admin on every boot (idempotent, SSO-only, no password) so signing in through
+    # the portal always lands them here. SSO itself never creates accounts, so without this the
+    # owner would be locked out of their own Sentinel until someone added them by hand. Comma-
+    # separated for more than one; blank to disable.
+    platform_admin_emails: str = "info@agoradatadriven.com"
+
     # Google OAuth 2.0 (optional; DEV_LOGIN is the fallback when unset)
     google_client_id: str = ""
     google_client_secret: str = ""

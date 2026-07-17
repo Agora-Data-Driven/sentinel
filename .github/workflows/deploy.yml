@@ -22,6 +22,10 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    # Only the canonical repo can deploy — forks lack the Workload Identity trust and would fail
+    # the auth step with a confusing error. (Fix WIF with deploy/fix-github-oidc.ps1 if this repo
+    # name ever changes.)
+    if: github.repository == 'Agora-Data-Driven/sentinel'
     steps:
       - uses: actions/checkout@v4
 
