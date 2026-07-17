@@ -138,7 +138,21 @@ class CSRFMiddleware(BaseHTTPMiddleware):
     A non-httponly ``csrf`` cookie is issued on responses; the frontend echoes it back in the
     ``X-CSRF-Token`` header on unsafe requests. Requests without the session cookie (Bearer-token
     API clients, the unauthenticated kiosk) are not cookie-authenticated and are left alone.
+
+    The token cookie is persistent and given the SAME lifetime as the session cookie: a session-
+    scoped CSRF cookie would be dropped on browser close while the week-long session cookie survived,
+    leaving the pair desynced — and every cookie-authenticated POST (including the login that would
+    recover the session) would then 403 until some GET happened to reseed. To be doubly safe against
+    any such desync, a failed check still reissues a fresh token so the client self-heals on retry.
     """
+
+    @staticmethod
+    def _issue_token(response: Response) -> None:
+        response.set_cookie(
+            key=settings.csrf_cookie_name, value=secrets.token_urlsafe(32),
+            httponly=False, secure=settings.secure_cookies, samesite="lax", path="/",
+            max_age=settings.jwt_expire_minutes * 60,
+        )
 
     async def dispatch(self, request: Request, call_next):
         needs_check = (
@@ -151,13 +165,15 @@ class CSRFMiddleware(BaseHTTPMiddleware):
             cookie_tok = request.cookies.get(settings.csrf_cookie_name)
             header_tok = request.headers.get(settings.csrf_header_name)
             if not cookie_tok or not header_tok or not hmac.compare_digest(cookie_tok, header_tok):
-                return JSONResponse(status_code=403, content={"detail": "CSRF token missing or invalid"})
+                rejected = JSONResponse(status_code=403, content={"detail": "CSRF token missing or invalid"})
+                # Reseed on rejection so a desynced client (e.g. a persistent session cookie whose
+                # token cookie was dropped) recovers on the next attempt instead of looping on 403.
+                if not cookie_tok:
+                    self._issue_token(rejected)
+                return rejected
 
         response: Response = await call_next(request)
         # Issue a token the first time we see a client without one, so the SPA can read + echo it.
         if settings.csrf_enabled and not request.cookies.get(settings.csrf_cookie_name):
-            response.set_cookie(
-                key=settings.csrf_cookie_name, value=secrets.token_urlsafe(32),
-                httponly=False, secure=settings.secure_cookies, samesite="lax", path="/",
-            )
+            self._issue_token(response)
         return response
