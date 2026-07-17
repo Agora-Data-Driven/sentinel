@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     secure_cookies: bool = False  # set true behind https in prod
 
     dev_login_enabled: bool = True  # /api/auth/dev-login — pick a seeded user, no OAuth
+    # Dev-login is a PASSWORDLESS "become any user" door — fine locally, dangerous in prod.
+    # It is forced OFF when environment == "production" unless this escape hatch is set true.
+    allow_dev_login_in_prod: bool = False
 
     # Startup safety net: if the DB has no active Super Admin, this account is (re)created so a
     # login is always possible. Change the password after first sign-in.
@@ -64,6 +67,38 @@ class Settings(BaseSettings):
     # The tablet kiosk is a trusted device: attendance punches are identified by the scanned QR
     # token, not by a logged-in user. In prod, lock these routes to the LAN / a device key.
     kiosk_key: str = ""  # if set, kiosk endpoints require ?kiosk_key= or X-Kiosk-Key header
+
+    # --- Security headers / rate limiting ----------------------------------
+    # In-memory per-IP rate limiting for sensitive endpoints (login brute-force, QR-token
+    # guessing). Per-instance on Cloud Run — a basic abuse brake, not a distributed quota.
+    rate_limit_enabled: bool = True
+    rate_limit_login_per_min: int = 10   # /api/auth/login + /dev-login, per IP
+    rate_limit_scan_per_min: int = 120   # /api/attendance/scan + /event, per IP (busy kiosk-friendly)
+    # Send HSTS only when actually behind HTTPS. Defaults to follow secure_cookies.
+    hsts_enabled: bool | None = None
+
+    # --- CSRF (double-submit token) ---------------------------------------
+    # Only enforced for cookie-authenticated, state-changing requests. Bearer-token API clients and
+    # the QR-token kiosk endpoints are exempt (they don't rely on the ambient session cookie).
+    csrf_enabled: bool = True
+    csrf_cookie_name: str = "sentinel_csrf"
+    csrf_header_name: str = "X-CSRF-Token"
+
+    # --- Derived --------------------------------------------------------------
+    @property
+    def is_production(self) -> bool:
+        return self.environment.strip().lower() == "production"
+
+    @property
+    def dev_login_active(self) -> bool:
+        """Effective dev-login switch. Off in production unless explicitly allowed."""
+        if self.is_production and not self.allow_dev_login_in_prod:
+            return False
+        return self.dev_login_enabled
+
+    @property
+    def jwt_secret_is_default(self) -> bool:
+        return self.jwt_secret == "dev-only-change-me-in-production"
 
 
 @lru_cache

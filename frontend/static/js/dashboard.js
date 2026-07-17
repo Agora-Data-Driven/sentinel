@@ -1,5 +1,15 @@
 window.pageInit = async (S) => {
   const view = S.view();
+  // Loading state so the page shows its shape immediately instead of a blank flash.
+  view.innerHTML = `
+    <div class="skeleton skel-line" style="height:28px;width:min(280px,60%);margin-bottom:22px"></div>
+    <div class="kpis" style="margin-bottom:22px">
+      ${Array.from({ length: 6 }, () => '<div class="skeleton skel-card" style="height:96px"></div>').join("")}
+    </div>
+    <div class="grid" style="grid-template-columns:1fr 1fr;gap:16px">
+      <div class="skeleton skel-card" style="height:220px"></div>
+      <div class="skeleton skel-card" style="height:220px"></div>
+    </div>`;
   const d = await S.api("/api/dashboard");
   const u = d.user;
   const greeting = new Date().getHours() < 12 ? "Good morning" : new Date().getHours() < 18 ? "Good afternoon" : "Good evening";

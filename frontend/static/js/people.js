@@ -29,6 +29,7 @@ window.pageInit = async (S) => {
     if (filters.team) q.set("team", filters.team);
     if (filters.role) q.set("role", filters.role);
     if (filters.status) q.set("status", filters.status);
+    S.qs("#tbl").innerHTML = `<div class="card pad">${S.skeleton({ rows: 7 })}</div>`;
     const rows = await S.api("/api/people?" + q);
     S.qs("#tbl").innerHTML = `<div class="table-wrap"><table>
       <thead><tr><th>Name</th><th>Email</th><th>Department</th><th>Role</th><th>Status</th><th></th></tr></thead>
@@ -133,4 +134,7 @@ window.pageInit = async (S) => {
   }
 
   await load();
+  // Deep-link: /people?open=<id> (from the command palette / a notification).
+  const open = new URLSearchParams(location.search).get("open");
+  if (open) profile(open);
 };

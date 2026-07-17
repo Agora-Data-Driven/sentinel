@@ -79,10 +79,23 @@
   const qs = (s, r = document) => r.querySelector(s);
   const qsa = (s, r = document) => Array.from(r.querySelectorAll(s));
 
+  const CSRF_COOKIE = "sentinel_csrf";
+  const CSRF_HEADER = "X-CSRF-Token";
+  const readCookie = (name) => {
+    const m = document.cookie.match("(?:^|; )" + name.replace(/([.*+?^${}()|[\]\\])/g, "\\$1") + "=([^;]*)");
+    return m ? decodeURIComponent(m[1]) : "";
+  };
+
   async function api(path, opts = {}) {
-    const o = { method: opts.method || "GET", headers: {}, credentials: "same-origin" };
+    const method = opts.method || "GET";
+    const o = { method, headers: {}, credentials: "same-origin" };
     if (opts.body !== undefined) { o.headers["Content-Type"] = "application/json"; o.body = JSON.stringify(opts.body); }
     if (opts.form) { o.body = opts.form; } // FormData: let browser set the boundary
+    // Double-submit CSRF token on state-changing requests (server issues the cookie).
+    if (!["GET", "HEAD", "OPTIONS"].includes(method.toUpperCase())) {
+      const tok = readCookie(CSRF_COOKIE);
+      if (tok) o.headers[CSRF_HEADER] = tok;
+    }
     const res = await fetch(path, o);
     if (res.status === 204) return null;
     const ct = res.headers.get("content-type") || "";
@@ -95,14 +108,53 @@
     return data;
   }
 
-  function toast(msg, kind) {
+  // toast(msg, kind) — kind: "ok" | "err" | undefined.
+  // toast(msg, kind, { action: { label, onClick }, duration }) — optional action button (e.g. Undo).
+  // Returns { dismiss } so callers can close it early.
+  function toast(msg, kind, opts) {
+    opts = opts || {};
     let box = qs("#toasts");
     if (!box) { box = document.createElement("div"); box.id = "toasts"; document.body.appendChild(box); }
     const t = document.createElement("div");
     t.className = "toast" + (kind ? " " + kind : "");
-    t.innerHTML = (kind === "ok" ? ICON.check : kind === "err" ? ICON.x : ICON.bell) + "<span>" + esc(msg) + "</span>";
-    box.appendChild(t);
-    setTimeout(() => { t.style.opacity = "0"; t.style.transition = "opacity .3s"; setTimeout(() => t.remove(), 300); }, kind === "err" ? 4200 : 2600);
+    const icon = kind === "ok" ? ICON.check : kind === "err" ? ICON.x : ICON.bell;
+    t.innerHTML = icon + '<span class="toast-msg">' + esc(msg) + "</span>";
+    let done = false;
+    const dismiss = () => {
+      if (done) return; done = true;
+      t.style.opacity = "0"; t.style.transition = "opacity .3s"; setTimeout(() => t.remove(), 300);
+    };
+    if (opts.action && opts.action.label) {
+      const btn = document.createElement("button");
+      btn.type = "button"; btn.className = "toast-action"; btn.textContent = opts.action.label;
+      btn.onclick = () => { try { opts.action.onClick && opts.action.onClick(); } finally { dismiss(); } };
+      t.appendChild(btn);
+      box.appendChild(t);
+    } else {
+      box.appendChild(t);
+    }
+    const life = opts.duration != null ? opts.duration : opts.action ? 6000 : kind === "err" ? 4200 : 2600;
+    if (life > 0) setTimeout(dismiss, life);
+    return { dismiss };
+  }
+
+  // skeleton(opts) -> placeholder HTML string while data loads.
+  //   { rows: n }                    -> n stacked skeleton lines
+  //   { cards: n, cardHeight: px }   -> n card-shaped blocks
+  //   { height: px }                 -> one block of a given height
+  // Pages set el.innerHTML = S.skeleton({...}) before an await, then replace on resolve.
+  function skeleton(opts) {
+    opts = opts || {};
+    if (opts.cards) {
+      const h = opts.cardHeight || 84;
+      return `<div class="skel-stack">${Array.from({ length: opts.cards }, () =>
+        `<div class="skeleton skel-card" style="height:${h}px"></div>`).join("")}</div>`;
+    }
+    if (opts.rows) {
+      return `<div class="skel-stack">${Array.from({ length: opts.rows }, (_, i) =>
+        `<div class="skeleton skel-line"${i % 3 === 2 ? ' style="width:60%"' : ""}></div>`).join("")}</div>`;
+    }
+    return `<div class="skeleton" style="height:${opts.height || 200}px"></div>`;
   }
 
   const initials = (name) => (String(name || "?").split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("") || "?").toUpperCase();
@@ -151,11 +203,8 @@
     const title = document.body.dataset.title || "Sentinel";
     const path = location.pathname;
 
-    const navItems = NAV.filter((n) => {
-      if (n.roles) return n.roles.includes(USER.role);
-      if (n.min) return (ROLE_RANK[USER.role] || 0) >= ROLE_RANK[n.min];
-      return true;
-    }).map((n) => `<a href="${n.href}" class="${path === n.href ? "active" : ""}">${ICON[n.icon]}<span>${n.label}</span>${n.href === "/tasks" ? '<span class="count" id="nav-tasks" style="display:none"></span>' : ""}</a>`).join("");
+    const navItems = NAV.filter(navAllowed)
+      .map((n) => `<a href="${n.href}" class="${path === n.href ? "active" : ""}">${ICON[n.icon]}<span>${n.label}</span>${n.href === "/tasks" ? '<span class="count" id="nav-tasks" style="display:none"></span>' : ""}</a>`).join("");
 
     const shell = document.createElement("div");
     shell.className = "app";
@@ -180,6 +229,7 @@
             <div><h1>${esc(title)}</h1><div class="sub" id="top-sub"></div></div>
           </div>
           <div class="top-right">
+            <button class="cmdk-trigger" id="cmdk-trigger" title="Search — Ctrl K" aria-label="Open command palette">${ICON.search}<span>Search</span><kbd>Ctrl K</kbd></button>
             ${USER.role === "super_admin" ? '<span class="pill amber sa-badge" title="You are viewing as Super Admin — full access to every module and record">Super Admin view</span>' : ""}
             <div class="theme-toggle" id="theme-toggle">
               <button data-set-theme="light" title="Light mode">${ICON.sun}</button>
@@ -202,24 +252,15 @@
     const side = qs("#side");
     const toggle = () => { side.classList.toggle("open"); scrim.classList.toggle("open"); };
     qs("#ham").onclick = toggle; scrim.onclick = toggle;
-    qs("#logout").onclick = async () => { await api("/api/auth/logout", { method: "POST" }); location.href = "/login"; };
-    // Light/dark toggle
-    function paintTheme() {
-      const t = document.documentElement.getAttribute("data-theme") || "light";
-      qsa("#theme-toggle button").forEach((b) => b.classList.toggle("on", b.dataset.setTheme === t));
-    }
-    qsa("#theme-toggle button").forEach((b) => b.onclick = () => {
-      const t = b.dataset.setTheme;
-      document.documentElement.setAttribute("data-theme", t);
-      try { localStorage.setItem(THEME_KEY, t); } catch (e) {}
-      paintTheme();
-      applyBrandLogo();  // swap to the light/white logo variant for the new theme
-    });
-    paintTheme();
+    qs("#logout").onclick = doLogout;
+    // Light/dark toggle (setTheme is shared with the command palette)
+    qsa("#theme-toggle button").forEach((b) => b.onclick = () => setTheme(b.dataset.setTheme));
+    setTheme(document.documentElement.getAttribute("data-theme") || "light");
     const uc = qs("#user-card"); if (uc) uc.onclick = openChangePassword;
 
     startClock();
     wireBell();
+    initCommandPalette();
     refreshTaskCount();
   }
 
@@ -306,6 +347,164 @@
     };
   }
 
+  // ---------------- Theme + shared actions ----------------
+  function setTheme(t) {
+    document.documentElement.setAttribute("data-theme", t);
+    try { localStorage.setItem(THEME_KEY, t); } catch (e) { /* private mode */ }
+    qsa("#theme-toggle button").forEach((b) => b.classList.toggle("on", b.dataset.setTheme === t));
+    applyBrandLogo();
+  }
+  const currentTheme = () => document.documentElement.getAttribute("data-theme") || "light";
+  async function doLogout() { try { await api("/api/auth/logout", { method: "POST" }); } finally { location.href = "/login"; } }
+  function navAllowed(n) {
+    if (n.roles) return n.roles.includes(USER.role);
+    if (n.min) return (ROLE_RANK[USER.role] || 0) >= ROLE_RANK[n.min];
+    return true;
+  }
+
+  // ---------------- Command palette (Ctrl/Cmd + K) ----------------
+  // Searches pages, quick actions, people, and tasks. Pages/actions are instant; people + tasks
+  // are fetched once on first open and cached. Everything degrades gracefully if a fetch 403s.
+  const GROUP_ORDER = ["Actions", "Pages", "People", "Tasks"];
+
+  function initCommandPalette() {
+    let cache = { people: null, tasks: null };
+    let visible = [];   // flat, in render order — keyboard nav walks this
+    let sel = 0;
+    let open = false;
+    let lastFocus = null;
+
+    const ov = document.createElement("div");
+    ov.className = "cmdk-ov"; ov.id = "cmdk";
+    ov.innerHTML = `
+      <div class="cmdk" role="dialog" aria-modal="true" aria-label="Command palette">
+        <div class="cmdk-in">${ICON.search}<input id="cmdk-input" type="text" role="combobox" aria-expanded="true" aria-controls="cmdk-list" aria-autocomplete="list" placeholder="Search people, tasks, pages — or run a command…" autocomplete="off" spellcheck="false"></div>
+        <div class="cmdk-list" id="cmdk-list" role="listbox"></div>
+        <div class="cmdk-foot"><span><kbd>↑</kbd><kbd>↓</kbd> navigate</span><span><kbd>↵</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+      </div>`;
+    document.body.appendChild(ov);
+    const input = qs("#cmdk-input", ov);
+    const listEl = qs("#cmdk-list", ov);
+
+    function actions() {
+      const a = [
+        { group: "Actions", icon: currentTheme() === "dark" ? "sun" : "moon", label: `Switch to ${currentTheme() === "dark" ? "light" : "dark"} mode`, hint: "Theme", run: () => { setTheme(currentTheme() === "dark" ? "light" : "dark"); return true; } },
+        { group: "Actions", icon: "bell", label: "Mark all notifications read", hint: "", run: async () => { try { await api("/api/notifications/read-all", { method: "PATCH" }); toast("All caught up", "ok"); const b = qs("#bell-count"); if (b) b.style.display = "none"; } catch (e) {} } },
+        { group: "Actions", icon: "gear", label: "Change password", hint: "Account", run: () => { openChangePassword(); } },
+        { group: "Actions", icon: "logout", label: "Log out", hint: "Account", run: doLogout },
+      ];
+      if ((ROLE_RANK[USER.role] || 0) >= ROLE_RANK.account_manager) {
+        a.unshift({ group: "Actions", icon: "plus", label: "New task", hint: "Task Board", run: () => go("/tasks?new=1") });
+      }
+      return a;
+    }
+    function pages() {
+      return NAV.filter(navAllowed).map((n) => ({ group: "Pages", icon: n.icon, label: n.label, hint: n.href, run: () => go(n.href) }));
+    }
+    function peopleItems() {
+      return (cache.people || []).map((p) => ({
+        group: "People", icon: "users", label: p.name,
+        hint: [p.role_label || p.role, p.team_name].filter(Boolean).join(" · "),
+        run: () => go("/people?open=" + p.id),
+      }));
+    }
+    function taskItems() {
+      return (cache.tasks || []).map((t) => ({
+        group: "Tasks", icon: "board", label: t.title,
+        hint: [t.status, t.client_name].filter(Boolean).join(" · "),
+        run: () => go("/tasks?open=" + t.id),
+      }));
+    }
+    const go = (href) => { close(); location.href = href; };
+
+    // Subsequence-aware scorer: prefix > substring > scattered match; -1 means no match.
+    function score(q, text) {
+      text = (text || "").toLowerCase();
+      const idx = text.indexOf(q);
+      if (idx === 0) return 1000;
+      if (idx > 0) return 600 - idx;
+      let ti = 0, first = -1;
+      for (const ch of q) { const f = text.indexOf(ch, ti); if (f < 0) return -1; if (first < 0) first = f; ti = f + 1; }
+      return 200 - (ti - q.length) - first;
+    }
+
+    function render() {
+      const q = input.value.trim().toLowerCase();
+      let pool = actions().concat(pages());
+      if (q) pool = pool.concat(peopleItems(), taskItems());   // only surface records when searching
+      const scored = pool.map((it) => ({ it, s: q ? Math.max(score(q, it.label), score(q, it.hint) - 200) : 1 }))
+        .filter((x) => x.s > -1);
+      // Fixed group order; within a group sort by score, then cap records so the list stays tight.
+      visible = [];
+      const html = GROUP_ORDER.map((g) => {
+        let rows = scored.filter((x) => x.it.group === g).sort((a, b) => b.s - a.s).map((x) => x.it);
+        if ((g === "People" || g === "Tasks") && q) rows = rows.slice(0, 6);
+        if (!rows.length) return "";
+        const items = rows.map((it) => {
+          const i = visible.push(it) - 1;
+          return `<div class="cmdk-item" role="option" data-i="${i}" id="cmdk-opt-${i}">
+            <span class="cmdk-ic">${ICON[it.icon] || ICON.grid}</span>
+            <span class="cmdk-label">${esc(it.label)}</span>
+            ${it.hint ? `<span class="cmdk-hint">${esc(it.hint)}</span>` : ""}</div>`;
+        }).join("");
+        return `<div class="cmdk-group">${esc(g)}</div>${items}`;
+      }).join("");
+      listEl.innerHTML = html || `<div class="cmdk-empty">No matches for “${esc(input.value)}”.</div>`;
+      if (sel >= visible.length) sel = Math.max(0, visible.length - 1);
+      paintSel();
+      qsa(".cmdk-item", listEl).forEach((el) => {
+        el.onmousemove = () => { const i = +el.dataset.i; if (i !== sel) { sel = i; paintSel(); } };
+        el.onclick = () => runItem(visible[+el.dataset.i]);
+      });
+    }
+    function paintSel() {
+      qsa(".cmdk-item", listEl).forEach((el) => el.classList.toggle("sel", +el.dataset.i === sel));
+      const cur = qs(`#cmdk-opt-${sel}`, listEl);
+      if (cur) { if (cur.scrollIntoView) cur.scrollIntoView({ block: "nearest" }); input.setAttribute("aria-activedescendant", cur.id); }
+    }
+    function runItem(it) {
+      if (!it || !it.run) return;
+      // Actions return true to keep the palette open (e.g. theme toggle re-renders in place);
+      // everything else closes it — importantly so modal-opening actions aren't hidden behind it.
+      if (it.run() === true) { render(); return; }
+      close();
+    }
+
+    async function ensureData() {
+      if (cache.people && cache.tasks) return;
+      const [pp, tt] = await Promise.allSettled([api("/api/people"), api("/api/tasks")]);
+      cache.people = pp.status === "fulfilled" ? pp.value : [];
+      cache.tasks = tt.status === "fulfilled" ? tt.value : [];
+      if (open) render();
+    }
+
+    function openPalette() {
+      if (open) return;
+      open = true; lastFocus = document.activeElement;
+      ov.classList.add("open"); input.value = ""; sel = 0; render();
+      requestAnimationFrame(() => input.focus());
+      ensureData();
+    }
+    function close() {
+      if (!open) return;
+      open = false; ov.classList.remove("open");
+      if (lastFocus && lastFocus.focus) lastFocus.focus();
+    }
+
+    input.addEventListener("input", () => { sel = 0; render(); });
+    ov.addEventListener("mousedown", (e) => { if (e.target === ov) close(); });
+    document.addEventListener("keydown", (e) => {
+      const key = e.key.toLowerCase();
+      if ((e.ctrlKey || e.metaKey) && key === "k") { e.preventDefault(); open ? close() : openPalette(); return; }
+      if (!open) return;
+      if (e.key === "Escape") { e.preventDefault(); close(); }
+      else if (e.key === "ArrowDown") { e.preventDefault(); if (visible.length) { sel = (sel + 1) % visible.length; paintSel(); } }
+      else if (e.key === "ArrowUp") { e.preventDefault(); if (visible.length) { sel = (sel - 1 + visible.length) % visible.length; paintSel(); } }
+      else if (e.key === "Enter") { e.preventDefault(); runItem(visible[sel]); }
+    });
+    const trig = qs("#cmdk-trigger"); if (trig) trig.onclick = openPalette;
+  }
+
   // ---------------- Boot ----------------
   async function boot() {
     // Standalone pages (login, kiosk, scanner) skip the shell + auth guard.
@@ -329,7 +528,7 @@
   }
 
   const Sentinel = {
-    api, toast, modal, esc, qs, qsa, ICON, avatar, initials,
+    api, toast, skeleton, modal, esc, qs, qsa, ICON, avatar, initials,
     fmtTime, fmtDate, fmtDateFull, timeAgo, priorityDot, labelPills, statusPill,
     roleRank: ROLE_RANK,
     get user() { return USER; }, set user(u) { USER = u; },

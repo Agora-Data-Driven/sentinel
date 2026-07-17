@@ -37,9 +37,11 @@ window.pageInit = async (S) => {
       <div class="col" data-status="${S.esc(st)}">
         <div class="col-head"><span class="t">${S.esc(st)}</span><span class="c">${byStatus[st].length}</span></div>
         <div class="col-list" data-status="${S.esc(st)}">${byStatus[st].map(card).join("")}</div>
+        ${canCreate ? `<button class="col-add" data-status="${S.esc(st)}">${S.ICON.plus}<span>Add card</span></button>` : ""}
       </div>`).join("");
     wireDnD();
-    S.qsa(".tcard").forEach((c) => c.onclick = (e) => { if (!c.classList.contains("dragging")) openDetail(c.dataset.id); });
+    wireQuickAdd();
+    S.qsa(".tcard").forEach((c) => c.onclick = () => { if (!c.classList.contains("dragging")) openDetail(c.dataset.id); });
   }
 
   function card(t) {
@@ -57,23 +59,79 @@ window.pageInit = async (S) => {
   }
 
   function wireDnD() {
-    let dragId = null;
+    let dragEl = null;
     S.qsa(".tcard").forEach((c) => {
-      c.ondragstart = (e) => { dragId = c.dataset.id; c.classList.add("dragging"); e.dataTransfer.effectAllowed = "move"; };
-      c.ondragend = () => c.classList.remove("dragging");
+      c.ondragstart = (e) => { dragEl = c; c.classList.add("dragging"); e.dataTransfer.effectAllowed = "move"; };
+      c.ondragend = () => { c.classList.remove("dragging"); S.qsa(".col.drag-over").forEach((x) => x.classList.remove("drag-over")); };
     });
     S.qsa(".col-list").forEach((list) => {
       const col = list.closest(".col");
       list.ondragover = (e) => { e.preventDefault(); col.classList.add("drag-over"); };
-      list.ondragleave = () => col.classList.remove("drag-over");
-      list.ondrop = async (e) => {
+      list.ondragleave = (e) => { if (!list.contains(e.relatedTarget)) col.classList.remove("drag-over"); };
+      list.ondrop = (e) => {
         e.preventDefault(); col.classList.remove("drag-over");
-        const status = list.dataset.status;
-        if (!dragId) return;
-        try { await S.api(`/api/tasks/${dragId}/status`, { method: "PATCH", body: { status } }); S.toast("Moved to " + status, "ok"); load(); }
-        catch (err) { S.toast(err.detail, "err"); load(); }
-        dragId = null;
+        if (!dragEl) return;
+        const fromList = dragEl.closest(".col-list");
+        if (fromList !== list) moveCard(dragEl, list, list.dataset.status, fromList, fromList.dataset.status);
+        dragEl = null;
       };
+    });
+  }
+
+  // Recount every column header from the DOM (after an optimistic move).
+  function updateCounts() {
+    S.qsa(".col").forEach((col) => {
+      const c = col.querySelector(".col-head .c");
+      if (c) c.textContent = col.querySelectorAll(".col-list > .tcard").length;
+    });
+  }
+
+  // Optimistic move: reposition the card immediately, sync in the background, roll back on failure.
+  async function moveCard(cardEl, toList, toStatus, fromList, fromStatus, opts = {}) {
+    const id = cardEl.dataset.id;
+    toList.appendChild(cardEl);
+    updateCounts();
+    cardEl.classList.remove("just-moved");
+    requestAnimationFrame(() => cardEl.classList.add("just-moved"));   // restart the flash
+    try {
+      await S.api(`/api/tasks/${id}/status`, { method: "PATCH", body: { status: toStatus } });
+      if (!opts.silent) {
+        S.toast("Moved to " + toStatus, "ok", {
+          action: { label: "Undo", onClick: () => moveCard(cardEl, fromList, fromStatus, toList, toStatus, { silent: true }) },
+        });
+      }
+    } catch (err) {
+      fromList.appendChild(cardEl);   // roll back the optimistic move
+      updateCounts();
+      S.toast(err.detail || "Couldn't move task", "err");
+    }
+  }
+
+  // Inline "add card" at the foot of each column (AM+ only). Enter creates; Esc/empty cancels.
+  function wireQuickAdd() {
+    S.qsa(".col-add").forEach((btn) => btn.onclick = () => {
+      const status = btn.dataset.status;
+      const list = S.qs(`.col-list[data-status="${S.esc(status)}"]`);
+      const existing = list.querySelector(".quick-add input");
+      if (existing) { existing.focus(); return; }
+      const wrap = document.createElement("div");
+      wrap.className = "quick-add tcard";
+      wrap.innerHTML = `<input placeholder="Card title, then Enter…" aria-label="New card title">`;
+      list.appendChild(wrap);
+      const input = wrap.querySelector("input");
+      if (input.scrollIntoView) input.scrollIntoView({ block: "nearest" });
+      input.focus();
+      let saving = false;
+      const cancel = () => { if (!saving) wrap.remove(); };
+      const submit = async () => {
+        const title = input.value.trim();
+        if (!title || saving) { cancel(); return; }
+        saving = true; input.disabled = true;
+        try { await S.api("/api/tasks", { method: "POST", body: { title, status } }); S.toast("Card added", "ok"); load(); }
+        catch (err) { saving = false; input.disabled = false; S.toast(err.detail || "Couldn't add card", "err"); input.focus(); }
+      };
+      input.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); submit(); } else if (e.key === "Escape") cancel(); };
+      input.onblur = submit;
     });
   }
 
@@ -198,7 +256,8 @@ window.pageInit = async (S) => {
   }
 
   await load();
-  // Deep-link: /tasks?open=<id> from a notification.
-  const open = new URLSearchParams(location.search).get("open");
-  if (open) openDetail(open);
+  // Deep-links: /tasks?open=<id> (notification) and /tasks?new=1 (command palette).
+  const params = new URLSearchParams(location.search);
+  if (params.get("open")) openDetail(params.get("open"));
+  if (params.get("new") && canCreate) taskForm(null);
 };

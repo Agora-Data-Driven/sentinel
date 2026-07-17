@@ -25,5 +25,16 @@ Thumbs.db
 cookies*.txt
 c_*.txt
 
+# curl/libcurl cookie jars — these hold live session JWTs, never commit them.
+# (Match the Netscape cookie-file header rather than relying on filenames.)
+*.cookies
+cg.txt
+cm.txt
+em.txt
+pw.txt
+sa.txt
+live.txt
+backend/live.txt
+
 # Generated QR badge PNGs (encode employee tokens)
 badges/

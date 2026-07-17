@@ -56,7 +56,7 @@ def auth_config(request: Request):
     """Tells the login page which sign-in methods are available."""
     sso_ready = bool(settings.platform_sso_secret and settings.portal_login_url)
     return {
-        "dev_login_enabled": settings.dev_login_enabled,
+        "dev_login_enabled": settings.dev_login_active,
         "google_enabled": bool(settings.google_client_id),
         "app_name": settings.app_name,
         # When the portal is the front door the login page redirects there instead of
@@ -113,7 +113,7 @@ def change_password(payload: ChangePasswordIn, user: User = Depends(get_current_
 # --- Dev login (only when explicitly enabled) ------------------------------
 @router.get("/dev-users")
 def dev_users(db: Session = Depends(get_db)):
-    if not settings.dev_login_enabled:
+    if not settings.dev_login_active:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dev login disabled")
     users = db.execute(select(User).where(User.is_active.is_(True)).order_by(User.role)).scalars().all()
     return [{"id": u.id, "name": u.name, "email": u.email, "role": u.role} for u in users]
@@ -121,7 +121,7 @@ def dev_users(db: Session = Depends(get_db)):
 
 @router.post("/dev-login")
 def dev_login(payload: DevLoginIn, response: Response, db: Session = Depends(get_db)):
-    if not settings.dev_login_enabled:
+    if not settings.dev_login_active:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dev login disabled")
     user = db.get(User, payload.user_id) if payload.user_id else _user_by_email(db, payload.email or "")
     if not user or not user.is_active:
