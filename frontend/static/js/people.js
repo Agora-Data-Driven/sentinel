@@ -21,7 +21,7 @@ window.pageInit = async (S) => {
   S.qs("#f-team").onchange = (e) => { filters.team = e.target.value; load(); };
   S.qs("#f-role").onchange = (e) => { filters.role = e.target.value; load(); };
   S.qs("#f-status").onchange = (e) => { filters.status = e.target.value; load(); };
-  if (isSA) S.qs("#add").onclick = addForm;
+  if (isSA) S.qs("#add").onclick = () => addForm();  // no arg — else the click Event becomes `existing` and the form thinks it's editing
 
   async function load() {
     const q = new URLSearchParams();
