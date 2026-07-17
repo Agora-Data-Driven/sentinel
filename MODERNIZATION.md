@@ -18,7 +18,7 @@
 
 - [x] **Session 1 — Security & quick wins** (urgent) — DONE 2026-07-17
 - [~] **Session 2 — UX modernization** — 3 of 4 done (2.3 drawer deferred), 2026-07-17
-- [ ] **Session 3 — Robustness & testing**
+- [~] **Session 3 — Robustness & testing** — 3.1–3.4 done; 3.5/3.6 (ops) pending, 2026-07-17
 - [ ] **Session 4 — Real-time & build tooling** (optional / biggest)
 
 Rough total: **~4–7 hrs active work**, **~1.0–1.8M tokens**, across **3–4 sessions**.
@@ -81,22 +81,25 @@ Rough total: **~4–7 hrs active work**, **~1.0–1.8M tokens**, across **3–4 
 ## 🔵 Session 3 — Robustness & testing
 *~1.5 hrs · ~260–390k tokens · the highest value-per-token work.*
 
-- [ ] **3.1 — Pytest skeleton + first tests** ⭐ *biggest bang for buck*
-  - `pytest` + FastAPI `TestClient`. Start with highest-risk logic:
-    - **RBAC guards** — assert real 403s per role per endpoint (`app/security.py`).
-    - **Attendance engine** — late/grace boundaries around midnight Asia/Manila (timezone math).
-    - **Leave balance** updates on request → approval.
-- [ ] **3.2 — CSRF protection**
-  - Cookie-based JWT is CSRF-vulnerable by default. Add `SameSite=Strict` + custom header check
-    or a double-submit token. Frontend gets a shared `fetch` wrapper.
-- [ ] **3.3 — Alembic migrations for real**
-  - Stop relying on `create_all`. Run `alembic upgrade head` in the Dockerfile entrypoint.
-  - Baseline migration from current models.
-- [ ] **3.4 — CI pipeline** (`.github/workflows/ci.yml`)
-  - `ruff` lint + `pytest` + docker build on every push/PR.
-- [ ] **3.5 — Error tracking + structured logging**
+- [x] **3.1 — Pytest skeleton + first tests** ⭐ — DONE
+  - `backend/tests/` with `conftest.py` (throwaway SQLite, fresh schema per test, cookie auth,
+    factories). 45 tests: RBAC 401/403 per role incl. the AM-only priority rule; attendance
+    late/grace across the UTC↔Manila boundary + punch state machine; leave day-count/balance logic.
+    `pytest.ini` + `requirements-dev.txt`.
+- [x] **3.2 — CSRF protection** — DONE
+  - Double-submit token: `CSRFMiddleware` issues a readable `sentinel_csrf` cookie and requires a
+    matching `X-CSRF-Token` header on unsafe cookie-authed requests (Bearer + kiosk exempt).
+    Frontend `api()` echoes it. 6 CSRF tests.
+- [x] **3.3 — Alembic migrations for real** — DONE
+  - Baseline migration `2ea39b27b42d_initial_schema`; `backend/entrypoint.sh` runs
+    `alembic upgrade head` before uvicorn; Dockerfile CMD uses it. `.gitattributes` keeps `.sh` LF.
+    create_all kept as an idempotent safety net.
+- [x] **3.4 — CI pipeline** (`.github/workflows/ci.yml`) — DONE
+  - Jobs: backend (ruff error-level lint + pytest), frontend (node --check every page script),
+    docker (build the image). Runs on push-to-main + PRs.
+- [ ] **3.5 — Error tracking + structured logging** — not started
   - Sentry free tier (or GCP Error Reporting since we're on Cloud Run).
-- [ ] **3.6 — Cloud SQL automated backups + a restore test**
+- [ ] **3.6 — Cloud SQL automated backups + a restore test** — not started (ops task, needs GCP access)
   - Attendance/payroll data can't be regenerated from `seed.py`.
 
 ---
@@ -145,3 +148,9 @@ Rough total: **~4–7 hrs active work**, **~1.0–1.8M tokens**, across **3–4 
   and board DnD + quick-add (17 checks) headlessly. Kept HTML5 DnD instead of SortableJS (CSP blocks
   CDNs; the built-in works). 2.3 (modal→drawer) deferred as a layout rewrite needing browser visual
   QA. Two jsdom-surfaced robustness fixes shipped: guarded `scrollIntoView` in the palette + quick-add.
+- 2026-07-17 — **Session 3: 3.1–3.4 shipped.** 45 backend tests (pytest) covering RBAC, attendance
+  timezone/state, leave, and CSRF; double-submit CSRF middleware; real Alembic baseline + startup
+  migration; GitHub Actions CI. Mid-session, synced with `origin/main` (Academy Phase B: portal SSO
+  + Academy tab) — auto-merged with no conflicts, verified all suites still green. Added
+  `.gitattributes` (LF for `.sh`). 3.5 (Sentry) and 3.6 (Cloud SQL backups) are ops tasks left for a
+  human with GCP access. Branch `hardening/session-1` still unpushed/unmerged.
