@@ -15,7 +15,7 @@ import hmac
 import time
 
 from fastapi import APIRouter, Header, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from fastapi import Depends
 
@@ -62,4 +62,37 @@ def internal_people(
             {"email": u.email, "name": u.name or u.email, "role": u.role}
             for u in rows
         ]
+    }
+
+
+@router.get("/user-lookup")
+def internal_user_lookup(
+    email: str,
+    x_academy_ts: str | None = Header(default=None),
+    x_academy_sig: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    """Is `email` a Sentinel user, and is the account active?
+
+    This is what makes Sentinel the source of truth for "who may sign in with Google": the portal
+    (the one app that runs the OAuth flow) calls this on a verified email it doesn't already know,
+    and signs the caller in when we say the user is active. Adding someone via People → Add Employee
+    is therefore all it takes to enable their Google login; deactivating them blocks it immediately.
+
+    Returns identity only ({found, active, name, role}) — never anything else. HMAC-gated exactly
+    like /people (shared `platform-sso-key`, timestamp replay window), so only a caller holding the
+    secret can probe the directory.
+    """
+    _verify(x_academy_ts, x_academy_sig, "user-lookup")
+    norm = (email or "").strip().lower()
+    user = db.execute(
+        select(User).where(func.lower(User.email) == norm)
+    ).scalars().first() if norm else None
+    if user is None:
+        return {"found": False, "active": False, "name": "", "role": ""}
+    return {
+        "found": True,
+        "active": bool(user.is_active),
+        "name": user.name or user.email,
+        "role": user.role,
     }
