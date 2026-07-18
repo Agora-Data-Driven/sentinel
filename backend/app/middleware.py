@@ -15,6 +15,7 @@ import secrets
 import time
 from collections import defaultdict, deque
 from threading import Lock
+from urllib.parse import urlsplit
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -51,6 +52,19 @@ def _csp() -> str:
     )
 
 
+# The Academy tab embeds the mastery engine (a cross-origin *.agoradatadriven.com host) in an iframe,
+# and its Study Assistant uses the microphone for voice input. A cross-origin iframe can only get the
+# mic if BOTH the frame carries allow="microphone" AND the top-level document *delegates* the feature
+# to that origin here. `microphone=()` (empty allowlist) blocks it for everyone — including the frame —
+# so the mic silently fails with no prompt. Permissions-Policy origins must be exact (no wildcards),
+# so we derive the mastery origin from SKILL_MASTERY_URL. Camera stays self-only for the kiosk.
+def _permissions_policy() -> str:
+    parts = urlsplit(settings.skill_mastery_url)
+    mastery_origin = f"{parts.scheme}://{parts.netloc}" if parts.scheme and parts.netloc else ""
+    mic_allow = f'(self "{mastery_origin}")' if mastery_origin else "(self)"
+    return f"camera=(self), microphone={mic_allow}, geolocation=()"
+
+
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         response: Response = await call_next(request)
@@ -62,8 +76,9 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         h.setdefault("X-Frame-Options", "DENY" if settings.csp_frame_ancestors == "'none'" else "SAMEORIGIN")
         h.setdefault("X-Content-Type-Options", "nosniff")
         h.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
-        # Kiosk needs the camera on its own origin; nothing else is granted.
-        h.setdefault("Permissions-Policy", "camera=(self), microphone=(), geolocation=()")
+        # Kiosk needs the camera on its own origin; the mic is delegated to the embedded mastery
+        # engine so the Academy Study Assistant's voice input works inside its iframe.
+        h.setdefault("Permissions-Policy", _permissions_policy())
         hsts = settings.hsts_enabled if settings.hsts_enabled is not None else settings.secure_cookies
         if hsts:
             h.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
