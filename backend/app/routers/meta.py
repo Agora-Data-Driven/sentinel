@@ -77,6 +77,10 @@ def academy_courses(user: User = Depends(get_current_user)):
     return {
         "programs": data.get("programs", []),
         "engineUrl": embed,
+        # The mastery engine's own verdict on whether this user is an Academy admin (by email).
+        # The Academy tab uses it to default admins straight to the admin view.
+        "admin": bool(data.get("admin")),
+        "adminUrl": (base + "/academy-admin.html?embed=1") if base else "",
     }
 
 

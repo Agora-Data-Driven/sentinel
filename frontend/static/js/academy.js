@@ -21,6 +21,8 @@ window.pageInit = async (S) => {
 
   const programs = data.programs || [];
   const engineUrl = data.engineUrl || "";
+  const isAdmin = !!data.admin;                 // the engine's own verdict (by email)
+  const adminUrl = data.adminUrl || "";         // academy-admin.html?embed=1, when configured
 
   const ringColor = (p) => (p >= 80 ? "#2E7D32" : p >= 50 ? "#C9A227" : "#B3261E");
   const ring = (pct) => {
@@ -67,6 +69,17 @@ window.pageInit = async (S) => {
     </style>
 
     <div class="ac-wrap" id="ac-dash">
+      ${isAdmin && adminUrl
+        ? `<div class="card ac-assign" style="background:linear-gradient(120deg, rgba(22,163,74,.12), rgba(12,16,34,.06))">
+             <div style="flex:1;min-width:220px">
+               <span class="ac-badge" style="background:#16a34a">Academy Admin</span>
+               <h3>Manage the Academy</h3>
+               <p style="margin:0;color:var(--muted)">Build curriculum, attach transcripts, generate the question bank, and enrol people.</p>
+             </div>
+             <button class="btn" id="ac-admin-open" style="background:#16a34a;color:#fff;font-weight:700">Open admin &rarr;</button>
+           </div>`
+        : ""}
+
       <div class="card ac-assign">
         <div style="flex:1;min-width:220px">
           <span class="ac-badge">Assignment of the Day</span>
@@ -95,12 +108,23 @@ window.pageInit = async (S) => {
   const eng = S.qs("#ac-engine");
   const frame = S.qs("#ac-frame");
 
-  const openEngine = (program) => {
-    if (!engineUrl) { S.toast ? S.toast("Learning engine not configured") : alert("Learning engine not configured"); return; }
-    frame.src = engineUrl + (program ? "&program=" + encodeURIComponent(program) : "");
+  const openFrame = (url) => {
+    frame.src = url;
     dash.style.display = "none";
     eng.classList.add("on");
   };
+  const openEngine = (program) => {
+    if (!engineUrl) { S.toast ? S.toast("Learning engine not configured") : alert("Learning engine not configured"); return; }
+    openFrame(engineUrl + (program ? "&program=" + encodeURIComponent(program) : ""));
+  };
+  const openAdmin = () => { if (adminUrl) openFrame(adminUrl); };
+
   view.querySelectorAll(".ac-course").forEach((b) => { b.onclick = () => openEngine(b.dataset.program); });
+  const adminBtn = S.qs("#ac-admin-open");
+  if (adminBtn) adminBtn.onclick = openAdmin;
   S.qs("#ac-back").onclick = () => { eng.classList.remove("on"); dash.style.display = ""; frame.src = "about:blank"; };
+
+  // Admins land straight in the Academy admin view; "← Back to courses" returns to the dashboard
+  // (their own programs + the admin launcher) whenever they want the learner side.
+  if (isAdmin && adminUrl) openAdmin();
 };
