@@ -19,7 +19,9 @@ window.pageInit = async (S) => {
     return;
   }
 
-  const programs = data.programs || [];
+  // Career/technical programs only — personal-growth/philosophy programs live under the
+  // Reading & Philosophy tab (same engine, separate subject). Untagged programs default to career.
+  const programs = (data.programs || []).filter((p) => (p.category || "career") !== "growth");
   const engineUrl = data.engineUrl || "";
   const isAdmin = !!data.admin;                 // the engine's own verdict (by email)
   const adminUrl = data.adminUrl || "";         // academy-admin.html?embed=1, when configured
