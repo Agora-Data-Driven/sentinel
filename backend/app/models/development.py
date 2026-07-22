@@ -121,6 +121,26 @@ class GrowthItem(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
+class Skill(Base):
+    """A skill the worker HAS — often from real project experience, not (only) the Mastery Engine.
+
+    The whole point: the AI coach should know you can do SQL / pandas / GitHub even though you chose to
+    prove those on the job rather than drill them in the engine. `source` records how it was gained so
+    the coach can distinguish "proven on real projects" from "practised in the engine".
+    """
+
+    __tablename__ = "skills"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    level: Mapped[str] = mapped_column(String(16), default="Intermediate")  # Beginner|Intermediate|Advanced
+    source: Mapped[str] = mapped_column(String(24), default="project")  # project|mastery_engine|course|certification|other
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
 class ReadingItem(Base):
     """A book/philosophy in the company canon (top-down, admin-curated required reading)."""
 

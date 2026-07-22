@@ -23,6 +23,7 @@ from ..models import (
     ProfessionalGoal,
     ReadingItem,
     ReadingProgress,
+    Skill,
     User,
 )
 from ..serializers import (
@@ -33,6 +34,7 @@ from ..serializers import (
     growth_item_dict,
     personal_record_dict,
     reading_item_dict,
+    skill_dict,
     user_public,
 )
 
@@ -98,6 +100,14 @@ def _growth(db: Session, user_id: int) -> list[GrowthItem]:
     )
 
 
+def _skills(db: Session, user_id: int) -> list[Skill]:
+    return list(
+        db.execute(
+            select(Skill).where(Skill.user_id == user_id).order_by(Skill.source, Skill.name)
+        ).scalars()
+    )
+
+
 def _profile(db: Session, user_id: int) -> DevelopmentProfile | None:
     return db.execute(
         select(DevelopmentProfile).where(DevelopmentProfile.user_id == user_id)
@@ -133,6 +143,7 @@ def full_profile(db: Session, user: User) -> dict:
             "achievements": [achievement_dict(a) for a in _achievements(db, user.id)],
             "goals": [goal_dict(g) for g in _goals(db, user.id)],
         },
+        "skills": [skill_dict(s) for s in _skills(db, user.id)],
         "growth": [growth_item_dict(g) for g in _growth(db, user.id)],
         "reading": reading_with_progress(db, user.id),
     }
@@ -151,13 +162,27 @@ def holistic_digest(db: Session, user: User) -> dict:
     profile = _profile(db, user.id)
     achievements = _achievements(db, user.id)
     goals = _goals(db, user.id)
+    skills = _skills(db, user.id)
     growth = _growth(db, user.id)
     reading = reading_with_progress(db, user.id)
+
+    resume = (profile.resume_text or "").strip() if profile else ""
+    resume_excerpt = (resume[:700] + ("…" if len(resume) > 700 else "")) if resume else None
 
     reading_now = [r["title"] for r in reading if r["progress"]["status"] == "reading"][:8]
     reading_done = [r["title"] for r in reading if r["progress"]["status"] == "done"][:12]
     obstacles = [g.title for g in growth if g.kind == "obstacle" and g.status != "archived"][:6]
     reflections = [g.title for g in growth if g.kind in ("reflection", "note")][:6]
+
+    # Items with their ids, for the assistant's edit actions (update/delete need the id).
+    editable = {
+        "prs": [{"id": p.id, "label": _pr_line(p)} for p in prs],
+        "goals": [{"id": g.id, "label": f"{g.title} ({g.status}, {g.progress_pct}%)"} for g in goals],
+        "achievements": [{"id": a.id, "label": a.title} for a in achievements],
+        "skills": [{"id": s.id, "label": f"{s.name} ({s.level}, {s.source})"} for s in skills],
+        "growth": [{"id": g.id, "label": f"({g.kind}) {g.title}"} for g in growth[:15]],
+        "reading": [{"id": r["id"], "label": r["title"]} for r in reading],
+    }
 
     return {
         "name": user.name,
@@ -169,7 +194,7 @@ def holistic_digest(db: Session, user: User) -> dict:
         },
         "career": {
             "headline": profile.headline if profile else None,
-            "has_resume": bool(profile and profile.resume_text),
+            "resume_excerpt": resume_excerpt,
             "achievements": [a.title for a in achievements[:10]],
             "goals": [
                 {
@@ -181,6 +206,10 @@ def holistic_digest(db: Session, user: User) -> dict:
                 for g in goals[:10]
             ],
         },
+        "skills": [
+            {"name": s.name, "level": s.level, "source": s.source} for s in skills[:40]
+        ],
         "reading": {"reading_now": reading_now, "done": reading_done},
         "growth": {"obstacles": obstacles, "reflections": reflections},
+        "editable": editable,
     }

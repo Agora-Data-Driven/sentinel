@@ -28,6 +28,7 @@ from .models import (
     ProfessionalGoal,
     ReadingItem,
     ReadingProgress,
+    Skill,
     Task,
     TaskComment,
     TaskHistory,
@@ -317,6 +318,16 @@ def growth_item_dict(g: GrowthItem) -> dict:
         "detail": g.detail,
         "status": g.status,
         "created_at": _iso(g.created_at),
+    }
+
+
+def skill_dict(s: Skill) -> dict:
+    return {
+        "id": s.id,
+        "name": s.name,
+        "level": s.level,
+        "source": s.source,
+        "note": s.note,
     }
 
 

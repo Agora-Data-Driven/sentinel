@@ -367,7 +367,7 @@
         const f = document.createElement("iframe");
         f.id = "coach-frame";
         f.allow = "microphone; clipboard-write";
-        f.src = base;                              // {engine}/?embed=assistant
+        f.src = base + "&actions=1";               // {engine}/?embed=assistant&actions=1
         qs("#coach-frame-wrap", panel).appendChild(f);
         framed = true;
       }
@@ -378,6 +378,65 @@
     qs("#coach-x", panel).onclick = close;
     // Let a page deep-link into the coach (e.g. the Development hub's "Ask your coach" button).
     window.SentinelOpenCoach = open;
+
+    // --- Coach edit-actions: execute an assistant-proposed change in the USER's session ----------
+    // The coach (in the iframe) proposes an edit; the user taps Approve in the chat; only THEN does
+    // the iframe postMessage it here. We execute it against the same /api/development endpoints the
+    // user uses (their cookie + CSRF), then report the result back so the chat card resolves. Every
+    // op is a fixed endpoint with a whitelisted body — the coach can't reach anything else.
+    const coachOrigin = new URL(base, location.href).origin;
+    const DEV = "/api/development";
+    const pick = (o, keys) => { const r = {}; keys.forEach((k) => { if (o && o[k] !== undefined) r[k] = o[k]; }); return r; };
+    const PR = ["exercise_name", "weight_value", "weight_unit", "reps", "achieved_on", "notes"];
+    const GOAL = ["title", "description", "target_date", "status", "progress_pct"];
+    const ACH = ["title", "description", "achieved_on"];
+    const GROW = ["kind", "title", "detail", "status"];
+    const SKILL = ["name", "level", "source", "note"];
+    const METRIC = ["body_fat_pct", "weight_kg", "date", "notes"];
+    const RESUME = ["headline", "resume_text", "resume_file_url"];
+    const READ = ["status", "reflection", "rating"];
+
+    function coachExecute(action) {
+      const a = action || {}, args = a.args || {}, id = args.id;
+      switch (a.op) {
+        case "add_body_metric": return api(`${DEV}/body-metrics`, { method: "POST", body: pick(args, METRIC) });
+        case "add_pr": return api(`${DEV}/prs`, { method: "POST", body: pick(args, PR) });
+        case "update_pr": return api(`${DEV}/prs/${id}`, { method: "PATCH", body: pick(args, PR) });
+        case "delete_pr": return api(`${DEV}/prs/${id}`, { method: "DELETE" });
+        case "update_resume": return api(`${DEV}/resume`, { method: "PATCH", body: pick(args, RESUME) });
+        case "add_achievement": return api(`${DEV}/achievements`, { method: "POST", body: pick(args, ACH) });
+        case "update_achievement": return api(`${DEV}/achievements/${id}`, { method: "PATCH", body: pick(args, ACH) });
+        case "delete_achievement": return api(`${DEV}/achievements/${id}`, { method: "DELETE" });
+        case "add_goal": return api(`${DEV}/goals`, { method: "POST", body: pick(args, GOAL) });
+        case "update_goal": return api(`${DEV}/goals/${id}`, { method: "PATCH", body: pick(args, GOAL) });
+        case "delete_goal": return api(`${DEV}/goals/${id}`, { method: "DELETE" });
+        case "add_growth": return api(`${DEV}/growth`, { method: "POST", body: pick(args, GROW) });
+        case "update_growth": return api(`${DEV}/growth/${id}`, { method: "PATCH", body: pick(args, GROW) });
+        case "delete_growth": return api(`${DEV}/growth/${id}`, { method: "DELETE" });
+        case "add_skill": return api(`${DEV}/skills`, { method: "POST", body: pick(args, SKILL) });
+        case "update_skill": return api(`${DEV}/skills/${id}`, { method: "PATCH", body: pick(args, SKILL) });
+        case "delete_skill": return api(`${DEV}/skills/${id}`, { method: "DELETE" });
+        case "set_reading_progress": return api(`${DEV}/reading/${args.reading_item_id}/progress`, { method: "PUT", body: pick(args, READ) });
+        default: return Promise.reject(new Error("Unknown action: " + a.op));
+      }
+    }
+
+    window.addEventListener("message", async (e) => {
+      const d = e.data;
+      if (!d || d.type !== "agora-coach-action") return;
+      if (e.origin !== coachOrigin) return;   // only our own engine iframe may drive edits
+      const reply = (ok, message) => { try { e.source.postMessage({ type: "agora-coach-action-result", id: d.id, ok, message }, e.origin); } catch (x) { /* frame gone */ } };
+      try {
+        await coachExecute(d.action);
+        const label = (d.action && d.action.summary) || "Updated";
+        reply(true, label);
+        toast("Coach: " + label, "ok");
+        // Refresh the Development hub if it's the current page, so the change shows immediately.
+        if (window.SentinelReloadDevelopment) window.SentinelReloadDevelopment();
+      } catch (err) {
+        reply(false, err.detail || err.message || "Couldn't apply that");
+      }
+    });
   }
 
   function startClock() {

@@ -21,6 +21,7 @@ from ..models import (
     ProfessionalGoal,
     ReadingItem,
     ReadingProgress,
+    Skill,
     User,
 )
 from ..schemas import (
@@ -37,6 +38,8 @@ from ..schemas import (
     ReadingItemUpdateIn,
     ReadingProgressIn,
     ResumeIn,
+    SkillIn,
+    SkillUpdateIn,
 )
 from ..security import get_current_user, require_min_role
 from ..serializers import (
@@ -47,6 +50,7 @@ from ..serializers import (
     growth_item_dict,
     personal_record_dict,
     reading_item_dict,
+    skill_dict,
 )
 from ..services import development as dev_svc
 from ..utils.time import today_ph, utcnow
@@ -230,6 +234,29 @@ def update_growth(item_id: int, payload: GrowthItemUpdateIn, user: User = Depend
 @router.delete("/growth/{item_id}", status_code=204)
 def delete_growth(item_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     db.delete(_own(db, GrowthItem, item_id, user))
+    db.commit()
+
+
+# --- Skills -----------------------------------------------------------------
+@router.post("/skills")
+def add_skill(payload: SkillIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    s = Skill(user_id=user.id, name=payload.name, level=payload.level, source=payload.source, note=payload.note)
+    db.add(s)
+    db.commit()
+    return skill_dict(s)
+
+
+@router.patch("/skills/{skill_id}")
+def update_skill(skill_id: int, payload: SkillUpdateIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    s = _own(db, Skill, skill_id, user)
+    _apply(s, payload, ["name", "level", "source", "note"])
+    db.commit()
+    return skill_dict(s)
+
+
+@router.delete("/skills/{skill_id}", status_code=204)
+def delete_skill(skill_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    db.delete(_own(db, Skill, skill_id, user))
     db.commit()
 
 

@@ -215,6 +215,20 @@ class ReadingProgressIn(BaseModel):
     rating: int | None = Field(default=None, ge=1, le=5)
 
 
+class SkillIn(BaseModel):
+    name: str
+    level: str = "Intermediate"  # Beginner | Intermediate | Advanced
+    source: str = "project"  # project | mastery_engine | course | certification | other
+    note: str | None = None
+
+
+class SkillUpdateIn(BaseModel):
+    name: str | None = None
+    level: str | None = None
+    source: str | None = None
+    note: str | None = None
+
+
 # --- Tasks -----------------------------------------------------------------
 class ChecklistItem(BaseModel):
     text: str

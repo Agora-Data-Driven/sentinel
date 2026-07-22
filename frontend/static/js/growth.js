@@ -13,6 +13,15 @@ window.pageInit = async (S) => {
   let courses = null;
 
   const V = "#5C4BD0";               // violet accent for the hub
+  const SKILL_LEVELS = ["Beginner", "Intermediate", "Advanced"];
+  const SKILL_SOURCES = [
+    { v: "project", t: "Project experience" },
+    { v: "mastery_engine", t: "Mastery Engine" },
+    { v: "course", t: "Course" },
+    { v: "certification", t: "Certification" },
+    { v: "other", t: "Other" },
+  ];
+  const srcLabel = (v) => (SKILL_SOURCES.find((s) => s.v === v) || {}).t || v;
 
   // A tiny dependency-free progress ring.
   function ring(pct, color) {
@@ -128,7 +137,30 @@ window.pageInit = async (S) => {
             ${g.target_date ? `<div class="sub" style="margin-top:4px">Target ${esc(g.target_date)}</div>` : ""}
           </div>`).join("") : '<div class="empty">No goals yet.</div>'}
         <div class="section-label" style="margin:14px 0 8px">Achievements ${readOnly ? "" : `<a href="#" id="add-ach" class="linky">+ add</a>`}</div>
-        ${ach.length ? `<ul class="tickitems">${ach.map((a) => `<li class="row between" style="padding:5px 0"><span>${S.ICON.check}${esc(a.title)}${a.achieved_on ? ` <span class="muted">· ${esc(a.achieved_on)}</span>` : ""}</span>${readOnly ? "" : `<a href="#" class="linky danger" data-del-ach="${a.id}">delete</a>`}</li>`).join("")}</ul>` : '<div class="empty">No achievements yet.</div>'}
+        ${ach.length ? `<ul class="tickitems">${ach.map((a) => `<li style="padding:6px 0;display:block">
+          <div class="row between"><span>${S.ICON.check}${esc(a.title)}${a.achieved_on ? ` <span class="muted">· ${esc(a.achieved_on)}</span>` : ""}</span>${readOnly ? "" : `<a href="#" class="linky danger" data-del-ach="${a.id}">delete</a>`}</div>
+          ${a.description ? `<div class="sub" style="margin-left:23px">${esc(a.description)}</div>` : ""}</li>`).join("")}</ul>` : '<div class="empty">No achievements yet.</div>'}
+      </div></div>`;
+  }
+
+  function skillsCard() {
+    const skills = data.skills || [];
+    // Group by source so "project experience" reads distinctly from engine-practised.
+    const groups = {};
+    skills.forEach((s) => { (groups[s.source] = groups[s.source] || []).push(s); });
+    const order = SKILL_SOURCES.map((s) => s.v).filter((v) => groups[v]);
+    return `<div class="card">
+      <div class="card-head"><h3>${S.ICON.target}Skills</h3>${readOnly ? "" : `<button class="btn sm ghost" id="add-skill">${S.ICON.plus}Add skill</button>`}</div>
+      <div class="card-body">
+        <div class="sub" style="margin-bottom:8px">What you can already do — including skills you proved on real projects, not just in the Academy. Your coach uses these.</div>
+        ${skills.length ? order.map((src) => `
+          <div style="margin-bottom:10px">
+            <div class="section-label" style="margin-bottom:6px">${esc(srcLabel(src))}</div>
+            <div class="row wrap" style="gap:6px">${groups[src].map((s) => `
+              <span class="chip" style="cursor:${readOnly ? "default" : "pointer"}" ${readOnly ? "" : `data-edit-skill="${s.id}"`} title="${esc(s.level)}${s.note ? " · " + esc(s.note) : ""}">
+                ${esc(s.name)} <span class="muted" style="font-size:11px">${esc(s.level)}</span>
+                ${readOnly ? "" : `<a href="#" class="linky danger" data-del-skill="${s.id}" style="margin-left:4px">✕</a>`}</span>`).join("")}</div>
+          </div>`).join("") : '<div class="empty">No skills listed yet.</div>'}
       </div></div>`;
   }
 
@@ -183,7 +215,7 @@ window.pageInit = async (S) => {
 
       <div class="dev-cols" style="display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start">
         <div style="display:flex;flex-direction:column;gap:16px">${physicalCard()}${readingCard()}${learningCard()}</div>
-        <div style="display:flex;flex-direction:column;gap:16px">${careerCard()}${journalCard()}</div>
+        <div style="display:flex;flex-direction:column;gap:16px">${careerCard()}${skillsCard()}${journalCard()}</div>
       </div>`;
 
     // single-column on narrow screens
@@ -217,9 +249,17 @@ window.pageInit = async (S) => {
 
     const aa = S.qs("#add-ach"); if (aa) aa.onclick = (e) => { e.preventDefault(); formModal("Add achievement", [
       { name: "title", label: "Title", ph: "e.g. Shipped the Atrium assistant" },
+      { name: "description", label: "Description", type: "textarea", rows: 3, ph: "What you did and the impact (optional)" },
       { name: "achieved_on", label: "Date", type: "date" },
-    ], (o) => api("/api/development/achievements", { method: "POST", body: { title: o.title, achieved_on: o.achieved_on || null } })); };
+    ], (o) => api("/api/development/achievements", { method: "POST", body: { title: o.title, description: o.description || null, achieved_on: o.achieved_on || null } })); };
     S.qsa("[data-del-ach]").forEach((a) => a.onclick = (e) => { e.preventDefault(); del(`/api/development/achievements/${a.dataset.delAch}`); });
+
+    const ask = S.qs("#add-skill"); if (ask) ask.onclick = () => skillForm();
+    S.qsa("[data-edit-skill]").forEach((el) => el.onclick = (e) => {
+      if (e.target.closest("[data-del-skill]")) return;  // let the ✕ handle its own click
+      e.preventDefault(); skillForm((data.skills || []).find((s) => s.id == el.dataset.editSkill));
+    });
+    S.qsa("[data-del-skill]").forEach((a) => a.onclick = (e) => { e.preventDefault(); e.stopPropagation(); del(`/api/development/skills/${a.dataset.delSkill}`); });
 
     const agr = S.qs("#add-growth"); if (agr) agr.onclick = () => formModal("Add to journal", [
       { name: "kind", label: "Kind", type: "select", value: "reflection", options: [{ v: "reflection", t: "Reflection" }, { v: "obstacle", t: "Obstacle" }, { v: "note", t: "Note" }] },
@@ -255,6 +295,18 @@ window.pageInit = async (S) => {
     });
   }
 
+  function skillForm(sk) {
+    formModal(sk ? "Edit skill" : "Add skill", [
+      { name: "name", label: "Skill", value: sk && sk.name, ph: "e.g. SQL, pandas, GitHub" },
+      { name: "level", label: "Proficiency", type: "select", value: (sk && sk.level) || "Intermediate", options: SKILL_LEVELS.map((l) => ({ v: l, t: l })) },
+      { name: "source", label: "How you gained it", type: "select", value: (sk && sk.source) || "project", options: SKILL_SOURCES },
+      { name: "note", label: "Note", type: "textarea", rows: 2, value: sk && sk.note, ph: "e.g. built the whole Upwork pipeline with it (optional)" },
+    ], (o) => {
+      const body = { name: o.name, level: o.level, source: o.source, note: o.note || null };
+      return sk ? api(`/api/development/skills/${sk.id}`, { method: "PATCH", body }) : api("/api/development/skills", { method: "POST", body });
+    });
+  }
+
   async function del(path) {
     try { await api(path, { method: "DELETE" }); load(); }
     catch (e) { S.toast(e.detail || "Couldn't delete", "err"); }
@@ -272,5 +324,7 @@ window.pageInit = async (S) => {
     render();
   }
 
+  // Let the global Coach refresh this hub after it applies an approved edit.
+  if (!readOnly) window.SentinelReloadDevelopment = load;
   load();
 };

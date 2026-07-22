@@ -29,6 +29,7 @@ from .development import (
     ProfessionalGoal,
     ReadingItem,
     ReadingProgress,
+    Skill,
 )
 from .gym import ExerciseLibrary, GymExercise, GymLog
 from .leave import LeaveBalance, LeaveRequest, LeaveType
@@ -62,6 +63,7 @@ __all__ = [
     "CareerAchievement",
     "ProfessionalGoal",
     "GrowthItem",
+    "Skill",
     "ReadingItem",
     "ReadingProgress",
     "Notification",
