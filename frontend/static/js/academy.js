@@ -115,7 +115,9 @@ window.pageInit = async (S) => {
   };
   const openEngine = (program) => {
     if (!engineUrl) { S.toast ? S.toast("Learning engine not configured") : alert("Learning engine not configured"); return; }
-    openFrame(engineUrl + (program ? "&program=" + encodeURIComponent(program) : ""));
+    // home=quiz opens the engine straight into the course/quiz builder — progress now lives in the
+    // Development Overview, so we skip the engine's own "My Progress" landing.
+    openFrame(engineUrl + "&home=quiz" + (program ? "&program=" + encodeURIComponent(program) : ""));
   };
   const openAdmin = () => { if (adminUrl) openFrame(adminUrl); };
 
@@ -124,7 +126,9 @@ window.pageInit = async (S) => {
   if (adminBtn) adminBtn.onclick = openAdmin;
   S.qs("#ac-back").onclick = () => { eng.classList.remove("on"); dash.style.display = ""; frame.src = "about:blank"; };
 
-  // Admins land straight in the Academy admin view; "← Back to courses" returns to the dashboard
-  // (their own programs + the admin launcher) whenever they want the learner side.
+  // Admins land straight in the Academy admin view; everyone else opens straight into their courses
+  // (skipping the progress dashboard — progress lives in the Development Overview now). "← Back to
+  // courses" still returns to the native list (programs + admin launcher) whenever they want it.
   if (isAdmin && adminUrl) openAdmin();
+  else if (engineUrl) openEngine();
 };
