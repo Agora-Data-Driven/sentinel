@@ -17,6 +17,7 @@ window.pageInit = async (S) => {
   const tabs = isMgr ? ["My workout", "Team compliance"] : ["My workout"];
   view.innerHTML = `<div class="pagehead"><div><h2>Gym Tracker</h2>
       <div class="lead">Log your training, Hevy-style. Aim for 1h+ to stay compliant.</div></div></div>
+    <div id="gym-body"></div>
     <div class="tabs" id="tabs">${tabs.map((t, i) => `<button class="${i ? "" : "active"}" data-tab="${t}">${t}</button>`).join("")}</div>
     <div id="tabc"></div>`;
   S.qsa("#tabs button").forEach((b) => b.onclick = () => {
@@ -250,5 +251,72 @@ window.pageInit = async (S) => {
   }
   function stopTimer() { if (state.timer) { clearInterval(state.timer); state.timer = null; } }
 
+  // --- Body stats (body fat / weight / PRs) — shared with the Development hub ---------------------
+  const _num = (v) => (v === "" || v == null ? null : Number(v));
+
+  async function renderBodyStats() {
+    const box = S.qs("#gym-body"); if (!box) return;
+    let data;
+    try { data = await S.api("/api/development/me"); } catch (e) { box.innerHTML = ""; return; }
+    const p = data.physical || {}, latest = p.latest, prs = p.prs || [];
+    const bf = latest && latest.body_fat_pct != null ? latest.body_fat_pct + "%" : "—";
+    const wt = latest && latest.weight_kg != null ? latest.weight_kg + " kg" : "—";
+    box.innerHTML = `<div class="card pad" style="margin-bottom:16px">
+      <div class="row between" style="align-items:center;flex-wrap:wrap;gap:10px">
+        <div class="row" style="gap:26px">
+          <div><div class="section-label">Body fat</div><strong style="font-size:20px">${bf}</strong></div>
+          <div><div class="section-label">Weight</div><strong style="font-size:20px">${wt}</strong></div>
+          <div><div class="section-label">PRs</div><strong style="font-size:20px">${prs.length}</strong></div>
+        </div>
+        <div class="row"><button class="btn sm ghost" id="gb-log">${S.ICON.plus}Update body stats</button>
+          <button class="btn sm ghost" id="gb-pr">${S.ICON.trophy}Add PR</button></div>
+      </div>
+      ${prs.length ? `<div class="row wrap" style="margin-top:12px;gap:6px">${prs.map((r) => `
+        <span class="chip">${S.esc(r.exercise_name)}: ${r.weight_value}${S.esc(r.weight_unit)}×${r.reps}
+          <a href="#" class="linky danger" data-delpr="${r.id}" style="margin-left:5px">✕</a></span>`).join("")}</div>` : ""}</div>`;
+    S.qs("#gb-log").onclick = statForm;
+    S.qs("#gb-pr").onclick = () => prForm();
+    S.qsa("[data-delpr]").forEach((a) => a.onclick = async (e) => {
+      e.preventDefault();
+      try { await S.api(`/api/development/prs/${a.dataset.delpr}`, { method: "DELETE" }); renderBodyStats(); }
+      catch (err) { S.toast(err.detail || "Couldn't delete", "err"); }
+    });
+  }
+
+  function statForm() {
+    const m = S.modal({
+      title: "Update body stats",
+      body: `<div class="formgrid">
+        <label class="field"><span>Body fat %</span><input id="bs-bf" type="number" step="0.1" placeholder="e.g. 18.5"></label>
+        <label class="field"><span>Weight (kg)</span><input id="bs-wt" type="number" step="0.1" placeholder="e.g. 74"></label></div>`,
+      footer: `<button class="btn ghost" id="bs-x">Cancel</button><button class="btn primary" id="bs-save">Save</button>`,
+    });
+    S.qs("#bs-x").onclick = m.close;
+    S.qs("#bs-save").onclick = async () => {
+      try { await S.api("/api/development/body-metrics", { method: "POST", body: { body_fat_pct: _num(S.qs("#bs-bf").value), weight_kg: _num(S.qs("#bs-wt").value) } });
+        m.close(); renderBodyStats(); S.toast("Saved", "ok"); } catch (e) { S.toast(e.detail || "Couldn't save", "err"); }
+    };
+  }
+
+  function prForm() {
+    const m = S.modal({
+      title: "Add personal record",
+      body: `<div class="formgrid">
+        <label class="field"><span>Exercise</span><input id="pr-name" placeholder="e.g. Bench Press"></label>
+        <label class="field"><span>Weight</span><input id="pr-w" type="number" step="0.5"></label>
+        <label class="field"><span>Unit</span><select id="pr-u"><option>kg</option><option>lb</option></select></label>
+        <label class="field"><span>Reps</span><input id="pr-r" type="number" value="1"></label></div>`,
+      footer: `<button class="btn ghost" id="pr-x">Cancel</button><button class="btn primary" id="pr-save">Save</button>`,
+    });
+    S.qs("#pr-x").onclick = m.close;
+    S.qs("#pr-save").onclick = async () => {
+      const name = S.qs("#pr-name").value.trim();
+      if (!name) return S.toast("Exercise is required", "err");
+      try { await S.api("/api/development/prs", { method: "POST", body: { exercise_name: name, weight_value: _num(S.qs("#pr-w").value) || 0, weight_unit: S.qs("#pr-u").value, reps: _num(S.qs("#pr-r").value) || 1 } });
+        m.close(); renderBodyStats(); S.toast("PR added", "ok"); } catch (e) { S.toast(e.detail || "Couldn't save", "err"); }
+    };
+  }
+
+  renderBodyStats();
   renderWorkout();
 };

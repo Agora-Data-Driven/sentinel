@@ -11,11 +11,25 @@ full schema. The tables:
     attendance_requests                              -> attendance.py
     leave_types, leave_balances, leave_requests      -> leave.py
     gym_logs, gym_exercises, exercise_library        -> gym.py
+    body_metrics, personal_records,
+    development_profiles, career_achievements,
+    professional_goals, growth_items,
+    reading_items, reading_progress                  -> development.py
     notifications                                    -> notification.py
     audit_logs, system_settings                      -> system.py
 """
 from .attendance import AttendanceEvent, AttendanceRequest, DailyAttendanceSummary
 from .client import Client
+from .development import (
+    BodyMetric,
+    CareerAchievement,
+    DevelopmentProfile,
+    GrowthItem,
+    PersonalRecord,
+    ProfessionalGoal,
+    ReadingItem,
+    ReadingProgress,
+)
 from .gym import ExerciseLibrary, GymExercise, GymLog
 from .leave import LeaveBalance, LeaveRequest, LeaveType
 from .notification import Notification
@@ -42,6 +56,14 @@ __all__ = [
     "GymLog",
     "GymExercise",
     "ExerciseLibrary",
+    "BodyMetric",
+    "PersonalRecord",
+    "DevelopmentProfile",
+    "CareerAchievement",
+    "ProfessionalGoal",
+    "GrowthItem",
+    "ReadingItem",
+    "ReadingProgress",
     "Notification",
     "PayrollEntry",
     "AuditLog",

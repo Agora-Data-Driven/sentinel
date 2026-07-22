@@ -501,3 +501,14 @@ textarea { resize: vertical; min-height: 78px; }
   .kpis { grid-template-columns: 1fr 1fr; }
   .clock { display: none; }
 }
+
+/* ---------------- Holistic Development utilities ---------------- */
+.linky { color: var(--violet-d); font-size: 12.5px; font-weight: 600; text-decoration: none; margin-left: 10px; cursor: pointer; }
+.linky:hover { text-decoration: underline; }
+.linky.danger { color: var(--danger); }
+.prewrap { white-space: pre-wrap; line-height: 1.5; }
+.tickitems { list-style: none; padding: 0; margin: 0; }
+.tickitems li { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+.tickitems li svg { width: 15px; height: 15px; flex: none; stroke: var(--green-d); }
+.formgrid { display: flex; flex-direction: column; gap: 2px; }
+.stat .section-label { margin-bottom: 2px; }

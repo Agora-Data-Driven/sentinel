@@ -49,6 +49,9 @@
     moon: P('<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>'),
     wallet: P('<rect x="3" y="6" width="18" height="13" rx="2.5"/><path d="M3 9h18M16 13.5h.01"/><path d="M16 6V4.5a1.5 1.5 0 0 0-2-1.4L4.5 5.5"/>'),
     compass: P('<circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/>'),
+    book: P('<path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5z"/><path d="M4 20.5A2.5 2.5 0 0 1 6.5 18H20v3H6.5A2.5 2.5 0 0 1 4 20.5z"/>'),
+    target: P('<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.2"/>'),
+    heart: P('<path d="M12 20s-7-4.6-9.2-9A4.7 4.7 0 0 1 12 6a4.7 4.7 0 0 1 9.2 5C19 15.4 12 20 12 20z"/>'),
   };
 
   const AGORA_LOGO =
@@ -63,21 +66,28 @@
   // leaf; the rest are collapsible groups whose children carry the real page links.
   // Item gating: `roles` = allow-list, `min` = minimum rank, `hideRoles` = deny-list
   // (e.g. leave/gym/scanner are personal/kiosk tools a super_admin doesn't use).
+  // Three worker-facing sections, grouped by the worker's own jobs-to-be-done (My Day / Development /
+  // HR), plus a role-gated Admin group that disappears entirely for regular staff (all its children
+  // are ≥ team_lead, so renderNav drops the group). A worker sees exactly 3 tabs; a lead/admin sees 4.
   const NAV = [
-    { href: "/dashboard", label: "Dashboard", icon: "grid" },
-    { group: "Workspace", icon: "board", children: [
+    { group: "My Day", icon: "grid", children: [
+      { href: "/dashboard", label: "Dashboard", icon: "grid" },
       { href: "/tasks", label: "Task Board", icon: "board" },
       { href: "/north-star", label: "Our North Star", icon: "compass" },
-      { href: "/academy", label: "Academy", icon: "cap" },
     ] },
-    { group: "Team", icon: "users", children: [
-      { href: "/people", label: "People", icon: "users" },
-      { href: "/attendance", label: "Attendance", icon: "clock" },
+    { group: "Development", icon: "sparkle", children: [
+      { href: "/growth", label: "Overview", icon: "sparkle" },
+      { href: "/academy", label: "Academy", icon: "cap" },
+      { href: "/reading", label: "Reading & Philosophy", icon: "book" },
+      { href: "/gym", label: "Gym", icon: "dumbbell", hideRoles: ["super_admin"] },
+    ] },
+    { group: "HR", icon: "calendar", children: [
+      { href: "/attendance", label: "Time", icon: "clock" },
       { href: "/leave", label: "Leave", icon: "calendar", hideRoles: ["super_admin"] },
-      { href: "/gym", label: "Gym Tracker", icon: "dumbbell", hideRoles: ["super_admin"] },
-      { href: "/scanner", label: "Scanner", icon: "qr", hideRoles: ["super_admin"] },
+      { href: "/scanner", label: "Check-in", icon: "qr", hideRoles: ["super_admin"] },
     ] },
     { group: "Admin", icon: "sliders", children: [
+      { href: "/people", label: "People", icon: "users", min: "team_lead" },
       { href: "/reports", label: "Reports", icon: "chart", min: "team_lead" },
       { href: "/payroll", label: "Payroll", icon: "wallet", roles: ["super_admin"] },
       { href: "/manage", label: "Manage", icon: "sliders", roles: ["super_admin"] },
@@ -296,6 +306,78 @@
     wireBell();
     initCommandPalette();
     refreshTaskCount();
+    mountAssistant();
+  }
+
+  // ---------------- Holistic AI coach (global) ----------------
+  // The SAME Study Assistant that lives in the Mastery Engine, surfaced on every Sentinel page as a
+  // floating widget. It's an iframe of the engine's assistant-only view; the shared `ag_sso` cookie
+  // authenticates the viewer, and the engine feeds it the worker's holistic profile server-side. We
+  // create the iframe lazily on first open (so no full-viewport overlay ever swallows page clicks)
+  // and keep it alive after, so the conversation persists while navigating within a session.
+  async function mountAssistant() {
+    if (qs("#coach-fab")) return;                 // already mounted this page-load
+    let cfg;
+    try { cfg = await api("/api/academy/config"); } catch (e) { return; }
+    const base = cfg && cfg.assistant_url;
+    if (!base) return;                            // engine not configured — no coach
+
+    const style = document.createElement("style");
+    style.textContent = `
+      #coach-fab{position:fixed;right:24px;bottom:24px;z-index:1400;display:flex;align-items:center;gap:9px;
+        border:none;cursor:pointer;padding:0 18px 0 15px;height:54px;border-radius:var(--pill);
+        background:linear-gradient(135deg,#9484FB 0%,#5C4BD0 100%);color:#fff;font:600 14px/1 Inter,sans-serif;
+        box-shadow:0 10px 30px rgba(92,75,208,.42);transition:transform .15s ease,box-shadow .15s ease}
+      #coach-fab:hover{transform:translateY(-2px);box-shadow:0 14px 38px rgba(92,75,208,.55)}
+      #coach-fab svg{width:22px;height:22px;stroke:#fff}
+      #coach-fab.hidden{display:none}
+      #coach-panel{position:fixed;right:24px;bottom:24px;z-index:1401;width:min(420px,calc(100vw - 32px));
+        height:min(660px,calc(100vh - 96px));background:var(--card);border:1px solid var(--line);
+        border-radius:var(--radius);box-shadow:var(--shadow-lg);display:none;flex-direction:column;overflow:hidden}
+      #coach-panel.open{display:flex}
+      #coach-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 14px;
+        border-bottom:1px solid var(--line);background:linear-gradient(135deg,rgba(148,132,251,.14),transparent)}
+      #coach-head .t{display:flex;align-items:center;gap:9px;font:700 14px/1.2 Inter,sans-serif;color:var(--text)}
+      #coach-head .t svg{width:18px;height:18px;stroke:var(--violet-d)}
+      #coach-head .t small{display:block;font:500 11px/1.3 Inter,sans-serif;color:var(--sub);margin-top:2px}
+      #coach-head .x-close{cursor:pointer;color:var(--sub);display:flex}
+      #coach-frame{flex:1;border:0;width:100%;background:var(--card)}
+      @media (max-width:520px){#coach-panel{right:8px;left:8px;bottom:8px;width:auto;height:min(80vh,660px)}}`;
+    document.head.appendChild(style);
+
+    const fab = document.createElement("button");
+    fab.id = "coach-fab";
+    fab.setAttribute("aria-label", "Open your coach");
+    fab.innerHTML = `${ICON.sparkle}<span>Coach</span>`;
+    document.body.appendChild(fab);
+
+    const panel = document.createElement("div");
+    panel.id = "coach-panel";
+    panel.innerHTML = `
+      <div id="coach-head">
+        <div class="t">${ICON.sparkle}<div>Your Coach<small>Knows your growth — learning, gym, goals</small></div></div>
+        <span class="x-close" id="coach-x">${ICON.x}</span>
+      </div>
+      <div id="coach-frame-wrap" style="flex:1;display:flex"></div>`;
+    document.body.appendChild(panel);
+
+    let framed = false;
+    const open = () => {
+      if (!framed) {
+        const f = document.createElement("iframe");
+        f.id = "coach-frame";
+        f.allow = "microphone; clipboard-write";
+        f.src = base;                              // {engine}/?embed=assistant
+        qs("#coach-frame-wrap", panel).appendChild(f);
+        framed = true;
+      }
+      panel.classList.add("open"); fab.classList.add("hidden");
+    };
+    const close = () => { panel.classList.remove("open"); fab.classList.remove("hidden"); };
+    fab.onclick = open;
+    qs("#coach-x", panel).onclick = close;
+    // Let a page deep-link into the coach (e.g. the Development hub's "Ask your coach" button).
+    window.SentinelOpenCoach = open;
   }
 
   function startClock() {

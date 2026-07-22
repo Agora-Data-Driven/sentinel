@@ -2,6 +2,7 @@
 routers so we keep tight control over which fields are exposed (esp. internal vs client-facing)."""
 from __future__ import annotations
 
+import datetime as _dt
 from datetime import date
 from typing import Any
 
@@ -104,6 +105,114 @@ class GymExerciseIn(BaseModel):
     sets_detail: list[GymSetIn] = Field(default_factory=list)
     duration_minutes: int = 0
     notes: str | None = None
+
+
+# --- Development (holistic) ------------------------------------------------
+class BodyMetricIn(BaseModel):
+    """A body-composition snapshot. Date defaults to today (PH) when omitted.
+
+    NOTE: the field is named ``date`` but the annotation is qualified as ``_dt.date`` on purpose —
+    a field literally named ``date`` with a default assigns ``date = None`` into the class namespace,
+    which would shadow the bare ``date`` type when pydantic evaluates the annotation.
+    """
+    date: _dt.date | None = None
+    weight_kg: float | None = Field(default=None, ge=0)
+    body_fat_pct: float | None = Field(default=None, ge=0, le=100)
+    notes: str | None = None
+
+
+class PersonalRecordIn(BaseModel):
+    exercise_name: str
+    weight_value: float = Field(default=0, ge=0)
+    weight_unit: str = "kg"
+    reps: int = Field(default=1, ge=1)
+    achieved_on: date | None = None
+    notes: str | None = None
+
+
+class PersonalRecordUpdateIn(BaseModel):
+    exercise_name: str | None = None
+    weight_value: float | None = Field(default=None, ge=0)
+    weight_unit: str | None = None
+    reps: int | None = Field(default=None, ge=1)
+    achieved_on: date | None = None
+    notes: str | None = None
+
+
+class ResumeIn(BaseModel):
+    headline: str | None = None
+    resume_text: str | None = None
+    resume_file_url: str | None = None
+
+
+class AchievementIn(BaseModel):
+    title: str
+    description: str | None = None
+    achieved_on: date | None = None
+
+
+class AchievementUpdateIn(BaseModel):
+    title: str | None = None
+    description: str | None = None
+    achieved_on: date | None = None
+
+
+class GoalIn(BaseModel):
+    title: str
+    description: str | None = None
+    target_date: date | None = None
+    status: str = "active"  # active | done | paused
+    progress_pct: int = Field(default=0, ge=0, le=100)
+
+
+class GoalUpdateIn(BaseModel):
+    title: str | None = None
+    description: str | None = None
+    target_date: date | None = None
+    status: str | None = None
+    progress_pct: int | None = Field(default=None, ge=0, le=100)
+
+
+class GrowthItemIn(BaseModel):
+    kind: str = "reflection"  # obstacle | reflection | note
+    title: str
+    detail: str | None = None
+    status: str = "open"  # open | resolved | archived
+
+
+class GrowthItemUpdateIn(BaseModel):
+    kind: str | None = None
+    title: str | None = None
+    detail: str | None = None
+    status: str | None = None
+
+
+class ReadingItemIn(BaseModel):
+    """Admin: add/curate a canon item (required book/philosophy)."""
+    title: str
+    author: str | None = None
+    kind: str = "book"  # book | philosophy | essay
+    url: str | None = None
+    summary: str | None = None
+    required: bool = True
+    sort_order: int = 0
+
+
+class ReadingItemUpdateIn(BaseModel):
+    title: str | None = None
+    author: str | None = None
+    kind: str | None = None
+    url: str | None = None
+    summary: str | None = None
+    required: bool | None = None
+    sort_order: int | None = None
+
+
+class ReadingProgressIn(BaseModel):
+    """Worker: my status + reflection on a canon item (upsert)."""
+    status: str | None = None  # not_started | reading | done
+    reflection: str | None = None
+    rating: int | None = Field(default=None, ge=1, le=5)
 
 
 # --- Tasks -----------------------------------------------------------------

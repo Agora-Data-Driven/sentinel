@@ -22,6 +22,7 @@ from fastapi import Depends
 from ..config import settings
 from ..database import get_db
 from ..models import User
+from ..services import development as dev_svc
 
 router = APIRouter(prefix="/api/internal", tags=["internal"])
 
@@ -96,3 +97,28 @@ def internal_user_lookup(
         "name": user.name or user.email,
         "role": user.role,
     }
+
+
+@router.get("/holistic-profile")
+def internal_holistic_profile(
+    email: str,
+    x_academy_ts: str | None = Header(default=None),
+    x_academy_sig: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    """A compact digest of `email`'s whole-person development, for the Mastery Engine AI coach.
+
+    The coach calls this server-to-server (HMAC-gated, shared platform-sso-key) so the SAME assistant
+    that knows the worker's learning can also speak to their body-fat/PRs, career goals, required
+    reading, and personal obstacles. It's always the user's OWN data (the coach acts on their behalf),
+    so no manager check applies here. Unknown/inactive email → an empty profile (the coach then simply
+    has no holistic context and behaves as before).
+    """
+    _verify(x_academy_ts, x_academy_sig, "holistic-profile")
+    norm = (email or "").strip().lower()
+    user = db.execute(
+        select(User).where(func.lower(User.email) == norm)
+    ).scalars().first() if norm else None
+    if user is None or not user.is_active:
+        return {"found": False, "profile": None}
+    return {"found": True, "profile": dev_svc.holistic_digest(db, user)}

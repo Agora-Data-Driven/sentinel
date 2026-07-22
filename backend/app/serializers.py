@@ -13,13 +13,21 @@ from sqlalchemy.orm import Session
 from .constants import ROLE_LABELS
 from .models import (
     AttendanceRequest,
+    BodyMetric,
+    CareerAchievement,
     Client,
     DailyAttendanceSummary,
+    DevelopmentProfile,
+    GrowthItem,
     GymLog,
     LeaveBalance,
     LeaveRequest,
     LeaveType,
     Notification,
+    PersonalRecord,
+    ProfessionalGoal,
+    ReadingItem,
+    ReadingProgress,
     Task,
     TaskComment,
     TaskHistory,
@@ -244,6 +252,95 @@ def gym_log_dict(g: GymLog, db: Session, with_exercises: bool = False) -> dict:
             }
             for e in g.exercises
         ]
+    return d
+
+
+# --- Development (holistic) -------------------------------------------------
+def body_metric_dict(m: BodyMetric) -> dict:
+    return {
+        "id": m.id,
+        "date": _d(m.date),
+        "weight_kg": m.weight_kg,
+        "body_fat_pct": m.body_fat_pct,
+        "notes": m.notes,
+    }
+
+
+def personal_record_dict(p: PersonalRecord) -> dict:
+    return {
+        "id": p.id,
+        "exercise_name": p.exercise_name,
+        "weight_value": p.weight_value,
+        "weight_unit": p.weight_unit,
+        "reps": p.reps,
+        "achieved_on": _d(p.achieved_on),
+        "notes": p.notes,
+    }
+
+
+def development_profile_dict(p: DevelopmentProfile | None) -> dict:
+    if not p:
+        return {"headline": None, "resume_text": None, "resume_file_url": None}
+    return {
+        "headline": p.headline,
+        "resume_text": p.resume_text,
+        "resume_file_url": p.resume_file_url,
+        "updated_at": _iso(p.updated_at),
+    }
+
+
+def achievement_dict(a: CareerAchievement) -> dict:
+    return {
+        "id": a.id,
+        "title": a.title,
+        "description": a.description,
+        "achieved_on": _d(a.achieved_on),
+    }
+
+
+def goal_dict(g: ProfessionalGoal) -> dict:
+    return {
+        "id": g.id,
+        "title": g.title,
+        "description": g.description,
+        "target_date": _d(g.target_date),
+        "status": g.status,
+        "progress_pct": g.progress_pct,
+    }
+
+
+def growth_item_dict(g: GrowthItem) -> dict:
+    return {
+        "id": g.id,
+        "kind": g.kind,
+        "title": g.title,
+        "detail": g.detail,
+        "status": g.status,
+        "created_at": _iso(g.created_at),
+    }
+
+
+def reading_item_dict(r: ReadingItem, progress: ReadingProgress | None = None) -> dict:
+    """A canon item, optionally merged with the current worker's progress on it."""
+    d = {
+        "id": r.id,
+        "title": r.title,
+        "author": r.author,
+        "kind": r.kind,
+        "url": r.url,
+        "summary": r.summary,
+        "required": r.required,
+        "sort_order": r.sort_order,
+    }
+    d["progress"] = (
+        {
+            "status": progress.status,
+            "reflection": progress.reflection,
+            "rating": progress.rating,
+        }
+        if progress
+        else {"status": "not_started", "reflection": None, "rating": None}
+    )
     return d
 
 

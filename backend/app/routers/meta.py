@@ -43,6 +43,8 @@ def academy_config(user: User = Depends(get_current_user)):
     base = (settings.skill_mastery_url or "").rstrip("/")
     return {
         "url": (base + "/?embed=1") if base else "",
+        # The engine's assistant-only view — Sentinel iframes this as the global floating coach.
+        "assistant_url": (base + "/?embed=assistant") if base else "",
         "configured": bool(base),
         # A same-site host is what makes the shared cookie (and so the seamless embed) work.
         "same_site": base.endswith(".agoradatadriven.com") or ".agoradatadriven.com/" in base + "/",
