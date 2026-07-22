@@ -50,7 +50,7 @@ window.pageInit = async (S) => {
         <div class="sub" style="margin-bottom:6px">${esc(it.author || "")}${it.author ? " · " : ""}<span class="pill">${esc(it.kind)}</span>${it.url ? ` · <a href="${esc(it.url)}" target="_blank" rel="noopener" class="linky">link</a>` : ""}</div>
         ${it.summary ? `<div class="prewrap" style="margin-bottom:10px">${esc(it.summary)}</div>` : ""}
         <div class="seg" data-status="${it.id}" style="display:inline-flex;border:1px solid var(--line);border-radius:99px;overflow:hidden;margin-bottom:10px">
-          ${STATUSES.map((s) => `<button class="seg-b" data-set="${s.v}" style="border:none;padding:6px 14px;font:600 12px Inter,sans-serif;cursor:pointer;background:${s.v === st ? "var(--violet-d)" : "transparent"};color:${s.v === st ? "#fff" : "var(--sub)"}">${s.t}</button>`).join("")}
+          ${STATUSES.map((s) => `<button class="seg-b" data-set="${s.v}" style="border:none;padding:6px 14px;font:600 12px Inter,sans-serif;cursor:pointer;background:${s.v === st ? "var(--green-d)" : "transparent"};color:${s.v === st ? "#fff" : "var(--sub)"}">${s.t}</button>`).join("")}
         </div>
         <label class="field"><span>My reflection</span><textarea data-reflect="${it.id}" rows="3" placeholder="What stuck with you?">${esc(it.progress.reflection || "")}</textarea></label>
         <div class="row" style="justify-content:flex-end"><button class="btn sm primary" data-savereflect="${it.id}">Save reflection</button></div>
@@ -59,9 +59,9 @@ window.pageInit = async (S) => {
 
   function render() {
     const progs = growthPrograms();
-    view.innerHTML = `
+    view.innerHTML = `<div class="dev">
       <style>
-        .rp-h { font-size:15px; text-transform:uppercase; letter-spacing:.5px; color:var(--muted); margin:0 0 12px; }
+        .rp-h { font-family:var(--mono); font-size:11px; text-transform:uppercase; letter-spacing:.15em; color:var(--green-d); font-weight:700; margin:0 0 12px; }
         .rp-progs { display:grid; gap:12px; margin-bottom:26px; max-width:900px; }
         .rp-prog { display:flex; align-items:center; gap:16px; width:100%; text-align:left; cursor:pointer;
           background:var(--card,#fff); border:1px solid var(--line); border-radius:16px; padding:14px 16px; font:inherit; color:inherit;
@@ -71,15 +71,20 @@ window.pageInit = async (S) => {
         .rp-ring::after { content:""; position:absolute; width:38px; height:38px; border-radius:50%; background:var(--card,#fff); }
         .rp-ring span { position:relative; z-index:1; font-weight:800; font-size:13px; } .rp-ring i { font-style:normal; font-size:9px; opacity:.7; }
         .rp-pinfo { flex:1; min-width:0; } .rp-pname { font-weight:700; font-size:15px; }
-        .rp-psub { color:var(--muted); font-size:13px; margin-top:2px; } .rp-open { color:var(--violet-d); font-weight:700; font-size:13px; }
+        .rp-psub { color:var(--muted); font-size:13px; margin-top:2px; } .rp-open { color:var(--green-d); font-weight:700; font-size:13px; }
         #rp-engine { display:none; } #rp-engine.on { display:block; }
       </style>
 
       <div id="rp-dash">
-        <div class="pagehead"><div>
-          <h2>Reading &amp; Philosophy</h2>
-          <div class="lead">Grow the person, not just the engineer — the ideas everyone here should absorb.</div>
-        </div>${isAdmin && ac.adminUrl ? `<button class="btn ghost" id="rp-admin">Manage in admin</button>` : ""}</div>
+        <div class="dev-mast">
+          <div>
+            <div class="dev-eyebrow">Development · Reading &amp; Philosophy</div>
+            <h1>Read &amp; reflect</h1>
+            <div class="lede">Grow the person, not only the engineer — the ideas worth carrying, and what you make of them.</div>
+          </div>
+          <div class="dev-mast-right">${isAdmin && ac.adminUrl ? `<button class="btn ghost" id="rp-admin">Manage in admin</button>` : ""}
+            <div class="dev-mast-meta">${(items || []).length} IN CANON</div></div>
+        </div>
 
         ${progs.length
           ? `<h2 class="rp-h">Study</h2><div class="rp-progs">${progs.map(programCard).join("")}</div>`
@@ -99,7 +104,8 @@ window.pageInit = async (S) => {
         <button class="btn ghost" id="rp-back" style="margin-bottom:12px">&larr; Back to reading</button>
         <iframe id="rp-frame" title="Philosophy program" allow="microphone" loading="eager"
           style="width:100%;height:calc(100vh - 190px);min-height:520px;border:1px solid var(--line);border-radius:18px;box-shadow:var(--shadow);background:#fff;display:block"></iframe>
-      </div>`;
+      </div>
+    </div>`;
     wire();
   }
 

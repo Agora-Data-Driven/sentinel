@@ -15,11 +15,16 @@ window.pageInit = async (S) => {
   let state = { log: null, exercises: [], library: [], timer: null };
 
   const tabs = isMgr ? ["My workout", "Team compliance"] : ["My workout"];
-  view.innerHTML = `<div class="pagehead"><div><h2>Gym Tracker</h2>
-      <div class="lead">Log your training, Hevy-style. Aim for 1h+ to stay compliant.</div></div></div>
+  view.innerHTML = `<div class="dev">
+    <div class="dev-mast"><div>
+      <div class="dev-eyebrow">Development · Gym</div>
+      <h1>Train</h1>
+      <div class="lede">Log your training, Hevy-style. Aim for an hour to stay compliant — your body fat and PRs live here too.</div>
+    </div><div class="dev-mast-right"><div class="dev-mast-meta">${isMgr ? "TEAM VIEW" : "PUSH · PULL · LEGS"}</div></div></div>
     <div id="gym-body"></div>
     <div class="tabs" id="tabs">${tabs.map((t, i) => `<button class="${i ? "" : "active"}" data-tab="${t}">${t}</button>`).join("")}</div>
-    <div id="tabc"></div>`;
+    <div id="tabc"></div>
+    </div>`;
   S.qsa("#tabs button").forEach((b) => b.onclick = () => {
     S.qsa("#tabs button").forEach((x) => x.classList.remove("active")); b.classList.add("active");
     b.dataset.tab === "Team compliance" ? renderCompliance() : renderWorkout();

@@ -512,3 +512,44 @@ textarea { resize: vertical; min-height: 78px; }
 .tickitems li svg { width: 15px; height: 15px; flex: none; stroke: var(--green-d); }
 .formgrid { display: flex; flex-direction: column; gap: 2px; }
 .stat .section-label { margin-bottom: 2px; }
+
+/* ============ Development design system — "The Growth Ledger" ============ */
+.dev { --mono: "Space Mono", ui-monospace, "SFMono-Regular", monospace; }
+
+/* Ledger masthead — recurs on every Development page for one cohesive system */
+.dev-mast { display:flex; align-items:flex-end; justify-content:space-between; gap:24px;
+  padding-bottom:16px; border-bottom:1.5px solid var(--green-d); margin-bottom:28px; }
+.dev-eyebrow { font-family:var(--mono); font-size:11px; letter-spacing:.24em; text-transform:uppercase;
+  color:var(--green-d); font-weight:700; margin-bottom:10px; }
+.dev-mast h1 { font-size:clamp(27px,3.6vw,36px); line-height:1.03; font-weight:800; letter-spacing:-.022em; margin:0; color:var(--text); }
+.dev-mast .lede { color:var(--sub); font-size:14.5px; margin-top:11px; max-width:56ch; line-height:1.55; }
+.dev-mast-right { display:flex; flex-direction:column; align-items:flex-end; gap:10px; }
+.dev-mast-meta { font-family:var(--mono); font-size:11px; color:var(--muted); letter-spacing:.06em; white-space:nowrap; }
+
+/* Pillars instrument (the signature) — ONE card, four hairline-divided facets = one measure */
+.dev-pillars { display:grid; grid-template-columns:repeat(4,1fr); background:var(--card);
+  border:1px solid var(--line); border-radius:var(--radius); overflow:hidden; margin-bottom:28px; box-shadow:var(--shadow); }
+.dev-facet { padding:17px 18px 0; border-left:1px solid var(--line); text-decoration:none; color:inherit;
+  display:flex; flex-direction:column; min-height:106px; position:relative; transition:background .12s; }
+.dev-facet:first-child { border-left:none; }
+a.dev-facet:hover { background:var(--hover); }
+.dev-facet .f-label { font-family:var(--mono); font-size:10px; letter-spacing:.15em; text-transform:uppercase;
+  color:var(--sub); display:flex; align-items:center; gap:7px; }
+.dev-facet .f-label svg { width:13px; height:13px; stroke:var(--green-d); flex:none; }
+.dev-facet .f-val { font-size:30px; font-weight:800; letter-spacing:-.02em; line-height:1; margin-top:auto; color:var(--text); }
+.dev-facet .f-sub { font-family:var(--mono); font-size:10.5px; color:var(--muted); margin:6px 0 15px; letter-spacing:.02em; }
+.dev-facet .f-meter { position:absolute; left:0; right:0; bottom:0; height:3px; background:var(--line); }
+.dev-facet .f-meter > i { display:block; height:100%; background:var(--grad-green); }
+
+/* Cards inside the ledger: quieter, hairline-led, green-forward */
+.dev .card-head { border-bottom:1px solid var(--line); padding-bottom:11px; }
+.dev .card-head h3 { display:flex; align-items:center; gap:8px; font-size:15px; letter-spacing:-.01em; }
+.dev .card-head h3 svg { width:16px; height:16px; stroke:var(--green-d); }
+.dev .section-label { font-family:var(--mono); font-size:10px; letter-spacing:.13em; }
+.dev .linky { color:var(--green-d); }
+.dev .linky.danger { color:var(--danger); }
+.dev .btn.primary.dev-coach { background:linear-gradient(135deg,#9484FB,#5C4BD0); box-shadow:0 8px 22px rgba(92,75,208,.32); }
+
+@media (max-width:820px){ .dev-pillars{ grid-template-columns:repeat(2,1fr); }
+  .dev-facet:nth-child(3){ border-left:none; } .dev-facet:nth-child(n+3){ border-top:1px solid var(--line); } }
+@media (max-width:560px){ .dev-mast{ flex-direction:column; align-items:flex-start; } .dev-mast-right{ align-items:flex-start; } }

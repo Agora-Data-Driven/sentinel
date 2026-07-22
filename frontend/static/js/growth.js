@@ -12,7 +12,7 @@ window.pageInit = async (S) => {
   let data = null;
   let courses = null;
 
-  const V = "#5C4BD0";               // violet accent for the hub
+  const V = "#3A9A2F";               // green-dark — growth is green; violet stays the Coach's colour
   const SKILL_LEVELS = ["Beginner", "Intermediate", "Advanced"];
   const SKILL_SOURCES = [
     { v: "project", t: "Project experience" },
@@ -34,14 +34,16 @@ window.pageInit = async (S) => {
       <text x="34" y="38" text-anchor="middle" font-size="15" font-weight="800" fill="var(--text)">${pct}%</text></svg>`;
   }
 
-  function tile(icon, label, ringPct, ringColor, big, sub, href) {
-    const inner = ringPct != null
-      ? ring(ringPct, ringColor)
-      : `<div style="font-size:26px;font-weight:800;color:var(--text);min-width:56px">${big}</div>`;
-    return `<${href ? "a" : "div"} ${href ? `href="${href}"` : ""} class="card pad" style="display:flex;align-items:center;gap:14px;text-decoration:none;color:inherit">
-      ${inner}
-      <div><div class="section-label" style="display:flex;align-items:center;gap:6px">${icon}${label}</div>
-      <div class="sub" style="margin-top:4px">${sub}</div></div></${href ? "a" : "div"}>`;
+  // One facet of the pillars instrument: a mono label, a big Inter value, and (for progress facets)
+  // a thin green meter along the base. Four of these in one card read as a single measure.
+  function facet(icon, label, val, sub, meterPct, href) {
+    const meter = meterPct != null
+      ? `<div class="f-meter"><i style="width:${Math.max(0, Math.min(100, Math.round(meterPct)))}%"></i></div>` : "";
+    const tag = href ? "a" : "div";
+    return `<${tag} ${href ? `href="${href}"` : ""} class="dev-facet">
+      <div class="f-label">${icon}${label}</div>
+      <div class="f-val">${val}</div>
+      <div class="f-sub">${sub}</div>${meter}</${tag}>`;
   }
 
   function courseCount() {
@@ -199,26 +201,39 @@ window.pageInit = async (S) => {
   }
 
   function render() {
-    const who = readOnly && data.user ? `${esc(data.user.name)}'s development` : "Your development";
-    view.innerHTML = `
-      <div class="pagehead"><div>
-        <h2>${who}</h2>
-        <div class="lead">Your whole growth in one place — physical, learning, career, and reading.</div>
-      </div>${readOnly ? "" : `<button class="btn primary" id="ask-coach">${S.ICON.sparkle}Ask your coach</button>`}</div>
+    const who = readOnly && data.user ? esc(data.user.name.split(" ")[0]) + "’s growth" : "Your growth";
+    const eyebrow = readOnly && data.user ? "Development · " + esc(data.user.name) : "Development · Overview";
+    const bf = data.physical.latest && data.physical.latest.body_fat_pct != null;
+    const asOf = data.physical.latest ? esc(data.physical.latest.date) : new Date().toISOString().slice(0, 10);
+    const goal = Math.round(goalAvg()), read = Math.round(readingPct());
 
-      <div class="tiles4" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin-bottom:16px">
-        ${tile(S.ICON.heart, "Physical", null, V, data.physical.latest && data.physical.latest.body_fat_pct != null ? `${data.physical.latest.body_fat_pct}%` : "—", "body fat")}
-        ${readOnly ? "" : tile(S.ICON.cap, "Learning", null, V, String(courseCount()), "courses", "/academy")}
-        ${tile(S.ICON.target, "Career", goalAvg(), V, "", "avg goal progress")}
-        ${tile(S.ICON.book, "Reading", readingPct(), V, "", "canon complete", "/reading")}
+    view.innerHTML = `<div class="dev">
+      <div class="dev-mast">
+        <div>
+          <div class="dev-eyebrow">${eyebrow}</div>
+          <h1>${who}</h1>
+          <div class="lede">Everything you're becoming, in one place — body, mind, craft, and character.</div>
+        </div>
+        <div class="dev-mast-right">
+          ${readOnly ? "" : `<button class="btn primary dev-coach" id="ask-coach">${S.ICON.sparkle}Ask your coach</button>`}
+          <div class="dev-mast-meta">AS OF ${asOf}</div>
+        </div>
+      </div>
+
+      <div class="dev-pillars">
+        ${facet(S.ICON.heart, "Physical", bf ? `${data.physical.latest.body_fat_pct}<span style="font-size:16px">%</span>` : "—",
+          "body fat" + (data.physical.latest && data.physical.latest.weight_kg != null ? ` · ${data.physical.latest.weight_kg} kg` : ""), null)}
+        ${readOnly ? "" : facet(S.ICON.cap, "Learning", `${courseCount()}`, "courses enrolled", null, "/academy")}
+        ${facet(S.ICON.target, "Career", `${goal}<span style="font-size:16px">%</span>`, "avg goal progress", goal)}
+        ${facet(S.ICON.book, "Reading", `${read}<span style="font-size:16px">%</span>`, "of the canon", read, "/reading")}
       </div>
 
       <div class="dev-cols" style="display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start">
         <div style="display:flex;flex-direction:column;gap:16px">${physicalCard()}${readingCard()}${learningCard()}</div>
         <div style="display:flex;flex-direction:column;gap:16px">${careerCard()}${skillsCard()}${journalCard()}</div>
-      </div>`;
+      </div>
+    </div>`;
 
-    // single-column on narrow screens
     if (window.matchMedia("(max-width:900px)").matches) S.qs(".dev-cols").style.gridTemplateColumns = "1fr";
     wire();
   }
