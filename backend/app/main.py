@@ -268,7 +268,6 @@ _PAGES = {
     "/growth": "growth.html",
     "/reading": "reading.html",
     "/tasks": "tasks.html",
-    "/academy": "academy.html",
     "/people": "people.html",
     "/leave": "leave.html",
     "/north-star": "north-star.html",

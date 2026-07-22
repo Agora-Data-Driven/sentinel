@@ -76,8 +76,10 @@
       { href: "/north-star", label: "Our North Star", icon: "compass" },
     ] },
     { group: "Development", icon: "sparkle", children: [
+      // The Overview is the learning home now — it opens your courses (and the Academy
+      // admin, for admins) directly in the embedded engine, so there's no separate
+      // Academy tab anymore.
       { href: "/growth", label: "Overview", icon: "sparkle" },
-      { href: "/academy", label: "Academy", icon: "cap" },
       { href: "/reading", label: "Reading & Philosophy", icon: "book" },
       { href: "/gym", label: "Gym", icon: "dumbbell", hideRoles: ["super_admin"] },
     ] },

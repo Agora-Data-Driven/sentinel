@@ -52,6 +52,32 @@ window.pageInit = async (S) => {
     return Array.isArray(list) ? list.length : 0;
   }
 
+  // Opening your courses / the Academy admin now happens right here in the Overview —
+  // the standalone Academy tab is gone. Both come from /api/academy/courses (already
+  // fetched into `courses`): engineUrl carries the portal ag_sso cookie so the embedded
+  // engine needs no second sign-in, and adminUrl is the engine's Academy admin.
+  const engineUrl = () => (courses && courses.engineUrl) || "";
+  const adminUrl = () => (courses && courses.adminUrl) || "";
+  const isAcademyAdmin = () => !!(courses && courses.admin && adminUrl());
+
+  // Swap the Overview for a full-height engine iframe with a Back button. Back just
+  // re-renders the Overview from the data we already hold (no refetch).
+  function openEngineFrame(url) {
+    view.innerHTML = `
+      <button class="btn ghost" id="eng-back" style="margin-bottom:12px">&larr; Back to Overview</button>
+      <iframe title="AGORA Mastery Engine" allow="microphone" loading="eager" src="${esc(url)}"
+        style="width:100%;height:calc(100vh - 190px);min-height:520px;border:1px solid var(--line);
+               border-radius:18px;box-shadow:var(--shadow);background:#fff;display:block"></iframe>`;
+    S.qs("#eng-back").onclick = () => render();
+  }
+  const openCourses = () => {
+    const u = engineUrl();
+    if (!u) { S.toast ? S.toast("Learning engine isn't configured", "err") : alert("Learning engine isn't configured"); return; }
+    // home=quiz skips the engine's own progress landing — progress lives here in the Overview.
+    openEngineFrame(u + "&home=quiz");
+  };
+  const openAcademyAdmin = () => { const u = adminUrl(); if (u) openEngineFrame(u); };
+
   function goalAvg() {
     const gs = (data.career.goals || []).filter((g) => g.status === "active");
     if (!gs.length) return 0;
@@ -181,9 +207,15 @@ window.pageInit = async (S) => {
   function learningCard() {
     if (readOnly) return "";  // enrollment progress is the viewer's, not the target's
     const n = courseCount();
+    const admin = isAcademyAdmin();
     return `<div class="card">
-      <div class="card-head"><h3>${S.ICON.cap}Learning</h3><a href="/academy" class="btn sm ghost">Open Academy</a></div>
-      <div class="card-body"><div class="sub">${n ? `You're enrolled in ${n} course${n === 1 ? "" : "s"}. Keep your streak going in the Academy.` : "Your Academy courses and today's assignment live in the Academy tab."}</div></div></div>`;
+      <div class="card-head"><h3>${S.ICON.cap}Learning</h3>
+        <div class="row" style="gap:8px">
+          ${admin ? `<button class="btn sm ghost" id="open-academy-admin">Academy admin</button>` : ""}
+          <button class="btn sm primary" id="open-courses">Open my courses</button>
+        </div>
+      </div>
+      <div class="card-body"><div class="sub">${n ? `You're enrolled in ${n} course${n === 1 ? "" : "s"}. Jump back in and keep your streak going.` : "Open your courses to start practising."}</div></div></div>`;
   }
 
   function journalCard() {
@@ -223,7 +255,7 @@ window.pageInit = async (S) => {
       <div class="dev-pillars">
         ${facet(S.ICON.heart, "Physical", bf ? `${data.physical.latest.body_fat_pct}<span style="font-size:16px">%</span>` : "—",
           "body fat" + (data.physical.latest && data.physical.latest.weight_kg != null ? ` · ${data.physical.latest.weight_kg} kg` : ""), null)}
-        ${readOnly ? "" : facet(S.ICON.cap, "Learning", `${courseCount()}`, "courses enrolled", null, "/academy")}
+        ${readOnly ? "" : facet(S.ICON.cap, "Learning", `${courseCount()}`, "courses enrolled", null)}
         ${facet(S.ICON.target, "Career", `${goal}<span style="font-size:16px">%</span>`, "avg goal progress", goal)}
         ${facet(S.ICON.book, "Reading", `${read}<span style="font-size:16px">%</span>`, "of the canon", read, "/reading")}
       </div>
@@ -242,6 +274,10 @@ window.pageInit = async (S) => {
   function wire() {
     if (readOnly) return;
     const ac = S.qs("#ask-coach"); if (ac) ac.onclick = () => (window.SentinelOpenCoach ? window.SentinelOpenCoach() : S.toast("Coach isn't configured", "err"));
+
+    // Learning: open your courses (or the Academy admin) in the embedded engine.
+    const oc = S.qs("#open-courses"); if (oc) oc.onclick = openCourses;
+    const oaa = S.qs("#open-academy-admin"); if (oaa) oaa.onclick = openAcademyAdmin;
 
     const am = S.qs("#add-metric"); if (am) am.onclick = () => formModal("Log body stats", [
       { name: "body_fat_pct", label: "Body fat %", type: "number", step: "0.1" },
