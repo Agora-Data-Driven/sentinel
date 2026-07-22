@@ -272,7 +272,7 @@ window.pageInit = async (S) => {
           <button class="btn sm ghost" id="gb-pr">${S.ICON.trophy}Add PR</button></div>
       </div>
       ${prs.length ? `<div class="row wrap" style="margin-top:12px;gap:6px">${prs.map((r) => `
-        <span class="chip">${S.esc(r.exercise_name)}: ${r.weight_value}${S.esc(r.weight_unit)}×${r.reps}
+        <span class="chip">${S.esc(r.exercise_name)}: ${S.esc(r.display || "")}
           <a href="#" class="linky danger" data-delpr="${r.id}" style="margin-left:5px">✕</a></span>`).join("")}</div>` : ""}</div>`;
     S.qs("#gb-log").onclick = statForm;
     S.qs("#gb-pr").onclick = () => prForm();
@@ -302,17 +302,18 @@ window.pageInit = async (S) => {
     const m = S.modal({
       title: "Add personal record",
       body: `<div class="formgrid">
-        <label class="field"><span>Exercise</span><input id="pr-name" placeholder="e.g. Bench Press"></label>
-        <label class="field"><span>Weight</span><input id="pr-w" type="number" step="0.5"></label>
+        <label class="field"><span>Exercise / activity</span><input id="pr-name" placeholder="e.g. Bench Press, or 10 km run"></label>
+        <label class="field"><span>Weight (for lifts)</span><input id="pr-w" type="number" step="0.5"></label>
         <label class="field"><span>Unit</span><select id="pr-u"><option>kg</option><option>lb</option></select></label>
-        <label class="field"><span>Reps</span><input id="pr-r" type="number" value="1"></label></div>`,
+        <label class="field"><span>Reps (for lifts)</span><input id="pr-r" type="number" value="1"></label>
+        <label class="field"><span>Result (for runs/times/distances)</span><input id="pr-d" placeholder="e.g. ~59 min, or 5:30 / km"></label></div>`,
       footer: `<button class="btn ghost" id="pr-x">Cancel</button><button class="btn primary" id="pr-save">Save</button>`,
     });
     S.qs("#pr-x").onclick = m.close;
     S.qs("#pr-save").onclick = async () => {
       const name = S.qs("#pr-name").value.trim();
       if (!name) return S.toast("Exercise is required", "err");
-      try { await S.api("/api/development/prs", { method: "POST", body: { exercise_name: name, weight_value: _num(S.qs("#pr-w").value) || 0, weight_unit: S.qs("#pr-u").value, reps: _num(S.qs("#pr-r").value) || 1 } });
+      try { await S.api("/api/development/prs", { method: "POST", body: { exercise_name: name, weight_value: _num(S.qs("#pr-w").value) || 0, weight_unit: S.qs("#pr-u").value, reps: _num(S.qs("#pr-r").value) || 1, detail: S.qs("#pr-d").value.trim() || null } });
         m.close(); renderBodyStats(); S.toast("PR added", "ok"); } catch (e) { S.toast(e.detail || "Couldn't save", "err"); }
     };
   }

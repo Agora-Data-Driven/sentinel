@@ -33,6 +33,7 @@ from ..serializers import (
     goal_dict,
     growth_item_dict,
     personal_record_dict,
+    pr_display,
     reading_item_dict,
     skill_dict,
     user_public,
@@ -150,8 +151,7 @@ def full_profile(db: Session, user: User) -> dict:
 
 
 def _pr_line(p: PersonalRecord) -> str:
-    unit = p.weight_unit or "kg"
-    return f"{p.exercise_name}: {p.weight_value:g}{unit} x{p.reps}"
+    return f"{p.exercise_name}: {pr_display(p)}"
 
 
 def holistic_digest(db: Session, user: User) -> dict:

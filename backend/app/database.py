@@ -52,6 +52,7 @@ def create_all() -> None:
 # New columns added to already-existing tables (table -> [(column, sql_type)]).
 _ADDED_COLUMNS = {
     "users": [("monthly_salary", "FLOAT")],
+    "personal_records": [("detail", "VARCHAR(160)")],
 }
 
 

@@ -126,6 +126,7 @@ class PersonalRecordIn(BaseModel):
     weight_value: float = Field(default=0, ge=0)
     weight_unit: str = "kg"
     reps: int = Field(default=1, ge=1)
+    detail: str | None = None  # non-weight result, e.g. "10 km in ~59 min"
     achieved_on: date | None = None
     notes: str | None = None
 
@@ -135,6 +136,7 @@ class PersonalRecordUpdateIn(BaseModel):
     weight_value: float | None = Field(default=None, ge=0)
     weight_unit: str | None = None
     reps: int | None = Field(default=None, ge=1)
+    detail: str | None = None
     achieved_on: date | None = None
     notes: str | None = None
 

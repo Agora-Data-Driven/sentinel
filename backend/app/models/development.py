@@ -52,7 +52,9 @@ class BodyMetric(Base):
 
 
 class PersonalRecord(Base):
-    """All-time best for a lift — the worker maintains it manually (e.g. Bench 80kg x5)."""
+    """An all-time personal best. Covers BOTH weight lifts (weight_value + reps, e.g. Bench 80kg x5)
+    AND non-weight records — runs, times, distances, holds — via the free-form `detail` (e.g. a
+    "10 km run" with detail "~59 min"). For a cardio PR, leave weight_value 0 and fill `detail`."""
 
     __tablename__ = "personal_records"
 
@@ -62,6 +64,7 @@ class PersonalRecord(Base):
     weight_value: Mapped[float] = mapped_column(Float, default=0.0)
     weight_unit: Mapped[str] = mapped_column(String(8), default="kg")
     reps: Mapped[int] = mapped_column(Integer, default=1)
+    detail: Mapped[str | None] = mapped_column(String(160), nullable=True)  # non-weight result, e.g. "10 km in ~59 min"
     achieved_on: Mapped[date | None] = mapped_column(Date, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

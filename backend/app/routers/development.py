@@ -121,6 +121,7 @@ def add_pr(payload: PersonalRecordIn, user: User = Depends(get_current_user), db
         weight_value=payload.weight_value,
         weight_unit=payload.weight_unit,
         reps=payload.reps,
+        detail=payload.detail,
         achieved_on=payload.achieved_on,
         notes=payload.notes,
     )
@@ -132,7 +133,7 @@ def add_pr(payload: PersonalRecordIn, user: User = Depends(get_current_user), db
 @router.patch("/prs/{pr_id}")
 def update_pr(pr_id: int, payload: PersonalRecordUpdateIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     p = _own(db, PersonalRecord, pr_id, user)
-    _apply(p, payload, ["exercise_name", "weight_value", "weight_unit", "reps", "achieved_on", "notes"])
+    _apply(p, payload, ["exercise_name", "weight_value", "weight_unit", "reps", "detail", "achieved_on", "notes"])
     db.commit()
     return personal_record_dict(p)
 

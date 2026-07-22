@@ -267,6 +267,15 @@ def body_metric_dict(m: BodyMetric) -> dict:
     }
 
 
+def pr_display(p: PersonalRecord) -> str:
+    """Human-readable result: a weight PR shows 'Xkg x Y'; a cardio/other PR shows its free `detail`."""
+    if p.weight_value:
+        return f"{p.weight_value:g}{p.weight_unit or 'kg'} × {p.reps}"
+    if p.detail:
+        return p.detail
+    return f"× {p.reps}" if p.reps else ""
+
+
 def personal_record_dict(p: PersonalRecord) -> dict:
     return {
         "id": p.id,
@@ -274,6 +283,8 @@ def personal_record_dict(p: PersonalRecord) -> dict:
         "weight_value": p.weight_value,
         "weight_unit": p.weight_unit,
         "reps": p.reps,
+        "detail": p.detail,
+        "display": pr_display(p),
         "achieved_on": _d(p.achieved_on),
         "notes": p.notes,
     }

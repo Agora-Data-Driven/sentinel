@@ -107,7 +107,7 @@ window.pageInit = async (S) => {
         <div class="section-label" style="margin-bottom:8px">Personal records ${readOnly ? "" : `<a href="#" id="add-pr" class="linky">+ add</a>`}</div>
         ${prs.length ? `<div class="pr-list">${prs.map((r) => `
           <div class="row between pr-row" style="padding:7px 0;border-top:1px solid var(--line)">
-            <div><strong>${esc(r.exercise_name)}</strong> <span class="muted">${r.weight_value}${esc(r.weight_unit)} × ${r.reps}</span></div>
+            <div><strong>${esc(r.exercise_name)}</strong> <span class="muted">${esc(r.display || "")}</span></div>
             ${readOnly ? "" : `<div class="row"><a href="#" class="linky" data-edit-pr="${r.id}">edit</a><a href="#" class="linky danger" data-del-pr="${r.id}">delete</a></div>`}
           </div>`).join("")}</div>` : '<div class="empty">No PRs logged yet.</div>'}
       </div></div>`;
@@ -271,13 +271,14 @@ window.pageInit = async (S) => {
 
   function prForm(pr) {
     formModal(pr ? "Edit PR" : "Add personal record", [
-      { name: "exercise_name", label: "Exercise", value: pr && pr.exercise_name, ph: "e.g. Bench Press" },
-      { name: "weight_value", label: "Weight", type: "number", step: "0.5", value: pr && pr.weight_value },
+      { name: "exercise_name", label: "Exercise / activity", value: pr && pr.exercise_name, ph: "e.g. Bench Press, or 10 km run" },
+      { name: "weight_value", label: "Weight (for lifts)", type: "number", step: "0.5", value: pr && pr.weight_value },
       { name: "weight_unit", label: "Unit", type: "select", value: (pr && pr.weight_unit) || "kg", options: [{ v: "kg", t: "kg" }, { v: "lb", t: "lb" }] },
-      { name: "reps", label: "Reps", type: "number", value: (pr && pr.reps) || 1 },
+      { name: "reps", label: "Reps (for lifts)", type: "number", value: (pr && pr.reps) || 1 },
+      { name: "detail", label: "Result (for runs/times/distances)", value: pr && pr.detail, ph: "e.g. ~59 min, or 5:30 / km" },
       { name: "achieved_on", label: "Achieved on", type: "date", value: pr && pr.achieved_on },
     ], (o) => {
-      const body = { exercise_name: o.exercise_name, weight_value: num(o.weight_value), weight_unit: o.weight_unit, reps: num(o.reps), achieved_on: o.achieved_on || null };
+      const body = { exercise_name: o.exercise_name, weight_value: num(o.weight_value) || 0, weight_unit: o.weight_unit, reps: num(o.reps) || 1, detail: o.detail || null, achieved_on: o.achieved_on || null };
       return pr ? api(`/api/development/prs/${pr.id}`, { method: "PATCH", body }) : api("/api/development/prs", { method: "POST", body });
     });
   }

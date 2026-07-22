@@ -387,7 +387,7 @@
     const coachOrigin = new URL(base, location.href).origin;
     const DEV = "/api/development";
     const pick = (o, keys) => { const r = {}; keys.forEach((k) => { if (o && o[k] !== undefined) r[k] = o[k]; }); return r; };
-    const PR = ["exercise_name", "weight_value", "weight_unit", "reps", "achieved_on", "notes"];
+    const PR = ["exercise_name", "weight_value", "weight_unit", "reps", "detail", "achieved_on", "notes"];
     const GOAL = ["title", "description", "target_date", "status", "progress_pct"];
     const ACH = ["title", "description", "achieved_on"];
     const GROW = ["kind", "title", "detail", "status"];
