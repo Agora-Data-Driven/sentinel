@@ -7,7 +7,7 @@
 window.pageInit = async (S) => {
   const view = S.view();
   const esc = S.esc;
-  S.qs("#top-sub").textContent = "Your courses and today's assignment";
+  S.qs("#top-sub").textContent = "Your learning and today's assignment";
 
   let data;
   try {
@@ -90,17 +90,13 @@ window.pageInit = async (S) => {
         </div>
         <button class="btn" disabled title="Coming soon">Coming soon</button>
       </div>
-
-      <h2 class="ac-h">Programs assigned</h2>
-      ${programs.length
-        ? `<div class="ac-courses">${programs.map(card).join("")}</div>`
-        : `<div class="card" style="padding:22px;text-align:center;color:var(--muted)">
-             You're not assigned to any programs yet. Ask an admin to assign you one in the Academy admin.
-           </div>`}
+      <!-- The old "Programs assigned" course list was removed: every roadmap is open to
+           everyone now, and an assigned roadmap shows up automatically (labelled "required")
+           in the learner's Mastery Engine — so there's no per-program course dashboard here. -->
     </div>
 
     <div id="ac-engine">
-      <button class="btn ac-back" id="ac-back">&larr; Back to courses</button>
+      <button class="btn ac-back" id="ac-back">&larr; Back</button>
       <iframe id="ac-frame" title="AGORA Mastery Engine" allow="microphone" loading="eager"
         style="width:100%;height:calc(100vh - 190px);min-height:520px;border:1px solid var(--line);
                border-radius:18px;box-shadow:var(--shadow);background:#fff;display:block"></iframe>
@@ -123,7 +119,6 @@ window.pageInit = async (S) => {
   };
   const openAdmin = () => { if (adminUrl) openFrame(adminUrl); };
 
-  view.querySelectorAll(".ac-course").forEach((b) => { b.onclick = () => openEngine(b.dataset.program); });
   const adminBtn = S.qs("#ac-admin-open");
   if (adminBtn) adminBtn.onclick = openAdmin;
   S.qs("#ac-back").onclick = () => { eng.classList.remove("on"); dash.style.display = ""; frame.src = "about:blank"; };
