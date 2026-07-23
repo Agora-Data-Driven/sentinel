@@ -65,7 +65,23 @@ DAY_PUSH = "Push"
 DAY_PULL = "Pull"
 DAY_LEGS = "Legs"
 DAY_CUSTOM = "Custom"
+DAY_REST = "Rest"
 GYM_DAY_TYPES = [DAY_PUSH, DAY_PULL, DAY_LEGS, DAY_CUSTOM]
+# A planned day may also be a Rest day (never logged, just shown on the calendar).
+GYM_PLAN_DAY_TYPES = GYM_DAY_TYPES + [DAY_REST]
+
+# Weekday keys for the recurring weekly split (Mon-first, matching date.weekday()).
+GYM_WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+# The split a brand-new user starts with — a classic PPL rotation with weekends off.
+GYM_DEFAULT_WEEK = {
+    "Mon": DAY_PUSH,
+    "Tue": DAY_PULL,
+    "Wed": DAY_LEGS,
+    "Thu": DAY_PUSH,
+    "Fri": DAY_PULL,
+    "Sat": DAY_LEGS,
+    "Sun": DAY_REST,
+}
 
 GYM_COMPLETED = "Completed"
 GYM_INCOMPLETE = "Incomplete"

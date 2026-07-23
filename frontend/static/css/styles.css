@@ -281,6 +281,42 @@ h2 { letter-spacing: -0.6px; } h1 { letter-spacing: -0.5px; }
 /* Day type pills (gym) */
 .day.Push { background: var(--push-bg); color: var(--push); } .day.Pull { background: var(--pull-bg); color: var(--pull); }
 .day.Legs { background: var(--legs-bg); color: var(--legs); } .day.Custom { background: var(--violet-bg); color: var(--violet-d); }
+.day.Rest { background: var(--input); color: var(--muted); }
+
+/* ---------- Gym calendar + weekly plan ---------- */
+.gym-cal-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+.gym-cal-nav { display: flex; align-items: center; gap: 6px; }
+.gym-cal-nav b { font-size: 16px; min-width: 158px; text-align: center; }
+.gym-cal-nav button.mv { width: 34px; height: 34px; padding: 0; font-size: 18px; line-height: 1; }
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px; }
+.cal-dow { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--sub); text-align: center; padding-bottom: 2px; }
+.cal-cell { position: relative; min-height: 82px; border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 8px; background: var(--card); cursor: pointer; text-align: left; display: flex; flex-direction: column; gap: 6px; transition: border-color .15s, box-shadow .15s, transform .15s; font: inherit; color: inherit; }
+.cal-cell:hover { border-color: var(--green); box-shadow: 0 4px 14px rgba(0,0,0,.06); transform: translateY(-1px); }
+.cal-cell.blank { background: transparent; border: 0; cursor: default; }
+.cal-cell.blank:hover { transform: none; box-shadow: none; }
+.cal-cell.today { border-color: var(--green); box-shadow: 0 0 0 2px var(--green-bg); }
+.cal-cell.rest { opacity: .72; }
+.cal-cell .d { font-size: 13px; font-weight: 700; color: var(--ink); }
+.cal-plan { align-self: flex-start; font-size: 11px; font-weight: 700; padding: 2px 9px; border-radius: var(--pill); }
+.cal-logmeta { font-size: 10.5px; color: var(--sub); margin-top: auto; }
+.cal-done { position: absolute; top: 7px; right: 7px; display: grid; place-items: center; width: 19px; height: 19px; border-radius: 50%; }
+.cal-done svg { width: 13px; height: 13px; }
+.cal-done.Completed { background: var(--green-bg); color: var(--green-d); }
+.cal-done.Incomplete { background: #FEF3E6; color: var(--warn); }
+.cal-legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--sub); margin-top: 12px; }
+.cal-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.wk-row { display: grid; grid-template-columns: 96px 1fr; align-items: center; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--line); }
+.wk-row:last-child { border-bottom: 0; }
+.wk-row .wd { font-weight: 700; color: var(--sub); }
+.save-tag { font-size: 12px; color: var(--muted); display: inline-flex; align-items: center; gap: 5px; min-width: 62px; }
+.save-tag.ok { color: var(--green-d); }
+@media (max-width: 640px) {
+  .cal-grid { gap: 5px; }
+  .cal-cell { min-height: 62px; padding: 5px; gap: 3px; }
+  .cal-cell .d { font-size: 12px; }
+  .cal-plan { font-size: 9.5px; padding: 1px 6px; }
+  .cal-logmeta { display: none; }
+}
 
 /* ---------- Tables ---------- */
 .table-wrap { overflow-x: auto; border-radius: var(--radius); border: 1px solid var(--line); background: var(--card); }

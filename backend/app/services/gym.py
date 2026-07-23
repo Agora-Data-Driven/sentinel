@@ -1,14 +1,22 @@
-"""Gym logic: compliance status, the Hevy 'PREVIOUS' lookup, and session summary math."""
+"""Gym logic: compliance status, the Hevy 'PREVIOUS' lookup, session summary math, and the weekly
+plan (recurring split + per-date overrides) that drives the calendar."""
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import date, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..constants import GYM_COMPLETED, GYM_INCOMPLETE, GYM_MISSING
-from ..models import GymExercise, GymLog
+from ..constants import (
+    GYM_COMPLETED,
+    GYM_DEFAULT_WEEK,
+    GYM_INCOMPLETE,
+    GYM_MISSING,
+    GYM_PLAN_DAY_TYPES,
+    GYM_WEEKDAYS,
+)
+from ..models import GymExercise, GymLog, GymPlanOverride, GymSchedule
 
 
 def compute_status(duration_minutes: int, exercise_count: int, required_hours: float) -> str:
@@ -17,6 +25,119 @@ def compute_status(duration_minutes: int, exercise_count: int, required_hours: f
     if duration_minutes >= required_hours * 60 and exercise_count > 0:
         return GYM_COMPLETED
     return GYM_INCOMPLETE
+
+
+# --- Weekly plan (recurring split + per-date overrides) --------------------
+
+def get_week(db: Session, user_id: int) -> dict[str, str]:
+    """The user's recurring weekly split, falling back to the sensible default PPL rotation.
+    Always returns a complete, validated Mon..Sun map."""
+    row = db.execute(
+        select(GymSchedule).where(GymSchedule.user_id == user_id)
+    ).scalar_one_or_none()
+    stored = {}
+    if row:
+        try:
+            stored = json.loads(row.week_json or "{}")
+        except (ValueError, TypeError):
+            stored = {}
+    return normalize_week(stored)
+
+
+def normalize_week(week: dict) -> dict[str, str]:
+    """Coerce a (possibly partial/dirty) week map into a full Mon..Sun map of valid day-types."""
+    out: dict[str, str] = {}
+    for wd in GYM_WEEKDAYS:
+        val = (week or {}).get(wd)
+        out[wd] = val if val in GYM_PLAN_DAY_TYPES else GYM_DEFAULT_WEEK[wd]
+    return out
+
+
+def _overrides(db: Session, user_id: int, start: date, end: date) -> dict[date, str]:
+    rows = db.execute(
+        select(GymPlanOverride).where(
+            GymPlanOverride.user_id == user_id,
+            GymPlanOverride.date >= start,
+            GymPlanOverride.date <= end,
+        )
+    ).scalars().all()
+    return {r.date: r.day_type for r in rows}
+
+
+def effective_plan(db: Session, user_id: int, on: date) -> str:
+    """The planned day-type for one date: an override if present, else the weekly template."""
+    ov = db.execute(
+        select(GymPlanOverride).where(
+            GymPlanOverride.user_id == user_id, GymPlanOverride.date == on
+        )
+    ).scalar_one_or_none()
+    if ov:
+        return ov.day_type
+    return get_week(db, user_id)[GYM_WEEKDAYS[on.weekday()]]
+
+
+def plan_for_range(db: Session, user_id: int, start: date, end: date) -> dict[date, str]:
+    """Effective planned day-type for every date in [start, end] (overrides beat the template)."""
+    week = get_week(db, user_id)
+    overrides = _overrides(db, user_id, start, end)
+    out: dict[date, str] = {}
+    d = start
+    while d <= end:
+        out[d] = overrides.get(d) or week[GYM_WEEKDAYS[d.weekday()]]
+        d += timedelta(days=1)
+    return out
+
+
+def set_week(db: Session, user_id: int, week: dict) -> dict[str, str]:
+    normalized = normalize_week(week)
+    row = db.execute(
+        select(GymSchedule).where(GymSchedule.user_id == user_id)
+    ).scalar_one_or_none()
+    if not row:
+        row = GymSchedule(user_id=user_id)
+        db.add(row)
+    row.week_json = json.dumps(normalized)
+    db.commit()
+    return normalized
+
+
+def set_override(db: Session, user_id: int, on: date, day_type: str) -> None:
+    row = db.execute(
+        select(GymPlanOverride).where(
+            GymPlanOverride.user_id == user_id, GymPlanOverride.date == on
+        )
+    ).scalar_one_or_none()
+    if not row:
+        row = GymPlanOverride(user_id=user_id, date=on)
+        db.add(row)
+    row.day_type = day_type
+    db.commit()
+
+
+def clear_override(db: Session, user_id: int, on: date) -> None:
+    row = db.execute(
+        select(GymPlanOverride).where(
+            GymPlanOverride.user_id == user_id, GymPlanOverride.date == on
+        )
+    ).scalar_one_or_none()
+    if row:
+        db.delete(row)
+        db.commit()
+
+
+def upcoming_overrides(db: Session, user_id: int, start: date, days: int = 60) -> list[dict]:
+    """Overrides from `start` forward — so a read of the plan shows what's been hand-tweaked."""
+    end = start + timedelta(days=days)
+    rows = db.execute(
+        select(GymPlanOverride)
+        .where(
+            GymPlanOverride.user_id == user_id,
+            GymPlanOverride.date >= start,
+            GymPlanOverride.date <= end,
+        )
+        .order_by(GymPlanOverride.date)
+    ).scalars().all()
+    return [{"date": r.date.isoformat(), "day_type": r.day_type} for r in rows]
 
 
 def previous_for_exercise(db: Session, user_id: int, exercise_name: str, before: date) -> dict | None:

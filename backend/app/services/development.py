@@ -10,15 +10,18 @@ Plus can_view(viewer, target): owner, admins, and the target's team lead may rea
 """
 from __future__ import annotations
 
-from sqlalchemy import select
+from datetime import timedelta
+
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ..constants import ADMIN_ROLES, ROLE_TEAM_LEAD
+from ..constants import ADMIN_ROLES, GYM_COMPLETED, ROLE_TEAM_LEAD
 from ..models import (
     BodyMetric,
     CareerAchievement,
     DevelopmentProfile,
     GrowthItem,
+    GymLog,
     PersonalRecord,
     ProfessionalGoal,
     ReadingItem,
@@ -26,6 +29,8 @@ from ..models import (
     Skill,
     User,
 )
+from ..utils.time import today_ph
+from . import gym as gym_svc
 from ..serializers import (
     achievement_dict,
     body_metric_dict,
@@ -169,6 +174,20 @@ def holistic_digest(db: Session, user: User) -> dict:
     resume = (profile.resume_text or "").strip() if profile else ""
     resume_excerpt = (resume[:700] + ("…" if len(resume) > 700 else "")) if resume else None
 
+    # Gym: the recurring weekly split + how consistent they've been lately, so the coach can speak
+    # to (and edit) the schedule.
+    today = today_ph()
+    weekly_split = gym_svc.get_week(db, user.id)
+    since = today - timedelta(days=14)
+    sessions_14d = db.execute(
+        select(func.count(GymLog.id)).where(GymLog.user_id == user.id, GymLog.date >= since)
+    ).scalar() or 0
+    completed_14d = db.execute(
+        select(func.count(GymLog.id)).where(
+            GymLog.user_id == user.id, GymLog.date >= since, GymLog.status == GYM_COMPLETED
+        )
+    ).scalar() or 0
+
     reading_now = [r["title"] for r in reading if r["progress"]["status"] == "reading"][:8]
     reading_done = [r["title"] for r in reading if r["progress"]["status"] == "done"][:12]
     obstacles = [g.title for g in growth if g.kind == "obstacle" and g.status != "archived"][:6]
@@ -191,6 +210,11 @@ def holistic_digest(db: Session, user: User) -> dict:
             "weight_kg": latest.weight_kg if latest else None,
             "as_of": latest.date.isoformat() if latest else None,
             "recent_prs": [_pr_line(p) for p in prs[:10]],
+        },
+        "gym": {
+            "weekly_split": weekly_split,
+            "sessions_last_14d": sessions_14d,
+            "completed_last_14d": completed_14d,
         },
         "career": {
             "headline": profile.headline if profile else None,
