@@ -2,6 +2,10 @@
    Extracted from an inline <script> so it complies with the app's CSP (script-src 'self') —
    an inline block is blocked, which left every reveal-on-scroll (.rv) element stuck at opacity:0
    and the page looking empty. Loaded with a plain <script src>, this runs normally. */
+// Arm the reveal animation only now that the script is confirmed running. Until this class is set,
+// CSS keeps every .rv element fully visible, so a blocked/failed script can never blank the page.
+document.documentElement.classList.add("js-anim");
+
 // reveal on scroll
 const io = new IntersectionObserver((es) => {
   es.forEach((e) => { if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); } });

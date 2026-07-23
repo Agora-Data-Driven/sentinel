@@ -145,9 +145,12 @@ footer .mk{color:var(--mint);}
 footer .tag{font-family:'Mono';font-size:11px;letter-spacing:.24em;text-transform:uppercase;}
 
 /* reveal */
-.rv{opacity:0;transform:translateY(22px);transition:opacity .7s cubic-bezier(.2,.7,.2,1),transform .7s cubic-bezier(.2,.7,.2,1);}
-.rv.in{opacity:1;transform:none;}
-@media(prefers-reduced-motion:reduce){.rv{opacity:1;transform:none;transition:none;}.scrollcue .dot{animation:none;}}
+/* Content is visible by DEFAULT. The hidden/reveal state applies only once the script has run
+   and added `.js-anim` to <html>. If the script is ever blocked (CSP) or fails, nothing is hidden,
+   so the page can never go blank again. */
+.js-anim .rv{opacity:0;transform:translateY(22px);transition:opacity .7s cubic-bezier(.2,.7,.2,1),transform .7s cubic-bezier(.2,.7,.2,1);}
+.js-anim .rv.in{opacity:1;transform:none;}
+@media(prefers-reduced-motion:reduce){.js-anim .rv{opacity:1;transform:none;transition:none;}.scrollcue .dot{animation:none;}}
 </style></head>
 <body>
 
@@ -179,9 +182,9 @@ footer .tag{font-family:'Mono';font-size:11px;letter-spacing:.24em;text-transfor
   <p class="body-lg rv">Agora Data Driven is a data-driven growth agency. We help businesses grow through performance marketing, content iteration, market research, lead-conversion systems, automation, dashboards, and — increasingly — machine-learning decision systems. This is not theory. It is real client execution, delivered and measured.</p>
 
   <div class="stats rv">
-    <div class="stat"><div class="n" data-count="100" data-suffix="%"><span class="u">0%</span></div><div class="l">Job Success</div><div class="s">Top Rated on Upwork</div></div>
-    <div class="stat"><div class="n" data-count="10" data-suffix="+"><span class="u">0+</span></div><div class="l">Years in the industry</div><div class="s">A decade of shipping</div></div>
-    <div class="stat"><div class="n" data-count="8"><span class="u">0</span></div><div class="l">Countries served</div><div class="s">Trusted across borders</div></div>
+    <div class="stat"><div class="n" data-count="100" data-suffix="%"><span class="u">100%</span></div><div class="l">Job Success</div><div class="s">Top Rated on Upwork</div></div>
+    <div class="stat"><div class="n" data-count="10" data-suffix="+"><span class="u">10+</span></div><div class="l">Years in the industry</div><div class="s">A decade of shipping</div></div>
+    <div class="stat"><div class="n" data-count="8"><span class="u">8</span></div><div class="l">Countries served</div><div class="s">Trusted across borders</div></div>
     <div class="stat"><div class="n"><span class="u">4</span></div><div class="l">Verified partners</div><div class="s">IBM · Google · Meta · Intuit</div></div>
   </div>
 
@@ -314,5 +317,5 @@ footer .tag{font-family:'Mono';font-size:11px;letter-spacing:.24em;text-transfor
   <span class="tag" style="color:var(--mint)">Keep moving forward</span>
 </div></footer>
 
-<script src="/static/js/who-we-are.js?v=2"></script>
+<script src="/static/js/who-we-are.js?v=3"></script>
 </body></html>
