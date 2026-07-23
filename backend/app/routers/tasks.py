@@ -40,6 +40,7 @@ from ..security import get_current_user, is_account_manager, is_manager, require
 from ..serializers import atrium_payload, comment_dict, task_card, task_detail, user_public
 from ..services import audit
 from ..services import notifications as notif
+from ..services import task_templates
 from ..utils.time import today_ph, to_ph, utcnow
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
@@ -146,6 +147,12 @@ def employee_summary(user: User = Depends(get_current_user), db: Session = Depen
     return rows
 
 
+@router.get("/templates")
+def list_templates(user: User = Depends(get_current_user)):
+    """Service-template catalog for the New Task picker. Declared before /{task_id}."""
+    return task_templates.catalog()
+
+
 @router.get("/{task_id}")
 def get_task(task_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     task = db.get(Task, task_id)
@@ -156,18 +163,27 @@ def get_task(task_id: int, user: User = Depends(get_current_user), db: Session =
     return task_detail(task, db)
 
 
-@router.post("", dependencies=[Depends(require_roles(*AM_PLUS))])
+@router.post("")
 def create_task(payload: TaskCreateIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    # Any staff member can create a task (Sentinel is an internal, employee-facing tool). Priority
+    # stays AM-only and the Atrium bridge stays manager-only regardless of who creates the task.
     if payload.status not in TASK_STATUSES:
         raise HTTPException(status_code=400, detail="Invalid status")
     # Priority only honored from an AM; others default to Medium regardless of what they send.
     priority = payload.priority if is_account_manager(user) and payload.priority in PRIORITIES else "Medium"
+    # Service template: seed the checklist (and content type) from the picked recipe unless the
+    # caller supplied their own. A seed, not a lock — the checklist is editable afterwards.
+    tpl = task_templates.get(payload.service_key) if payload.service_key else None
+    checklist = [c.model_dump() for c in payload.checklist]
+    if tpl and not checklist:
+        checklist = task_templates.checklist_for(payload.service_key)
+    content_type = payload.content_type or (tpl["content_type"] if tpl else None)
     task = Task(
         title=payload.title,
         description=payload.description,
         client_id=payload.client_id,
         campaign=payload.campaign,
-        content_type=payload.content_type,
+        content_type=content_type,
         account_manager_id=user.id if is_account_manager(user) else None,
         assigned_team_id=payload.assigned_team_id,
         assigned_to_id=payload.assigned_to_id,
@@ -175,7 +191,7 @@ def create_task(payload: TaskCreateIn, user: User = Depends(get_current_user), d
         status=payload.status,
         due_date=payload.due_date,
         labels_json=json.dumps(payload.labels),
-        checklist_json=json.dumps([c.model_dump() for c in payload.checklist]),
+        checklist_json=json.dumps(checklist),
         deliverable_url=payload.deliverable_url,
         internal_notes=payload.internal_notes,
         client_facing_notes=payload.client_facing_notes,
@@ -202,6 +218,12 @@ def update_task(task_id: int, payload: TaskUpdateIn, user: User = Depends(get_cu
         raise HTTPException(status_code=403, detail="Not permitted")
 
     data = payload.model_dump(exclude_unset=True)
+    # Anyone who can see a task may edit it (staff manage their own / their team's work). The one
+    # exception is the Atrium visibility bridge — flipping a task client-visible stays manager-only,
+    # mirroring the /send-to-atrium guard, so it can't be bypassed through a plain field edit.
+    if user.role not in AM_PLUS and data.get("atrium_visible"):
+        raise HTTPException(status_code=403, detail="Only managers can share a task to Atrium")
+
     prev_assignee = task.assigned_to_id
     for field, value in data.items():
         if field == "labels":
@@ -219,6 +241,23 @@ def update_task(task_id: int, payload: TaskUpdateIn, user: User = Depends(get_cu
                      title=f"Task assigned to you: {task.title}", link=f"/tasks?open={task.id}")
     _broadcast("updated", task, user.id)
     return task_detail(task, db)
+
+
+@router.delete("/{task_id}", dependencies=[Depends(require_roles(*AM_PLUS))])
+def delete_task(task_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Delete a task and everything hanging off it. Authoring action — AM / admin / super_admin only."""
+    task = db.get(Task, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    title = task.title
+    _broadcast("deleted", task, user.id)  # while the row is still valid
+    # comments + history cascade via the relationship; Atrium approvals have no cascade, so clear them.
+    db.query(AtriumApproval).filter(AtriumApproval.task_id == task_id).delete()
+    db.delete(task)
+    db.commit()
+    audit.record(db, actor_id=user.id, table_name="tasks", record_id=task_id, action="delete",
+                 old={"title": title})
+    return {"ok": True}
 
 
 @router.patch("/{task_id}/status")
