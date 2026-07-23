@@ -88,14 +88,14 @@ def _build(db: Session, report: str, user: User, from_: date | None, to: date | 
         return headers, rows
 
     if report == "tasks":
-        from ..services import task_perms  # centralized authorization (was tasks._can_view)
+        from .tasks import _can_view  # local import avoids a cycle
         q = select(Task).order_by(Task.due_date.is_(None), Task.due_date.asc())
         if team_id:
             q = q.where(Task.assigned_team_id == team_id)
         headers = ["Task", "Client", "Dept", "Priority", "Status", "Due", "Assignee"]
         rows = []
         for t in db.execute(q).scalars().all():
-            if not task_perms.can_view(user, t):
+            if not _can_view(user, t):
                 continue
             client = db.get(Client, t.client_id) if t.client_id else None
             assignee = db.get(User, t.assigned_to_id) if t.assigned_to_id else None

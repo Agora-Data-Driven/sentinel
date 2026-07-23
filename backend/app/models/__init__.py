@@ -36,7 +36,7 @@ from .leave import LeaveBalance, LeaveRequest, LeaveType
 from .notification import Notification
 from .payroll import PayrollEntry
 from .system import AuditLog, SystemSetting
-from .task import AtriumApproval, ServiceTemplate, Task, TaskComment, TaskHistory, TaskVocabItem
+from .task import AtriumApproval, Task, TaskComment, TaskHistory
 from .user import QRToken, Team, User
 
 __all__ = [
@@ -48,8 +48,6 @@ __all__ = [
     "TaskComment",
     "TaskHistory",
     "AtriumApproval",
-    "ServiceTemplate",
-    "TaskVocabItem",
     "AttendanceEvent",
     "DailyAttendanceSummary",
     "AttendanceRequest",

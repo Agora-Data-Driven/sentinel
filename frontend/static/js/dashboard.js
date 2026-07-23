@@ -17,13 +17,14 @@ window.pageInit = async (S) => {
 
   const kpi = (label, val, sub, cls, icon) => `
     <div class="kpi ${cls || ""}">
-      <div class="k-label"><span class="k-ic">${S.ICON[icon] || S.ICON.grid}</span>${label}</div>
+      <div class="k-ic">${S.ICON[icon] || S.ICON.grid}</div>
+      <div class="k-label">${label}</div>
       <div class="k-val">${val}</div>
       <div class="k-sub">${sub || ""}</div>
     </div>`;
 
   let html = `<div class="pagehead"><div><h2>${greeting}, ${S.esc(u.name.split(" ")[0])} 👋</h2>
-    <div class="lead">${S.fmtDateFull(d.date + "T00:00:00+08:00")} · Here's what's happening across Agora today.</div></div></div>`;
+    <div class="lead">Here's what's happening across Agora today.</div></div></div>`;
 
   if (d.is_admin) {
     const k = d.kpis;

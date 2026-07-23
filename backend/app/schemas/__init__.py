@@ -263,7 +263,6 @@ class TaskCreateIn(BaseModel):
     client_id: int | None = None
     campaign: str | None = None
     content_type: str | None = None
-    service_key: str | None = None  # a task_templates recipe — seeds the checklist + content_type
     assigned_team_id: int | None = None
     assigned_to_id: int | None = None
     priority: str = "Medium"
@@ -271,7 +270,6 @@ class TaskCreateIn(BaseModel):
     due_date: date | None = None
     labels: list[str] = Field(default_factory=list)
     checklist: list[ChecklistItem] = Field(default_factory=list)
-    maintasks: list[dict[str, Any]] = Field(default_factory=list)
     deliverable_url: str | None = None
     internal_notes: str | None = None
     client_facing_notes: str | None = None
@@ -285,11 +283,9 @@ class TaskUpdateIn(BaseModel):
     content_type: str | None = None
     assigned_team_id: int | None = None
     assigned_to_id: int | None = None
-    priority: str | None = None   # honored only for roles that can_prioritize; ignored otherwise
     due_date: date | None = None
     labels: list[str] | None = None
     checklist: list[ChecklistItem] | None = None
-    maintasks: list[dict[str, Any]] | None = None   # two-level breakdown (replaces the flat array)
     deliverable_url: str | None = None
     internal_notes: str | None = None
     client_facing_notes: str | None = None

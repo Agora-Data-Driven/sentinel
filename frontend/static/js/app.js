@@ -14,10 +14,6 @@
 
   const ROLE_RANK = { intern: 1, employee: 1, team_lead: 2, account_manager: 3, admin: 4, super_admin: 5 };
 
-  // Task vocabulary colours (statuses/labels/priorities) — fetched once at boot from /api/vocab,
-  // so the shared pills/dots colour custom (admin-defined) values, not just the hardcoded ones.
-  let COLORS = { statuses: {}, priorities: {}, labels: {} };
-
   // ---- Inline icon set (Atrium stroked style: 24x24, stroke-width 1.8) ----
   const P = (d) => `<svg class="svg-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
   const ICON = {
@@ -66,32 +62,30 @@
     '<text x="48" y="24.5" font-family="Inter,sans-serif" font-size="21" font-weight="600" letter-spacing="3.2" fill="#1A1B1E">AGORA</text>' +
     '<text x="49.5" y="35" font-family="Inter,sans-serif" font-size="7.3" font-weight="700" letter-spacing="3.6" fill="#353535">OPERATIONS</text></svg>';
 
-  // Flat, single-level navigation: 6 destinations, no accordions. A destination is either a
-  // LEAF (its own page) or a HUB — a set of sibling pages that share a context bar under the
-  // topbar. The sidebar row for a hub links to its primary (first allowed) page and lights up
-  // whenever any of its pages is current; the siblings surface as tabs in renderContextBar,
-  // not as nested rows. Item gating unchanged: `roles` allow-list, `min` rank floor, `hideRoles`
-  // deny-list (personal tools like Leave/Gym a super_admin doesn't use). A hub whose every child
-  // is filtered out is dropped entirely (e.g. Admin disappears for regular staff).
+  // Navigation is a shallow tree: at most 4 top-level entries. "Dashboard" is a plain
+  // leaf; the rest are collapsible groups whose children carry the real page links.
+  // Item gating: `roles` = allow-list, `min` = minimum rank, `hideRoles` = deny-list
+  // (e.g. leave/gym/scanner are personal/kiosk tools a super_admin doesn't use).
+  // Three worker-facing sections, grouped by the worker's own jobs-to-be-done (My Day / Development /
+  // HR), plus a role-gated Admin group that disappears entirely for regular staff (all its children
+  // are ≥ team_lead, so renderNav drops the group). A worker sees exactly 3 tabs; a lead/admin sees 4.
   const NAV = [
-    { section: "Workspace" },
-    { href: "/dashboard", label: "Dashboard", icon: "grid" },
-    { href: "/tasks", label: "Task Board", icon: "board" },
-    { group: "Growth", icon: "sparkle", children: [
+    { group: "My Day", icon: "grid", children: [
+      { href: "/dashboard", label: "Dashboard", icon: "grid" },
+      { href: "/tasks", label: "Task Board", icon: "board" },
+      { href: "/north-star", label: "Our North Star", icon: "compass" },
+    ] },
+    { group: "Development", icon: "sparkle", children: [
       { href: "/growth", label: "Overview", icon: "sparkle" },
       { href: "/academy", label: "Academy", icon: "cap" },
       { href: "/reading", label: "Reading & Philosophy", icon: "book" },
       { href: "/gym", label: "Gym", icon: "dumbbell", hideRoles: ["super_admin"] },
     ] },
-    { group: "Time & Leave", icon: "clock", children: [
+    { group: "HR", icon: "calendar", children: [
       { href: "/attendance", label: "Time", icon: "clock" },
       { href: "/leave", label: "Leave", icon: "calendar", hideRoles: ["super_admin"] },
-      // Check-in (the QR scanner station) is an operational tool, not personal — visible to all
-      // roles so a super_admin can reach it too (it was hidden before, hence "missing").
-      { href: "/scanner", label: "Check-in", icon: "qr" },
+      { href: "/scanner", label: "Check-in", icon: "qr", hideRoles: ["super_admin"] },
     ] },
-    { href: "/north-star", label: "Our North Star", icon: "compass" },
-    { section: "Admin" },
     { group: "Admin", icon: "sliders", children: [
       { href: "/people", label: "People", icon: "users", min: "team_lead" },
       { href: "/reports", label: "Reports", icon: "chart", min: "team_lead" },
@@ -210,17 +204,10 @@
   }
 
   function priorityDot(p) {
-    const hex = COLORS.priorities[p];
-    if (hex) return `<span class="dot" style="background:${esc(hex)}"></span>`;
-    const c = p === "Urgent" ? "red" : p === "Medium" ? "amber" : "green";  // fallback for unseeded
+    const c = p === "Urgent" ? "red" : p === "Medium" ? "amber" : "green";
     return `<span class="dot ${c}"></span>`;
   }
-  function labelPills(labels) {
-    return (labels || []).map((l) => {
-      const hex = COLORS.labels[l] || "#6B7280";  // colour comes from config now (custom-label safe)
-      return `<span class="lbl" style="background:${esc(hex)}">${esc(l)}</span>`;
-    }).join("");
-  }
+  function labelPills(labels) { return (labels || []).map((l) => `<span class="lbl ${esc(l)}">${esc(l)}</span>`).join(""); }
   function statusPill(s) {
     const map = { OnTime: "green", Late: "amber", Absent: "red", HalfDay: "blue", MissingClockOut: "amber", OnLeave: "violet", Completed: "green", Incomplete: "amber", Missing: "red", Approved: "green", Pending: "amber", Rejected: "red", Active: "green", "On Leave": "violet", Inactive: "grey" };
     return `<span class="pill ${map[s] || "grey"}">${esc(s)}</span>`;
@@ -238,9 +225,7 @@
       <div class="modal-body">${body}</div>
       ${footer ? `<div class="modal-foot">${footer}</div>` : ""}</div>`;
     ov.classList.add("open");
-    // Tuck the coach FAB away while a modal/drawer is open so it can't sit over the footer buttons.
-    const coachFab = qs("#coach-fab"); if (coachFab) coachFab.classList.add("hidden");
-    const close = () => { ov.classList.remove("open"); const f = qs("#coach-fab"); if (f) f.classList.remove("hidden"); };
+    const close = () => ov.classList.remove("open");
     qs("#modal-x", ov).onclick = close;
     ov.onclick = (e) => { if (e.target === ov) close(); };
     // Esc closes the drawer/modal.
@@ -256,8 +241,6 @@
     const view = qs("#view");
     const title = document.body.dataset.title || "Sentinel";
     const path = location.pathname;
-    // The page title lives in each page's own header + the browser tab — not repeated in the topbar.
-    document.title = title === "Sentinel" ? "Sentinel" : `${title} — Sentinel`;
 
     const navItems = renderNav(path);
 
@@ -279,20 +262,25 @@
       </aside>
       <div class="main">
         <header class="top">
-          <button class="iconbtn hamburger" id="ham" aria-label="Menu">${ICON.menu}</button>
-          <button class="cmdk-trigger" id="cmdk-trigger" title="Search — Ctrl K" aria-label="Open command palette">${ICON.search}<span>Search anything</span><kbd>Ctrl K</kbd></button>
-          <div class="theme-toggle" id="theme-toggle">
-            <button data-set-theme="light" title="Light mode">${ICON.sun}</button>
-            <button data-set-theme="dark" title="Dark mode">${ICON.moon}</button>
+          <div class="row">
+            <button class="iconbtn hamburger" id="ham" aria-label="Menu">${ICON.menu}</button>
+            <div><h1>${esc(title)}</h1><div class="sub" id="top-sub"></div></div>
           </div>
-          <div style="position:relative">
-            <button class="iconbtn" id="bell" aria-label="Notifications">${ICON.bell}<span class="bdot" id="bell-count" style="display:none"></span></button>
-            <div class="notif-panel" id="notif-panel"></div>
+          <div class="top-right">
+            <button class="cmdk-trigger" id="cmdk-trigger" title="Search — Ctrl K" aria-label="Open command palette">${ICON.search}<span>Search</span><kbd>Ctrl K</kbd></button>
+            ${USER.role === "super_admin" ? '<span class="pill amber sa-badge" title="You are viewing as Super Admin — full access to every module and record">Super Admin view</span>' : ""}
+            <div class="theme-toggle" id="theme-toggle">
+              <button data-set-theme="light" title="Light mode">${ICON.sun}</button>
+              <button data-set-theme="dark" title="Dark mode">${ICON.moon}</button>
+            </div>
+            <div class="clock" id="clock"></div>
+            <div style="position:relative">
+              <button class="iconbtn" id="bell" aria-label="Notifications">${ICON.bell}<span class="bdot" id="bell-count" style="display:none"></span></button>
+              <div class="notif-panel" id="notif-panel"></div>
+            </div>
+            <button class="iconbtn" id="logout" title="Log out">${ICON.logout}</button>
           </div>
-          <button class="iconbtn" id="logout" title="Log out">${ICON.logout}</button>
-          <div class="sub" id="top-sub" hidden></div>
         </header>
-        <div class="ctxbar" id="ctxbar" hidden></div>
         <div class="content"></div>
       </div>`;
     document.body.insertBefore(shell, view);
@@ -302,8 +290,12 @@
     const side = qs("#side");
     const toggle = () => { side.classList.toggle("open"); scrim.classList.toggle("open"); };
     qs("#ham").onclick = toggle; scrim.onclick = toggle;
-    // Hub siblings render as tabs in the context bar under the topbar (flat rail, no accordions).
-    renderContextBar(path);
+    // Collapsible nav groups: clicking a header expands/collapses its children.
+    qsa(".nav-group-head").forEach((btn) => btn.onclick = () => {
+      const g = btn.closest(".nav-group");
+      const open = g.classList.toggle("open");
+      btn.setAttribute("aria-expanded", open ? "true" : "false");
+    });
     qs("#logout").onclick = doLogout;
     // Light/dark toggle (setTheme is shared with the command palette)
     qsa("#theme-toggle button").forEach((b) => b.onclick = () => setTheme(b.dataset.setTheme));
@@ -332,14 +324,14 @@
 
     const style = document.createElement("style");
     style.textContent = `
-      #coach-fab{position:fixed;right:24px;bottom:24px;z-index:90;display:flex;align-items:center;gap:9px;
+      #coach-fab{position:fixed;right:24px;bottom:24px;z-index:1400;display:flex;align-items:center;gap:9px;
         border:none;cursor:pointer;padding:0 18px 0 15px;height:54px;border-radius:var(--pill);
         background:linear-gradient(135deg,#9484FB 0%,#5C4BD0 100%);color:#fff;font:600 14px/1 Inter,sans-serif;
         box-shadow:0 10px 30px rgba(92,75,208,.42);transition:transform .15s ease,box-shadow .15s ease}
       #coach-fab:hover{transform:translateY(-2px);box-shadow:0 14px 38px rgba(92,75,208,.55)}
       #coach-fab svg{width:22px;height:22px;stroke:#fff}
       #coach-fab.hidden{display:none}
-      #coach-panel{position:fixed;right:24px;bottom:24px;z-index:91;width:min(420px,calc(100vw - 32px));
+      #coach-panel{position:fixed;right:24px;bottom:24px;z-index:1401;width:min(420px,calc(100vw - 32px));
         height:min(660px,calc(100vh - 96px));background:var(--card);border:1px solid var(--line);
         border-radius:var(--radius);box-shadow:var(--shadow-lg);display:none;flex-direction:column;overflow:hidden}
       #coach-panel.open{display:flex}
@@ -502,8 +494,8 @@
     if (!slots.length) return;
     // Dark mode uses the white-ink logo so it stays legible on the dark sidebar.
     const dark = document.documentElement.getAttribute("data-theme") === "dark";
-    // Cache-bust: bump when the logo file changes so browsers/PWA fetch the new art, not a stale copy.
-    const V = "?v=21";
+    // Cache-bust: bump when the logo art changes so browsers/PWA fetch the new mark, not a stale copy.
+    const V = "?v=22";
     const candidates = dark
       ? ["/static/img/logo-dark.png" + V, "/static/img/logo.png" + V]
       : ["/static/img/logo.png" + V, "/static/img/logo.svg"];
@@ -559,45 +551,22 @@
     return `<a href="${n.href}" class="${path === n.href ? "active" : ""}">${ICON[n.icon]}<span>${n.label}</span>${n.href === "/tasks" ? '<span class="count" id="nav-tasks" style="display:none"></span>' : ""}</a>`;
   }
 
-  // Renders the flat rail. Leaves and hubs are BOTH single links. A hub links to its primary
-  // (first allowed) child and lights up when any of its pages is current; its siblings live in
-  // the context bar (renderContextBar), not as nested rows. A hub with no allowed child is dropped.
+  // Renders the nav tree: leaves as links, groups as collapsible sections.
+  // A group auto-expands (and its header lights up) when it holds the active page,
+  // and is dropped entirely when the current user can see none of its children.
   function renderNav(path) {
-    // Section markers ({ section }) group the rail into "Workspace" / "Admin". A label is only
-    // emitted once its section actually produced ≥1 allowed link, so role-gated empty sections
-    // (e.g. Admin for regular staff) never leave an orphan heading.
-    let out = "";
-    let pendingLabel = null;
-    let buf = "";
-    const flush = () => {
-      if (buf) { if (pendingLabel) out += `<div class="navlabel">${esc(pendingLabel)}</div>`; out += buf; }
-      buf = ""; pendingLabel = null;
-    };
-    NAV.forEach((n) => {
-      if (n.section) { flush(); pendingLabel = n.section; return; }
-      if (!n.children) { if (navAllowed(n)) buf += navLink(n, path); return; }
+    return NAV.map((n) => {
+      if (!n.children) return navAllowed(n) ? navLink(n, path) : "";
       const kids = n.children.filter(navAllowed);
-      if (!kids.length) return;
+      if (!kids.length) return "";
       const here = kids.some((k) => k.href === path);
-      buf += `<a href="${kids[0].href}" class="${here ? "active" : ""}">${ICON[n.icon]}<span>${esc(n.group)}</span></a>`;
-    });
-    flush();
-    return out;
-  }
-
-  // The hub context bar: when the current page belongs to a hub, show its sibling pages as tabs
-  // directly under the topbar (the "many features, one surface" pattern). Hidden on leaf pages.
-  function renderContextBar(path) {
-    const bar = qs("#ctxbar");
-    if (!bar) return;
-    const hub = NAV.find((n) => n.children && n.children.some((k) => k.href === path));
-    const kids = hub ? hub.children.filter(navAllowed) : [];
-    if (!hub || kids.length < 2) { bar.hidden = true; bar.innerHTML = ""; return; }
-    bar.hidden = false;
-    bar.innerHTML = `<div class="ctxbar-in">
-      <span class="ctxbar-hub">${ICON[hub.icon]}<span>${esc(hub.group)}</span></span>
-      ${kids.map((k) => `<a href="${k.href}" class="ctab${k.href === path ? " active" : ""}">${esc(k.label)}</a>`).join("")}
-    </div>`;
+      return `<div class="nav-group${here ? " open" : ""}">
+        <button type="button" class="nav-group-head${here ? " here" : ""}" aria-expanded="${here ? "true" : "false"}">
+          ${ICON[n.icon]}<span>${esc(n.group)}</span>${ICON.chev}
+        </button>
+        <div class="nav-group-body">${kids.map((k) => navLink(k, path)).join("")}</div>
+      </div>`;
+    }).join("");
   }
 
   // ---------------- Command palette (Ctrl/Cmd + K) ----------------
@@ -760,7 +729,6 @@
       location.href = "/login"; return;
     }
     Sentinel.user = USER;
-    try { const v = await api("/api/vocab"); if (v && v.colors) COLORS = v.colors; } catch (e) { /* keep fallback */ }
     buildShell();
     applyBrandLogo();
     if (window.pageInit) {
@@ -774,7 +742,6 @@
     fmtTime, fmtDate, fmtDateFull, timeAgo, priorityDot, labelPills, statusPill,
     roleRank: ROLE_RANK,
     get user() { return USER; }, set user(u) { USER = u; },
-    get colors() { return COLORS; },
     view: () => qs("#view"),
     can: (min) => (ROLE_RANK[USER.role] || 0) >= ROLE_RANK[min],
   };

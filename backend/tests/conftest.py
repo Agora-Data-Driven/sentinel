@@ -32,12 +32,9 @@ from app.security import create_access_token  # noqa: E402
 
 @pytest.fixture(autouse=True)
 def _fresh_schema():
-    """Rebuild all tables before each test for total isolation, then seed the editable config
-    (service templates + task vocab) exactly as app startup does — tests skip the startup hook."""
+    """Rebuild all tables before each test for total isolation."""
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
-    from app.main import _seed_config
-    _seed_config()
     yield
 
 
