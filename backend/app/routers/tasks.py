@@ -174,9 +174,20 @@ def create_task(payload: TaskCreateIn, user: User = Depends(get_current_user), d
     if tpl and not maintasks:
         maintasks = task_templates.maintasks_for(db, payload.service_key)
     content_type = payload.content_type or (tpl.content_type if tpl else None)
+    # Template defaults fill fields the caller left blank (a seed, not a lock). Priority follows the
+    # same role gate as a manually chosen one; labels/description only apply when none were supplied.
+    if tpl and may_delegate and priority == "Medium" and tpl.default_priority in task_config.priorities(db):
+        priority = tpl.default_priority
+    labels = payload.labels
+    if tpl and not labels:
+        try:
+            labels = json.loads(tpl.default_labels_json or "[]")
+        except (ValueError, TypeError):
+            labels = []
+    description = payload.description or (tpl.default_description if tpl else None)
     task = Task(
         title=payload.title,
-        description=payload.description,
+        description=description,
         client_id=payload.client_id,
         campaign=payload.campaign,
         content_type=content_type,
@@ -186,7 +197,7 @@ def create_task(payload: TaskCreateIn, user: User = Depends(get_current_user), d
         priority=priority,
         status=payload.status,
         due_date=payload.due_date,
-        labels_json=json.dumps(payload.labels),
+        labels_json=json.dumps(labels),
         maintasks_json=maintasks_svc.dumps(maintasks),  # legacy checklist_json no longer written
         deliverable_url=payload.deliverable_url,
         internal_notes=payload.internal_notes,

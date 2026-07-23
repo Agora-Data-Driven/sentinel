@@ -505,7 +505,14 @@ window.pageInit = async (S) => {
         preview.hidden = false;
         preview.innerHTML = `<div class="section-label">Auto checklist · ${tpl.steps.length} steps</div>
           <ul class="svc-preview">${tpl.steps.map((s) => `<li>${S.esc(s)}</li>`).join("")}</ul>`;
+        // Prefill the template's defaults, but never clobber something the user already set.
         const ct = S.qs("#t-ctype"); if (ct && !ct.value) ct.value = tpl.content_type || "";
+        const prio = S.qs("#t-priority"); if (prio && tpl.default_priority && prio.value === "Medium") prio.value = tpl.default_priority;
+        const desc = S.qs("#t-desc"); if (desc && !desc.value.trim() && tpl.default_description) desc.value = tpl.default_description;
+        const lbls = S.qsa("#t-labels input");
+        if (lbls.length && (tpl.default_labels || []).length && !lbls.some((c) => c.checked)) {
+          lbls.forEach((c) => { if (tpl.default_labels.includes(c.value)) c.checked = true; });
+        }
       };
       const fillServices = () => {
         const opts = templatesForTeam(numOrNull("t-team"));

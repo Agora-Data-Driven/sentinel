@@ -101,7 +101,13 @@ def _ensure_columns() -> None:
     from sqlalchemy import inspect, text
 
     from .database import engine
-    added = [("tasks", "maintasks_json", "TEXT DEFAULT '[]'")]
+    added = [
+        ("tasks", "maintasks_json", "TEXT DEFAULT '[]'"),
+        # Service-template defaults auto-filled onto new tasks (added after the table shipped).
+        ("service_templates", "default_priority", "VARCHAR(16)"),
+        ("service_templates", "default_labels_json", "TEXT DEFAULT '[]'"),
+        ("service_templates", "default_description", "TEXT"),
+    ]
     try:
         insp = inspect(engine)
         for table, column, decl in added:

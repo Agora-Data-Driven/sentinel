@@ -92,6 +92,11 @@ class ServiceTemplate(Base):
     dept: Mapped[str | None] = mapped_column(String(80), nullable=True)  # Team name
     content_type: Mapped[str | None] = mapped_column(String(80), nullable=True)
     maintasks_json: Mapped[str] = mapped_column(Text, default="[]")
+    # Defaults auto-filled onto a new task when this service is picked (a seed, not a lock —
+    # each is still editable on the task afterwards; the form pre-fills them client-side too).
+    default_priority: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    default_labels_json: Mapped[str] = mapped_column(Text, default="[]")  # ["Design","Ads",...]
+    default_description: Mapped[str | None] = mapped_column(Text, nullable=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

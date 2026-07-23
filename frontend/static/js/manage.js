@@ -110,9 +110,12 @@ window.pageInit = async (S) => {
         { k: "dept", label: "Department" },
         { k: "content_type", label: "Content type" },
         { k: "maintasks", label: "Recipe", fmt: (v) => `${(v || []).length} main · ${(v || []).reduce((n, m) => n + (m.subs || []).length, 0)} sub-tasks` },
+        { k: "default_priority", label: "Defaults", fmt: (_v, r) => _svcDefaults(r) },
+        { k: "is_active", label: "In picker", fmt: (v) => (v === false ? `<span class="muted">Archived</span>` : `<span class="pill day Push">Active</span>`) },
       ],
       customForm: true,  // has a nested main-task -> sub-task recipe editor (openServiceForm)
-      help: "The services the New Task form offers per department. Pick one and its whole main-task → sub-task breakdown is seeded into the new task. Fully editable here — no developer needed.",
+      rowActions: [{ label: "Duplicate", handler: (item) => openServiceForm(item, true) }],
+      help: "The services the New Task form offers per department. Pick one and its whole main-task → sub-task breakdown — plus any default priority, labels and description — is seeded into the new task. Fully editable here — no developer needed.",
     },
     Statuses: {
       api: "/api/manage/task-vocab", listUrl: "/api/manage/task-vocab?kind=status", fixed: { kind: "status" }, singular: "status",
@@ -137,6 +140,15 @@ window.pageInit = async (S) => {
   const _swatch = (hex) => hex
     ? `<span class="dot" style="background:${S.esc(hex)};vertical-align:middle"></span> <span class="muted">${S.esc(hex)}</span>`
     : "—";
+
+  // Compact summary of a service's auto-fill defaults for the Services table.
+  const _svcDefaults = (r) => {
+    const bits = [];
+    if (r.default_priority) bits.push(S.esc(r.default_priority));
+    if ((r.default_labels || []).length) bits.push(r.default_labels.map((l) => S.esc(l)).join(", "));
+    if (r.default_description) bits.push("brief");
+    return bits.length ? bits.join(" · ") : "—";
+  };
 
   const keys = Object.keys(ENTITIES);
   view.innerHTML = `<div class="pagehead"><div><h2>Manage</h2>
@@ -168,7 +180,7 @@ window.pageInit = async (S) => {
       <div class="table-wrap"><table>
         <thead><tr>${cfg.cols.map((c) => `<th>${c.label}</th>`).join("")}<th style="text-align:right">Actions</th></tr></thead>
         <tbody>${rows.length ? rows.map((r) => `<tr>
-          ${cfg.cols.map((c) => `<td>${c.fmt ? c.fmt(r[c.k]) : S.esc(r[c.k] == null || r[c.k] === "" ? "—" : r[c.k])}</td>`).join("")}
+          ${cfg.cols.map((c) => `<td>${c.fmt ? c.fmt(r[c.k], r) : S.esc(r[c.k] == null || r[c.k] === "" ? "—" : r[c.k])}</td>`).join("")}
           <td style="text-align:right;white-space:nowrap">
             ${(cfg.rowActions || []).map((a, ai) => `<button class="btn sm ghost" data-rowact="${ai}" data-id="${r.id}">${S.esc(a.label)}</button>`).join("")}
             <button class="btn sm ghost" data-edit="${r.id}">Edit</button>
@@ -296,18 +308,23 @@ window.pageInit = async (S) => {
 
   // Service recipe editor — a main-task title + one-sub-task-per-line textarea per group. Low-code:
   // the whole two-level breakdown a new task is seeded with, edited without touching any code.
-  function openServiceForm(item) {
-    const editing = !!item;
+  function openServiceForm(item, asNew) {
+    // asNew = pre-fill from `item` but save as a brand-new service (the Duplicate action).
+    const editing = !!item && !asNew;
     // recipe rows: {title, subsText}
     let recipe = (item && item.maintasks || []).map((m) => ({
       title: m.title || "", subsText: (m.subs || []).map((s) => s.text).join("\n"),
     }));
     if (!recipe.length) recipe = [{ title: "", subsText: "" }];
     const deptOpts = [{ value: "", label: "—" }].concat(OPTS.teamNames);
+    const prioOpts = [{ value: "", label: "— none —" }].concat((vocab.priorities || []).map((p) => ({ value: p, label: p })));
+    const curLabels = (item && item.default_labels) || [];
+    let defLabel = item ? item.label : "";
+    if (asNew && item) defLabel = `${item.label} (copy)`;
     const m = S.modal({
       title: `${editing ? "Edit" : "Add"} service`, wide: true,
       body: `
-        <label class="field"><span>Service name *</span><input id="sf-label" value="${S.esc(item ? item.label : "")}"></label>
+        <label class="field"><span>Service name *</span><input id="sf-label" value="${S.esc(defLabel)}"></label>
         <div class="grid" style="grid-template-columns:1fr 1fr;gap:12px">
           <label class="field"><span>Department</span><select id="sf-dept">${deptOpts.map((o) => `<option value="${S.esc(o.value)}" ${item && item.dept === o.value ? "selected" : ""}>${S.esc(o.label)}</option>`).join("")}</select></label>
           <label class="field"><span>Content type</span><input id="sf-ctype" value="${S.esc(item ? item.content_type || "" : "")}"></label>
@@ -315,7 +332,15 @@ window.pageInit = async (S) => {
         <div class="section-label" style="margin:6px 0 4px">Recipe — main tasks &amp; their sub-tasks</div>
         <div class="muted" style="font-size:12px;margin-bottom:8px">One sub-task per line. This is what gets seeded into a new task's breakdown.</div>
         <div id="sf-recipe"></div>
-        <button type="button" class="btn sm ghost" id="sf-addmain" style="margin-top:8px">${S.ICON.plus}Add main task</button>`,
+        <button type="button" class="btn sm ghost" id="sf-addmain" style="margin-top:8px">${S.ICON.plus}Add main task</button>
+        <div class="section-label" style="margin:16px 0 4px">Auto-fill defaults</div>
+        <div class="muted" style="font-size:12px;margin-bottom:8px">Pre-filled onto a new task when this service is picked. Each stays editable on the task.</div>
+        <div class="grid" style="grid-template-columns:1fr 1fr;gap:12px">
+          <label class="field"><span>Default priority</span><select id="sf-prio">${prioOpts.map((o) => `<option value="${S.esc(o.value)}" ${item && item.default_priority === o.value ? "selected" : ""}>${S.esc(o.label)}</option>`).join("")}</select></label>
+          <label class="field"><span>Show in the New Task picker</span><label class="chip" style="cursor:pointer;align-self:start"><input type="checkbox" id="sf-active" style="width:auto" ${item && item.is_active === false ? "" : "checked"}> Active</label></label>
+        </div>
+        <label class="field"><span>Default labels</span><div class="row wrap" id="sf-labels">${(vocab.task_labels || []).map((l) => `<label class="chip" style="cursor:pointer"><input type="checkbox" style="width:auto" value="${S.esc(l)}" ${curLabels.includes(l) ? "checked" : ""}> ${S.esc(l)}</label>`).join("")}</div></label>
+        <label class="field"><span>Default description / brief</span><textarea id="sf-desc" rows="3">${S.esc(item ? item.default_description || "" : "")}</textarea></label>`,
       footer: `<button class="btn ghost" id="sf-cancel">Cancel</button><button class="btn primary" id="sf-save">${editing ? "Save" : "Create"}</button>`,
     });
 
@@ -346,7 +371,13 @@ window.pageInit = async (S) => {
       const maintasks = recipe
         .map((r) => ({ title: r.title.trim(), subs: r.subsText.split("\n").map((l) => l.trim()).filter(Boolean).map((text) => ({ text })) }))
         .filter((g) => g.title || g.subs.length);
-      const payload = { label, dept: S.qs("#sf-dept").value || null, content_type: S.qs("#sf-ctype").value || null, maintasks };
+      const payload = {
+        label, dept: S.qs("#sf-dept").value || null, content_type: S.qs("#sf-ctype").value || null, maintasks,
+        default_priority: S.qs("#sf-prio").value || null,
+        default_labels: S.qsa("#sf-labels input:checked").map((c) => c.value),
+        default_description: S.qs("#sf-desc").value.trim() || null,
+        is_active: S.qs("#sf-active").checked,
+      };
       try {
         if (editing) await S.api(`/api/manage/service-templates/${item.id}`, { method: "PATCH", body: payload });
         else await S.api("/api/manage/service-templates", { method: "POST", body: payload });
