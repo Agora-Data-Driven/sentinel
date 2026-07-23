@@ -66,30 +66,30 @@
     '<text x="48" y="24.5" font-family="Inter,sans-serif" font-size="21" font-weight="600" letter-spacing="3.2" fill="#1A1B1E">AGORA</text>' +
     '<text x="49.5" y="35" font-family="Inter,sans-serif" font-size="7.3" font-weight="700" letter-spacing="3.6" fill="#353535">OPERATIONS</text></svg>';
 
-  // Navigation is a shallow tree: at most 4 top-level entries. "Dashboard" is a plain
-  // leaf; the rest are collapsible groups whose children carry the real page links.
-  // Item gating: `roles` = allow-list, `min` = minimum rank, `hideRoles` = deny-list
-  // (e.g. leave/gym/scanner are personal/kiosk tools a super_admin doesn't use).
-  // Three worker-facing sections, grouped by the worker's own jobs-to-be-done (My Day / Development /
-  // HR), plus a role-gated Admin group that disappears entirely for regular staff (all its children
-  // are ≥ team_lead, so renderNav drops the group). A worker sees exactly 3 tabs; a lead/admin sees 4.
+  // Flat, single-level navigation: 6 destinations, no accordions. A destination is either a
+  // LEAF (its own page) or a HUB — a set of sibling pages that share a context bar under the
+  // topbar. The sidebar row for a hub links to its primary (first allowed) page and lights up
+  // whenever any of its pages is current; the siblings surface as tabs in renderContextBar,
+  // not as nested rows. Item gating unchanged: `roles` allow-list, `min` rank floor, `hideRoles`
+  // deny-list (personal tools like Leave/Gym a super_admin doesn't use). A hub whose every child
+  // is filtered out is dropped entirely (e.g. Admin disappears for regular staff).
   const NAV = [
-    { group: "My Day", icon: "grid", children: [
-      { href: "/dashboard", label: "Dashboard", icon: "grid" },
-      { href: "/tasks", label: "Task Board", icon: "board" },
-      { href: "/north-star", label: "Our North Star", icon: "compass" },
-    ] },
-    { group: "Development", icon: "sparkle", children: [
+    { href: "/dashboard", label: "Dashboard", icon: "grid" },
+    { href: "/tasks", label: "Task Board", icon: "board" },
+    { group: "Growth", icon: "sparkle", children: [
       { href: "/growth", label: "Overview", icon: "sparkle" },
       { href: "/academy", label: "Academy", icon: "cap" },
       { href: "/reading", label: "Reading & Philosophy", icon: "book" },
       { href: "/gym", label: "Gym", icon: "dumbbell", hideRoles: ["super_admin"] },
     ] },
-    { group: "HR", icon: "calendar", children: [
+    { group: "Time & Leave", icon: "clock", children: [
       { href: "/attendance", label: "Time", icon: "clock" },
       { href: "/leave", label: "Leave", icon: "calendar", hideRoles: ["super_admin"] },
-      { href: "/scanner", label: "Check-in", icon: "qr", hideRoles: ["super_admin"] },
+      // Check-in (the QR scanner station) is an operational tool, not personal — visible to all
+      // roles so a super_admin can reach it too (it was hidden before, hence "missing").
+      { href: "/scanner", label: "Check-in", icon: "qr" },
     ] },
+    { href: "/north-star", label: "Our North Star", icon: "compass" },
     { group: "Admin", icon: "sliders", children: [
       { href: "/people", label: "People", icon: "users", min: "team_lead" },
       { href: "/reports", label: "Reports", icon: "chart", min: "team_lead" },
@@ -254,6 +254,8 @@
     const view = qs("#view");
     const title = document.body.dataset.title || "Sentinel";
     const path = location.pathname;
+    // The page title lives in each page's own header + the browser tab — not repeated in the topbar.
+    document.title = title === "Sentinel" ? "Sentinel" : `${title} — Sentinel`;
 
     const navItems = renderNav(path);
 
@@ -277,11 +279,10 @@
         <header class="top">
           <div class="row">
             <button class="iconbtn hamburger" id="ham" aria-label="Menu">${ICON.menu}</button>
-            <div><h1>${esc(title)}</h1><div class="sub" id="top-sub"></div></div>
+            <div class="sub" id="top-sub"></div>
           </div>
           <div class="top-right">
             <button class="cmdk-trigger" id="cmdk-trigger" title="Search — Ctrl K" aria-label="Open command palette">${ICON.search}<span>Search</span><kbd>Ctrl K</kbd></button>
-            ${USER.role === "super_admin" ? '<span class="pill amber sa-badge" title="You are viewing as Super Admin — full access to every module and record">Super Admin view</span>' : ""}
             <div class="theme-toggle" id="theme-toggle">
               <button data-set-theme="light" title="Light mode">${ICON.sun}</button>
               <button data-set-theme="dark" title="Dark mode">${ICON.moon}</button>
@@ -294,6 +295,7 @@
             <button class="iconbtn" id="logout" title="Log out">${ICON.logout}</button>
           </div>
         </header>
+        <div class="ctxbar" id="ctxbar" hidden></div>
         <div class="content"></div>
       </div>`;
     document.body.insertBefore(shell, view);
@@ -303,12 +305,8 @@
     const side = qs("#side");
     const toggle = () => { side.classList.toggle("open"); scrim.classList.toggle("open"); };
     qs("#ham").onclick = toggle; scrim.onclick = toggle;
-    // Collapsible nav groups: clicking a header expands/collapses its children.
-    qsa(".nav-group-head").forEach((btn) => btn.onclick = () => {
-      const g = btn.closest(".nav-group");
-      const open = g.classList.toggle("open");
-      btn.setAttribute("aria-expanded", open ? "true" : "false");
-    });
+    // Hub siblings render as tabs in the context bar under the topbar (flat rail, no accordions).
+    renderContextBar(path);
     qs("#logout").onclick = doLogout;
     // Light/dark toggle (setTheme is shared with the command palette)
     qsa("#theme-toggle button").forEach((b) => b.onclick = () => setTheme(b.dataset.setTheme));
@@ -562,22 +560,32 @@
     return `<a href="${n.href}" class="${path === n.href ? "active" : ""}">${ICON[n.icon]}<span>${n.label}</span>${n.href === "/tasks" ? '<span class="count" id="nav-tasks" style="display:none"></span>' : ""}</a>`;
   }
 
-  // Renders the nav tree: leaves as links, groups as collapsible sections.
-  // A group auto-expands (and its header lights up) when it holds the active page,
-  // and is dropped entirely when the current user can see none of its children.
+  // Renders the flat rail. Leaves and hubs are BOTH single links. A hub links to its primary
+  // (first allowed) child and lights up when any of its pages is current; its siblings live in
+  // the context bar (renderContextBar), not as nested rows. A hub with no allowed child is dropped.
   function renderNav(path) {
     return NAV.map((n) => {
       if (!n.children) return navAllowed(n) ? navLink(n, path) : "";
       const kids = n.children.filter(navAllowed);
       if (!kids.length) return "";
       const here = kids.some((k) => k.href === path);
-      return `<div class="nav-group${here ? " open" : ""}">
-        <button type="button" class="nav-group-head${here ? " here" : ""}" aria-expanded="${here ? "true" : "false"}">
-          ${ICON[n.icon]}<span>${esc(n.group)}</span>${ICON.chev}
-        </button>
-        <div class="nav-group-body">${kids.map((k) => navLink(k, path)).join("")}</div>
-      </div>`;
+      return `<a href="${kids[0].href}" class="${here ? "active" : ""}">${ICON[n.icon]}<span>${esc(n.group)}</span></a>`;
     }).join("");
+  }
+
+  // The hub context bar: when the current page belongs to a hub, show its sibling pages as tabs
+  // directly under the topbar (the "many features, one surface" pattern). Hidden on leaf pages.
+  function renderContextBar(path) {
+    const bar = qs("#ctxbar");
+    if (!bar) return;
+    const hub = NAV.find((n) => n.children && n.children.some((k) => k.href === path));
+    const kids = hub ? hub.children.filter(navAllowed) : [];
+    if (!hub || kids.length < 2) { bar.hidden = true; bar.innerHTML = ""; return; }
+    bar.hidden = false;
+    bar.innerHTML = `<div class="ctxbar-in">
+      <span class="ctxbar-hub">${ICON[hub.icon]}<span>${esc(hub.group)}</span></span>
+      ${kids.map((k) => `<a href="${k.href}" class="ctab${k.href === path ? " active" : ""}">${esc(k.label)}</a>`).join("")}
+    </div>`;
   }
 
   // ---------------- Command palette (Ctrl/Cmd + K) ----------------

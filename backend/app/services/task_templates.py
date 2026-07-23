@@ -11,6 +11,8 @@ drawer edits freely (rename, add, assign, delete).
 """
 from __future__ import annotations
 
+import json
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -114,7 +116,6 @@ SEED_TEMPLATES: dict[str, dict] = {
 def seed_rows() -> list[dict]:
     """The rows main._seed_config writes into `service_templates` on first boot (recipe = raw groups,
     no ids — MT.normalize assigns fresh ids each time a task is seeded from it)."""
-    import json
     rows = []
     for i, (key, t) in enumerate(SEED_TEMPLATES.items()):
         groups = [{"title": title, "subs": [{"text": s} for s in subs]} for title, subs in t["groups"]]
@@ -150,8 +151,14 @@ def catalog(db: Session) -> list[dict]:
     out = []
     for r in rows:
         groups = MT.normalize(r.maintasks_json)  # gives {title, subs:[{text,...}]}
+        try:
+            labels = json.loads(getattr(r, "default_labels_json", None) or "[]")
+        except (ValueError, TypeError):
+            labels = []
         out.append({
             "key": r.key, "dept": r.dept, "label": r.label, "content_type": r.content_type,
+            "default_priority": r.default_priority, "default_labels": labels,
+            "default_description": r.default_description,
             "steps": [s["text"] for g in groups for s in g["subs"]],
             "groups": [{"title": g["title"], "subs": [{"text": s["text"]} for s in g["subs"]]} for g in groups],
         })

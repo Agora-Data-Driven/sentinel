@@ -49,6 +49,47 @@ def test_service_template_crud_and_seeding_into_task(client, make_user, auth):
     assert task["checklist_total"] == 2
 
 
+def test_service_template_defaults_autofill_a_new_task(client, make_user, auth):
+    """A service template can carry a default priority/labels/description that seed onto a new task."""
+    auth(make_user(C.ROLE_SUPER_ADMIN))
+    created = client.post("/api/manage/service-templates", json={
+        "label": "Urgent Website Fix", "dept": "Development", "content_type": "Website",
+        "maintasks": [{"title": "Fix", "subs": [{"text": "Patch"}]}],
+        "default_priority": "Urgent", "default_labels": ["Dev"],
+        "default_description": "Standard hotfix brief.",
+    })
+    assert created.status_code == 200
+    body = created.json()
+    assert body["default_priority"] == "Urgent" and body["default_labels"] == ["Dev"]
+    key = body["key"]
+    # catalog exposes the defaults so the form can pre-fill them
+    cat = next(t for t in client.get("/api/tasks/templates").json() if t["key"] == key)
+    assert cat["default_priority"] == "Urgent" and cat["default_labels"] == ["Dev"]
+    assert cat["default_description"] == "Standard hotfix brief."
+    # a manager creating from it (leaving those fields blank) gets the defaults applied
+    task = client.post("/api/tasks", json={"title": "Site down", "service_key": key}).json()
+    assert task["priority"] == "Urgent"
+    assert task["labels"] == ["Dev"]
+    assert task["description"] == "Standard hotfix brief."
+
+
+def test_caller_values_win_over_template_defaults(client, make_user, auth):
+    """Explicit fields on the create request are never overwritten by the template's defaults."""
+    auth(make_user(C.ROLE_SUPER_ADMIN))
+    key = client.post("/api/manage/service-templates", json={
+        "label": "Low Priority Job", "dept": "Lifecycle",
+        "maintasks": [{"title": "Do", "subs": [{"text": "Step"}]}],
+        "default_priority": "Urgent", "default_labels": ["Dev"], "default_description": "template brief",
+    }).json()["key"]
+    task = client.post("/api/tasks", json={
+        "title": "Override", "service_key": key,
+        "priority": "Low", "labels": ["Copy"], "description": "my brief",
+    }).json()
+    assert task["priority"] == "Low"
+    assert task["labels"] == ["Copy"]
+    assert task["description"] == "my brief"
+
+
 # --- Task vocab: create, rename-cascade, delete guard ---------------------
 def test_status_rename_cascades_to_tasks(client, db, make_user, auth):
     auth(make_user(C.ROLE_SUPER_ADMIN))

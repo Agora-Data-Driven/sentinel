@@ -276,8 +276,14 @@ def _svc_dict(t: ServiceTemplate) -> dict:
         groups = json.loads(t.maintasks_json or "[]")
     except (ValueError, TypeError):
         groups = []
+    try:
+        labels = json.loads(getattr(t, "default_labels_json", None) or "[]")
+    except (ValueError, TypeError):
+        labels = []
     return {"id": t.id, "key": t.key, "label": t.label, "dept": t.dept,
             "content_type": t.content_type, "maintasks": groups,
+            "default_priority": t.default_priority, "default_labels": labels,
+            "default_description": t.default_description,
             "sort_order": t.sort_order, "is_active": t.is_active}
 
 
@@ -305,6 +311,9 @@ def create_service(payload: dict, actor: User = Depends(get_current_user), db: S
         key=key, label=label, dept=payload.get("dept") or None,
         content_type=payload.get("content_type") or None,
         maintasks_json=json.dumps(payload.get("maintasks") or []),
+        default_priority=payload.get("default_priority") or None,
+        default_labels_json=json.dumps(payload.get("default_labels") or []),
+        default_description=payload.get("default_description") or None,
         sort_order=last + 1, is_active=payload.get("is_active", True),
     )
     db.add(t)
@@ -326,6 +335,12 @@ def update_service(item_id: int, payload: dict, actor: User = Depends(get_curren
         t.content_type = payload["content_type"] or None
     if "maintasks" in payload:
         t.maintasks_json = json.dumps(payload["maintasks"] or [])
+    if "default_priority" in payload:
+        t.default_priority = payload["default_priority"] or None
+    if "default_labels" in payload:
+        t.default_labels_json = json.dumps(payload["default_labels"] or [])
+    if "default_description" in payload:
+        t.default_description = payload["default_description"] or None
     if "sort_order" in payload and payload["sort_order"] not in (None, ""):
         t.sort_order = int(payload["sort_order"])
     if "is_active" in payload:
