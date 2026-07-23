@@ -74,6 +74,7 @@
   // deny-list (personal tools like Leave/Gym a super_admin doesn't use). A hub whose every child
   // is filtered out is dropped entirely (e.g. Admin disappears for regular staff).
   const NAV = [
+    { section: "Workspace" },
     { href: "/dashboard", label: "Dashboard", icon: "grid" },
     { href: "/tasks", label: "Task Board", icon: "board" },
     { group: "Growth", icon: "sparkle", children: [
@@ -90,6 +91,7 @@
       { href: "/scanner", label: "Check-in", icon: "qr" },
     ] },
     { href: "/north-star", label: "Our North Star", icon: "compass" },
+    { section: "Admin" },
     { group: "Admin", icon: "sliders", children: [
       { href: "/people", label: "People", icon: "users", min: "team_lead" },
       { href: "/reports", label: "Reports", icon: "chart", min: "team_lead" },
@@ -277,23 +279,18 @@
       </aside>
       <div class="main">
         <header class="top">
-          <div class="row">
-            <button class="iconbtn hamburger" id="ham" aria-label="Menu">${ICON.menu}</button>
-            <div class="sub" id="top-sub"></div>
+          <button class="iconbtn hamburger" id="ham" aria-label="Menu">${ICON.menu}</button>
+          <button class="cmdk-trigger" id="cmdk-trigger" title="Search — Ctrl K" aria-label="Open command palette">${ICON.search}<span>Search anything</span><kbd>Ctrl K</kbd></button>
+          <div class="theme-toggle" id="theme-toggle">
+            <button data-set-theme="light" title="Light mode">${ICON.sun}</button>
+            <button data-set-theme="dark" title="Dark mode">${ICON.moon}</button>
           </div>
-          <div class="top-right">
-            <button class="cmdk-trigger" id="cmdk-trigger" title="Search — Ctrl K" aria-label="Open command palette">${ICON.search}<span>Search</span><kbd>Ctrl K</kbd></button>
-            <div class="theme-toggle" id="theme-toggle">
-              <button data-set-theme="light" title="Light mode">${ICON.sun}</button>
-              <button data-set-theme="dark" title="Dark mode">${ICON.moon}</button>
-            </div>
-            <div class="clock" id="clock"></div>
-            <div style="position:relative">
-              <button class="iconbtn" id="bell" aria-label="Notifications">${ICON.bell}<span class="bdot" id="bell-count" style="display:none"></span></button>
-              <div class="notif-panel" id="notif-panel"></div>
-            </div>
-            <button class="iconbtn" id="logout" title="Log out">${ICON.logout}</button>
+          <div style="position:relative">
+            <button class="iconbtn" id="bell" aria-label="Notifications">${ICON.bell}<span class="bdot" id="bell-count" style="display:none"></span></button>
+            <div class="notif-panel" id="notif-panel"></div>
           </div>
+          <button class="iconbtn" id="logout" title="Log out">${ICON.logout}</button>
+          <div class="sub" id="top-sub" hidden></div>
         </header>
         <div class="ctxbar" id="ctxbar" hidden></div>
         <div class="content"></div>
@@ -505,9 +502,11 @@
     if (!slots.length) return;
     // Dark mode uses the white-ink logo so it stays legible on the dark sidebar.
     const dark = document.documentElement.getAttribute("data-theme") === "dark";
+    // Cache-bust: bump when the logo file changes so browsers/PWA fetch the new art, not a stale copy.
+    const V = "?v=21";
     const candidates = dark
-      ? ["/static/img/logo-dark.png", "/static/img/logo.png"]
-      : ["/static/img/logo.png", "/static/img/logo.svg"];
+      ? ["/static/img/logo-dark.png" + V, "/static/img/logo.png" + V]
+      : ["/static/img/logo.png" + V, "/static/img/logo.svg"];
     (function pick(i) {
       if (i >= candidates.length) return;  // no custom logo — keep the built-in mark + pill
       tryImg(candidates[i]).then((url) => {
@@ -564,13 +563,26 @@
   // (first allowed) child and lights up when any of its pages is current; its siblings live in
   // the context bar (renderContextBar), not as nested rows. A hub with no allowed child is dropped.
   function renderNav(path) {
-    return NAV.map((n) => {
-      if (!n.children) return navAllowed(n) ? navLink(n, path) : "";
+    // Section markers ({ section }) group the rail into "Workspace" / "Admin". A label is only
+    // emitted once its section actually produced ≥1 allowed link, so role-gated empty sections
+    // (e.g. Admin for regular staff) never leave an orphan heading.
+    let out = "";
+    let pendingLabel = null;
+    let buf = "";
+    const flush = () => {
+      if (buf) { if (pendingLabel) out += `<div class="navlabel">${esc(pendingLabel)}</div>`; out += buf; }
+      buf = ""; pendingLabel = null;
+    };
+    NAV.forEach((n) => {
+      if (n.section) { flush(); pendingLabel = n.section; return; }
+      if (!n.children) { if (navAllowed(n)) buf += navLink(n, path); return; }
       const kids = n.children.filter(navAllowed);
-      if (!kids.length) return "";
+      if (!kids.length) return;
       const here = kids.some((k) => k.href === path);
-      return `<a href="${kids[0].href}" class="${here ? "active" : ""}">${ICON[n.icon]}<span>${esc(n.group)}</span></a>`;
-    }).join("");
+      buf += `<a href="${kids[0].href}" class="${here ? "active" : ""}">${ICON[n.icon]}<span>${esc(n.group)}</span></a>`;
+    });
+    flush();
+    return out;
   }
 
   // The hub context bar: when the current page belongs to a hub, show its sibling pages as tabs
