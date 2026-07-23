@@ -263,6 +263,7 @@ class TaskCreateIn(BaseModel):
     client_id: int | None = None
     campaign: str | None = None
     content_type: str | None = None
+    service_key: str | None = None  # a task_templates recipe — seeds the checklist + content_type
     assigned_team_id: int | None = None
     assigned_to_id: int | None = None
     priority: str = "Medium"

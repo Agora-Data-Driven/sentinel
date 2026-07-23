@@ -4,11 +4,18 @@ window.pageInit = async (S) => {
   const canMonitor = S.can("team_lead");   // team leads and up get the Monitor / employee overview
   const isAM = S.user.role === "account_manager";
 
-  const [vocab, clients, teams, people] = await Promise.all([
+  const [vocab, clients, teams, people, templates] = await Promise.all([
     S.api("/api/vocab"), S.api("/api/clients"), S.api("/api/teams"), S.api("/api/people"),
+    S.api("/api/tasks/templates"),
   ]);
   const STATUSES = vocab.task_statuses;
   const peopleById = Object.fromEntries(people.map((p) => [p.id, p]));
+  const teamsById = Object.fromEntries(teams.map((t) => [t.id, t]));
+  // Service templates that match a chosen department (team), by team name.
+  const templatesForTeam = (teamId) => {
+    const name = teamsById[teamId] ? teamsById[teamId].name : null;
+    return name ? templates.filter((t) => t.dept === name) : [];
+  };
   let filters = { client_id: "", team_id: "", priority: "", assignee_id: "" };
   let search = "";
   let allTasks = [];          // last fetch, unfiltered by the text search
@@ -276,7 +283,9 @@ window.pageInit = async (S) => {
   }
 
   async function openDetail(id) {
-    const t = await S.api("/api/tasks/" + id);
+    let t;
+    try { t = await S.api("/api/tasks/" + id); }
+    catch (err) { S.toast(err.detail || "Couldn't open that task", "err"); return; }
     const done = t.checklist.filter((i) => i.done).length;
     const pct = t.checklist.length ? Math.round(100 * done / t.checklist.length) : 0;
     const body = `<div class="stack" style="gap:22px">
@@ -304,8 +313,8 @@ window.pageInit = async (S) => {
         </div>
       </div>
       <div>
-        <div class="section-label">Checklist ${t.checklist.length ? `· ${done}/${t.checklist.length}` : ""}</div>
-        <div class="progress" style="margin:8px 0 10px"><i style="width:${pct}%"></i></div>
+        <div class="section-label">Checklist <span id="d-check-count">${t.checklist.length ? `· ${done}/${t.checklist.length}` : ""}</span></div>
+        <div class="progress" style="margin:8px 0 10px"><i id="d-check-bar" style="width:${pct}%"></i></div>
         <ul class="checklist" id="d-check">${t.checklist.map((c, i) => `<li class="${c.done ? "done" : ""}"><input type="checkbox" data-ci="${i}" ${c.done ? "checked" : ""}><span>${S.esc(c.text)}</span></li>`).join("") || '<li class="muted">No checklist items.</li>'}</ul>
         <div class="section-label" style="margin-top:18px">Comments</div>
         <div class="thread" id="d-thread" style="margin:10px 0">${t.comments.map(cmt).join("") || '<div class="muted">No comments yet.</div>'}</div>
@@ -315,23 +324,44 @@ window.pageInit = async (S) => {
       </div></div>`;
     const footer = `${t.status !== "For Review" ? `<button class="btn ghost" id="d-review">Move to Review</button>` : ""}
       ${canCreate ? `<button class="btn ghost" id="d-atrium">${t.atrium_visible ? "✓ In Atrium" : "Send to Atrium"}</button>
-      <button class="btn ghost" id="d-edit">Edit</button>` : ""}
+      <button class="btn ghost" id="d-edit">Edit</button>
+      <button class="btn danger" id="d-delete">Delete</button>` : ""}
       <button class="btn primary" id="d-close">Close</button>`;
     const m = S.modal({ title: "Task #" + t.id, body, footer, drawer: true });
     S.qs("#d-close").onclick = m.close;
 
-    // Checklist toggle
+    // Keep the progress bar + "· done/total" count in sync as items are ticked.
+    const syncChecklistProgress = () => {
+      const n = t.checklist.length;
+      const d = t.checklist.filter((i) => i.done).length;
+      const bar = S.qs("#d-check-bar"); if (bar) bar.style.width = (n ? Math.round(100 * d / n) : 0) + "%";
+      const cnt = S.qs("#d-check-count"); if (cnt) cnt.textContent = n ? `· ${d}/${n}` : "";
+    };
+    // Checklist toggle — optimistic, reverts on failure so the UI never lies about a save.
     S.qsa("#d-check input").forEach((cb) => cb.onchange = async () => {
-      t.checklist[+cb.dataset.ci].done = cb.checked;
-      await S.api("/api/tasks/" + id, { method: "PATCH", body: { checklist: t.checklist } });
+      const idx = +cb.dataset.ci;
+      const prev = t.checklist[idx].done;
+      t.checklist[idx].done = cb.checked;
       cb.closest("li").classList.toggle("done", cb.checked);
+      syncChecklistProgress();
+      try {
+        await S.api("/api/tasks/" + id, { method: "PATCH", body: { checklist: t.checklist } });
+      } catch (err) {
+        t.checklist[idx].done = prev;
+        cb.checked = prev;
+        cb.closest("li").classList.toggle("done", prev);
+        syncChecklistProgress();
+        S.toast(err.detail || "Couldn't save the checklist", "err");
+      }
     });
     // Comment
     S.qs("#d-send").onclick = async () => {
       const val = S.qs("#d-comment").value.trim(); if (!val) return;
-      const c = await S.api(`/api/tasks/${id}/comments`, { method: "POST", body: { body: val } });
-      const thr = S.qs("#d-thread"); if (thr.querySelector(".muted")) thr.innerHTML = "";
-      thr.insertAdjacentHTML("beforeend", cmt(c)); S.qs("#d-comment").value = "";
+      try {
+        const c = await S.api(`/api/tasks/${id}/comments`, { method: "POST", body: { body: val } });
+        const thr = S.qs("#d-thread"); if (thr.querySelector(".muted")) thr.innerHTML = "";
+        thr.insertAdjacentHTML("beforeend", cmt(c)); S.qs("#d-comment").value = "";
+      } catch (err) { S.toast(err.detail || "Couldn't post that comment", "err"); }
     };
     // Priority (AM only)
     if (isAM && S.qs("#d-priority")) S.qs("#d-priority").onchange = async (e) => {
@@ -347,6 +377,25 @@ window.pageInit = async (S) => {
       catch (err) { S.toast(err.detail, "err"); }
     };
     if (S.qs("#d-edit")) S.qs("#d-edit").onclick = () => { m.close(); taskForm(t); };
+    if (S.qs("#d-delete")) S.qs("#d-delete").onclick = () => confirmDelete(t, m);
+  }
+
+  // Confirm-then-delete. Deletion is irreversible (no bin), so we always ask first.
+  function confirmDelete(t, parent) {
+    const cm = S.modal({
+      title: "Delete task?",
+      body: `<p style="line-height:1.5">Delete <strong>${S.esc(t.title)}</strong>?<br>
+        <span class="muted">This also removes its checklist, comments, and activity. This can't be undone.</span></p>`,
+      footer: `<button class="btn ghost" id="cd-cancel">Cancel</button><button class="btn danger" id="cd-yes">Delete task</button>`,
+    });
+    S.qs("#cd-cancel").onclick = cm.close;
+    S.qs("#cd-yes").onclick = async () => {
+      S.qs("#cd-yes").disabled = true;
+      try {
+        await S.api("/api/tasks/" + t.id, { method: "DELETE" });
+        S.toast("Task deleted", "ok"); cm.close(); if (parent) parent.close(); load();
+      } catch (err) { S.qs("#cd-yes").disabled = false; S.toast(err.detail || "Couldn't delete the task", "err"); }
+    };
   }
 
   const field = (label, val) => `<div><div class="section-label">${label}</div><div style="margin-top:4px">${S.esc(val || "—")}</div></div>`;
@@ -362,6 +411,8 @@ window.pageInit = async (S) => {
         <label class="field"><span>Client</span><select id="t-client"><option value="">—</option>${clients.map((c) => `<option value="${c.id}" ${c.id === e.client_id ? "selected" : ""}>${S.esc(c.name)}</option>`).join("")}</select></label>
         <label class="field"><span>Campaign</span><input id="t-campaign" value="${S.esc(e.campaign || "")}"></label>
         <label class="field"><span>Department</span><select id="t-team"><option value="">—</option>${teams.map((t) => `<option value="${t.id}" ${t.id === e.assigned_team_id ? "selected" : ""}>${S.esc(t.name)}</option>`).join("")}</select></label>
+        ${!existing ? `<label class="field"><span>Service type <span class="muted" style="font-weight:400">· auto-fills the checklist</span></span><select id="t-svc"><option value="">Custom (blank)</option></select></label>
+        <div class="field" style="grid-column:1/-1" id="t-svc-preview" hidden></div>` : ""}
         <label class="field"><span>Assignee</span><select id="t-assignee"><option value="">Unassigned</option>${people.map((p) => `<option value="${p.id}" ${p.id === e.assigned_to_id ? "selected" : ""}>${S.esc(p.name)}</option>`).join("")}</select></label>
         <label class="field"><span>Content type</span><input id="t-ctype" value="${S.esc(e.content_type || "")}"></label>
         <label class="field"><span>Due date</span><input type="date" id="t-due" value="${e.due_date || ""}"></label>
@@ -375,6 +426,32 @@ window.pageInit = async (S) => {
       footer: `<button class="btn ghost" id="t-cancel">Cancel</button><button class="btn primary" id="t-save">${existing ? "Save changes" : "Create task"}</button>`,
     });
     S.qs("#t-cancel").onclick = m.close;
+
+    // Service-type picker (new tasks only): filter recipes by the chosen department, preview the
+    // checklist it will seed, and prefill the content type. The server does the actual seeding.
+    const svcSel = S.qs("#t-svc");
+    if (svcSel) {
+      const preview = S.qs("#t-svc-preview");
+      const updatePreview = () => {
+        const tpl = templates.find((t) => t.key === svcSel.value);
+        if (!tpl) { preview.hidden = true; preview.innerHTML = ""; return; }
+        preview.hidden = false;
+        preview.innerHTML = `<div class="section-label">Auto checklist · ${tpl.steps.length} steps</div>
+          <ul class="svc-preview">${tpl.steps.map((s) => `<li>${S.esc(s)}</li>`).join("")}</ul>`;
+        const ct = S.qs("#t-ctype"); if (ct && !ct.value) ct.value = tpl.content_type || "";
+      };
+      const fillServices = () => {
+        const opts = templatesForTeam(numOrNull("t-team"));
+        svcSel.innerHTML = `<option value="">Custom (blank)</option>` +
+          opts.map((o) => `<option value="${S.esc(o.key)}">${S.esc(o.label)}</option>`).join("");
+        svcSel.disabled = !opts.length;
+        updatePreview();
+      };
+      S.qs("#t-team").addEventListener("change", fillServices);
+      svcSel.addEventListener("change", updatePreview);
+      fillServices();
+    }
+
     S.qs("#t-save").onclick = async () => {
       const payload = {
         title: S.qs("#t-title").value, client_id: numOrNull("t-client"), campaign: val("t-campaign"),
@@ -383,6 +460,7 @@ window.pageInit = async (S) => {
         labels: S.qsa("#t-labels input:checked").map((c) => c.value), description: val("t-desc"),
         deliverable_url: val("t-deliv"), client_facing_notes: val("t-cnotes"), internal_notes: val("t-inotes"),
       };
+      if (!existing && svcSel) payload.service_key = svcSel.value || null;
       if (isAM) payload.priority = S.qs("#t-priority").value;
       if (!payload.title) { S.toast("Title is required", "err"); return; }
       try {

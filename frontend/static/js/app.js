@@ -225,7 +225,9 @@
       <div class="modal-body">${body}</div>
       ${footer ? `<div class="modal-foot">${footer}</div>` : ""}</div>`;
     ov.classList.add("open");
-    const close = () => ov.classList.remove("open");
+    // Tuck the coach FAB away while a modal/drawer is open so it can't sit over the footer buttons.
+    const coachFab = qs("#coach-fab"); if (coachFab) coachFab.classList.add("hidden");
+    const close = () => { ov.classList.remove("open"); const f = qs("#coach-fab"); if (f) f.classList.remove("hidden"); };
     qs("#modal-x", ov).onclick = close;
     ov.onclick = (e) => { if (e.target === ov) close(); };
     // Esc closes the drawer/modal.
@@ -324,14 +326,14 @@
 
     const style = document.createElement("style");
     style.textContent = `
-      #coach-fab{position:fixed;right:24px;bottom:24px;z-index:1400;display:flex;align-items:center;gap:9px;
+      #coach-fab{position:fixed;right:24px;bottom:24px;z-index:90;display:flex;align-items:center;gap:9px;
         border:none;cursor:pointer;padding:0 18px 0 15px;height:54px;border-radius:var(--pill);
         background:linear-gradient(135deg,#9484FB 0%,#5C4BD0 100%);color:#fff;font:600 14px/1 Inter,sans-serif;
         box-shadow:0 10px 30px rgba(92,75,208,.42);transition:transform .15s ease,box-shadow .15s ease}
       #coach-fab:hover{transform:translateY(-2px);box-shadow:0 14px 38px rgba(92,75,208,.55)}
       #coach-fab svg{width:22px;height:22px;stroke:#fff}
       #coach-fab.hidden{display:none}
-      #coach-panel{position:fixed;right:24px;bottom:24px;z-index:1401;width:min(420px,calc(100vw - 32px));
+      #coach-panel{position:fixed;right:24px;bottom:24px;z-index:91;width:min(420px,calc(100vw - 32px));
         height:min(660px,calc(100vh - 96px));background:var(--card);border:1px solid var(--line);
         border-radius:var(--radius);box-shadow:var(--shadow-lg);display:none;flex-direction:column;overflow:hidden}
       #coach-panel.open{display:flex}
