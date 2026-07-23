@@ -29,7 +29,10 @@ class Task(Base):
     status: Mapped[str] = mapped_column(String(32), default=TASK_TODO, index=True)
     due_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     labels_json: Mapped[str] = mapped_column(Text, default="[]")  # ["Design","Ads",...]
-    checklist_json: Mapped[str] = mapped_column(Text, default="[]")  # [{text,done}]
+    checklist_json: Mapped[str] = mapped_column(Text, default="[]")  # [{text,done}] — legacy flat list
+    # Two-level work breakdown: [{id,title,assignee_id,subs:[{id,text,done,assignee_id}]}].
+    # Supersedes checklist_json (a legacy flat list is migrated into one main task on read).
+    maintasks_json: Mapped[str] = mapped_column(Text, default="[]")
 
     # Visibility bridge: whether this task's client-facing fields are shared to Atrium.
     atrium_visible: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -73,6 +76,42 @@ class TaskHistory(Base):
     changed_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     task: Mapped[Task] = relationship(back_populates="history")
+
+
+class ServiceTemplate(Base):
+    """A super-admin-editable service recipe (was hardcoded in task_templates.py).
+
+    `maintasks_json` holds the grouped breakdown [{"title","subs":[{"text"}]}] the New Task form
+    seeds into a task's two-level work breakdown. `dept` matches a Team name.
+    """
+    __tablename__ = "service_templates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    key: Mapped[str] = mapped_column(String(60), unique=True, index=True)
+    label: Mapped[str] = mapped_column(String(120), nullable=False)
+    dept: Mapped[str | None] = mapped_column(String(80), nullable=True)  # Team name
+    content_type: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    maintasks_json: Mapped[str] = mapped_column(Text, default="[]")
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class TaskVocabItem(Base):
+    """Super-admin-editable board vocabulary: statuses, labels, and priorities (was constants).
+
+    One row per value; `kind` partitions the three vocabularies. `color` is a hex used for inline
+    rendering so custom names still get a colour.
+    """
+    __tablename__ = "task_vocab"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, index=True)  # status|label|priority
+    name: Mapped[str] = mapped_column(String(80), nullable=False)
+    color: Mapped[str | None] = mapped_column(String(16), nullable=True)  # #RRGGBB
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
 class AtriumApproval(Base):

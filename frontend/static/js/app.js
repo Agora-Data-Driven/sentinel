@@ -14,6 +14,10 @@
 
   const ROLE_RANK = { intern: 1, employee: 1, team_lead: 2, account_manager: 3, admin: 4, super_admin: 5 };
 
+  // Task vocabulary colours (statuses/labels/priorities) — fetched once at boot from /api/vocab,
+  // so the shared pills/dots colour custom (admin-defined) values, not just the hardcoded ones.
+  let COLORS = { statuses: {}, priorities: {}, labels: {} };
+
   // ---- Inline icon set (Atrium stroked style: 24x24, stroke-width 1.8) ----
   const P = (d) => `<svg class="svg-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
   const ICON = {
@@ -204,10 +208,17 @@
   }
 
   function priorityDot(p) {
-    const c = p === "Urgent" ? "red" : p === "Medium" ? "amber" : "green";
+    const hex = COLORS.priorities[p];
+    if (hex) return `<span class="dot" style="background:${esc(hex)}"></span>`;
+    const c = p === "Urgent" ? "red" : p === "Medium" ? "amber" : "green";  // fallback for unseeded
     return `<span class="dot ${c}"></span>`;
   }
-  function labelPills(labels) { return (labels || []).map((l) => `<span class="lbl ${esc(l)}">${esc(l)}</span>`).join(""); }
+  function labelPills(labels) {
+    return (labels || []).map((l) => {
+      const hex = COLORS.labels[l] || "#6B7280";  // colour comes from config now (custom-label safe)
+      return `<span class="lbl" style="background:${esc(hex)}">${esc(l)}</span>`;
+    }).join("");
+  }
   function statusPill(s) {
     const map = { OnTime: "green", Late: "amber", Absent: "red", HalfDay: "blue", MissingClockOut: "amber", OnLeave: "violet", Completed: "green", Incomplete: "amber", Missing: "red", Approved: "green", Pending: "amber", Rejected: "red", Active: "green", "On Leave": "violet", Inactive: "grey" };
     return `<span class="pill ${map[s] || "grey"}">${esc(s)}</span>`;
@@ -729,6 +740,7 @@
       location.href = "/login"; return;
     }
     Sentinel.user = USER;
+    try { const v = await api("/api/vocab"); if (v && v.colors) COLORS = v.colors; } catch (e) { /* keep fallback */ }
     buildShell();
     applyBrandLogo();
     if (window.pageInit) {
@@ -742,6 +754,7 @@
     fmtTime, fmtDate, fmtDateFull, timeAgo, priorityDot, labelPills, statusPill,
     roleRank: ROLE_RANK,
     get user() { return USER; }, set user(u) { USER = u; },
+    get colors() { return COLORS; },
     view: () => qs("#view"),
     can: (min) => (ROLE_RANK[USER.role] || 0) >= ROLE_RANK[min],
   };
