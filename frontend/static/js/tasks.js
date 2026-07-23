@@ -1,6 +1,7 @@
 window.pageInit = async (S) => {
   const view = S.view();
   const canCreate = S.can("account_manager");
+  const canMonitor = S.can("team_lead");   // team leads and up get the Monitor / employee overview
   const isAM = S.user.role === "account_manager";
 
   const [vocab, clients, teams, people] = await Promise.all([
@@ -9,31 +10,88 @@ window.pageInit = async (S) => {
   const STATUSES = vocab.task_statuses;
   const peopleById = Object.fromEntries(people.map((p) => [p.id, p]));
   let filters = { client_id: "", team_id: "", priority: "", assignee_id: "" };
+  let search = "";
+  let allTasks = [];          // last fetch, unfiltered by the text search
+  // View: "board" (status Kanban) | "employee" (swimlanes per person) | "monitor" (manager rollup).
+  const params0 = new URLSearchParams(location.search);
+  let mode = params0.get("view") || "board";
+  if ((mode === "monitor") && !canMonitor) mode = "board";
+  if (!["board", "employee", "monitor"].includes(mode)) mode = "board";
 
   view.innerHTML = `<div class="pagehead"><div><h2>Task Board</h2>
-      <div class="lead">Drag cards across columns. Client-safe fields sync to Atrium; internal fields stay here.</div></div>
-      ${canCreate ? `<button class="btn primary" id="new-task">${S.ICON.plus}New Task</button>` : ""}</div>
+      <div class="lead" id="tb-lead"></div></div>
+      <div class="row" style="gap:10px;align-items:center">
+        <div class="seg" id="view-seg" role="tablist">
+          <button type="button" data-view="board" role="tab">Board</button>
+          <button type="button" data-view="employee" role="tab">By Employee</button>
+          ${canMonitor ? `<button type="button" data-view="monitor" role="tab">Monitor</button>` : ""}
+        </div>
+        ${canCreate ? `<button class="btn primary" id="new-task">${S.ICON.plus}New Task</button>` : ""}
+      </div></div>
     <div class="filters">
+      <input id="f-search" class="tb-search" type="search" placeholder="Search tasks…" autocomplete="off">
       <select id="f-client"><option value="">All Clients</option>${clients.map((c) => `<option value="${c.id}">${S.esc(c.name)}</option>`).join("")}</select>
       <select id="f-team"><option value="">All Departments</option>${teams.map((t) => `<option value="${t.id}">${S.esc(t.name)}</option>`).join("")}</select>
       <select id="f-priority"><option value="">All Priority</option>${vocab.priorities.map((p) => `<option>${p}</option>`).join("")}</select>
       <select id="f-assignee"><option value="">All Assignees</option>${people.map((p) => `<option value="${p.id}">${S.esc(p.name)}</option>`).join("")}</select>
     </div>
-    <div class="board" id="board"></div>`;
+    <div id="board"></div>`;
 
+  const LEADS = {
+    board: "Drag cards across columns. Client-safe fields sync to Atrium; internal fields stay here.",
+    employee: "Every teammate's tasks, grouped by person. Drag a card between columns to change its status.",
+    monitor: "Team workload at a glance — open work, what's overdue, and what shipped this week. Click a row to see that person's tasks.",
+  };
+
+  S.qs("#f-search").oninput = (e) => { search = e.target.value.trim().toLowerCase(); render(); };
   S.qs("#f-client").onchange = (e) => { filters.client_id = e.target.value; load(); };
   S.qs("#f-team").onchange = (e) => { filters.team_id = e.target.value; load(); };
   S.qs("#f-priority").onchange = (e) => { filters.priority = e.target.value; load(); };
   S.qs("#f-assignee").onchange = (e) => { filters.assignee_id = e.target.value; load(); };
   if (canCreate) S.qs("#new-task").onclick = () => taskForm(null);
 
+  S.qsa("#view-seg button").forEach((b) => b.onclick = () => setMode(b.dataset.view));
+
+  function setMode(next) {
+    mode = next;
+    const u = new URLSearchParams(location.search);
+    if (next === "board") u.delete("view"); else u.set("view", next);
+    history.replaceState(null, "", location.pathname + (u.toString() ? "?" + u : ""));
+    render();
+  }
+
+  // Fetch (filters hit the server), then hand off to the active view's renderer.
   async function load() {
     const q = new URLSearchParams();
     Object.entries(filters).forEach(([k, v]) => { if (v) q.set(k, v); });
-    const tasks = await S.api("/api/tasks?" + q);
+    allTasks = await S.api("/api/tasks?" + q);
+    render();
+  }
+
+  // The text search is applied client-side so typing never re-hits the server.
+  function matches(t) {
+    if (!search) return true;
+    return [t.title, t.assignee && t.assignee.name, t.client_name]
+      .some((s) => (s || "").toLowerCase().includes(search));
+  }
+
+  function render() {
+    S.qs("#tb-lead").textContent = LEADS[mode];
+    S.qsa("#view-seg button").forEach((b) => b.classList.toggle("on", b.dataset.view === mode));
+    S.qs("#f-assignee").closest(".filters").style.display = mode === "monitor" ? "none" : "";
+    const board = S.qs("#board");
+    board.className = mode === "board" ? "board" : "";
+    const tasks = allTasks.filter(matches);
+    if (mode === "monitor") return renderMonitor(board);
+    if (mode === "employee") return renderByEmployee(board, tasks);
+    return renderBoard(board, tasks);
+  }
+
+  function renderBoard(board, tasks) {
     const byStatus = Object.fromEntries(STATUSES.map((s) => [s, []]));
     tasks.forEach((t) => (byStatus[t.status] || (byStatus[t.status] = [])).push(t));
-    S.qs("#board").innerHTML = STATUSES.map((st) => `
+    board.className = "board";
+    board.innerHTML = STATUSES.map((st) => `
       <div class="col" data-status="${S.esc(st)}">
         <div class="col-head"><span class="t">${S.esc(st)}</span><span class="c">${byStatus[st].length}</span></div>
         <div class="col-list" data-status="${S.esc(st)}">${byStatus[st].map(card).join("")}</div>
@@ -41,6 +99,86 @@ window.pageInit = async (S) => {
       </div>`).join("");
     wireDnD();
     wireQuickAdd();
+    wireCardClicks();
+  }
+
+  // Swimlanes: one lane per person that has tasks, plus an Unassigned lane. Cards sit in mini
+  // status columns inside the lane; drag stays WITHIN a lane (moving between people would be a
+  // reassignment, which belongs in the detail drawer, not a drag).
+  function renderByEmployee(board, tasks) {
+    const byUser = new Map();
+    tasks.forEach((t) => {
+      const key = t.assigned_to_id == null ? "none" : t.assigned_to_id;
+      if (!byUser.has(key)) byUser.set(key, []);
+      byUser.get(key).push(t);
+    });
+    // Order: named people (alpha) first, Unassigned last.
+    const keys = [...byUser.keys()].filter((k) => k !== "none")
+      .sort((a, b) => (peopleById[a]?.name || "").localeCompare(peopleById[b]?.name || ""));
+    if (byUser.has("none")) keys.push("none");
+
+    if (!keys.length) { board.innerHTML = `<div class="empty">No tasks match.</div>`; return; }
+
+    board.className = "swimlanes";
+    board.innerHTML = keys.map((k) => {
+      const person = k === "none" ? null : peopleById[k];
+      const list = byUser.get(k);
+      const byStatus = Object.fromEntries(STATUSES.map((s) => [s, []]));
+      list.forEach((t) => (byStatus[t.status] || (byStatus[t.status] = [])).push(t));
+      const head = person
+        ? `${S.avatar(person, "sm")}<div class="ln"><div class="n">${S.esc(person.name)}</div><div class="r">${S.esc(person.role_label || person.role || "")}</div></div>`
+        : `<div class="avatar sm">–</div><div class="ln"><div class="n">Unassigned</div></div>`;
+      return `<section class="lane" data-uid="${k}">
+        <div class="lane-head">${head}<span class="lane-count">${list.length}</span></div>
+        <div class="lane-board">${STATUSES.map((st) => `
+          <div class="col" data-status="${S.esc(st)}">
+            <div class="col-head"><span class="t">${S.esc(st)}</span><span class="c">${byStatus[st].length}</span></div>
+            <div class="col-list" data-status="${S.esc(st)}" data-uid="${k}">${byStatus[st].map(card).join("")}</div>
+          </div>`).join("")}</div>
+      </section>`;
+    }).join("");
+    wireDnD({ sameLane: true });
+    wireCardClicks();
+  }
+
+  async function renderMonitor(board) {
+    board.className = "monitor";
+    board.innerHTML = `<div class="skeleton-row">Loading team…</div>`;
+    let rows;
+    try { rows = await S.api("/api/tasks/summary"); }
+    catch (err) { board.innerHTML = `<div class="empty">${S.esc(err.detail || "Couldn't load the team summary.")}</div>`; return; }
+    if (!rows.length) { board.innerHTML = `<div class="empty">No teammates to show.</div>`; return; }
+    const barSegs = ["To Do", "In Progress", "For Review", "Waiting for Client", "Revision Needed", "Blocked"];
+    const segCls = { "To Do": "s-todo", "In Progress": "s-prog", "For Review": "s-review", "Waiting for Client": "s-wait", "Revision Needed": "s-rev", "Blocked": "s-block" };
+    board.innerHTML = `<table class="mon-tbl">
+      <thead><tr><th>Teammate</th><th>Workload</th><th class="num">Open</th><th class="num">Overdue</th><th class="num">Done · 7d</th></tr></thead>
+      <tbody>${rows.map((r) => {
+        const u = r.user;
+        const open = r.open_total || 0;
+        const segs = barSegs.map((st) => { const n = r.counts[st] || 0; return n ? `<i class="${segCls[st]}" style="flex:${n}" title="${S.esc(st)}: ${n}"></i>` : ""; }).join("");
+        return `<tr data-uid="${u.id}" tabindex="0">
+          <td class="who">${S.avatar(u, "sm")}<div><div class="n">${S.esc(u.name)}</div><div class="r">${S.esc(u.role_label || u.role || "")}</div></div></td>
+          <td class="wl"><div class="wl-bar">${segs || '<i class="s-none" style="flex:1" title="No open tasks"></i>'}</div></td>
+          <td class="num">${open}</td>
+          <td class="num ${r.overdue ? "bad" : ""}">${r.overdue || 0}</td>
+          <td class="num good">${r.completed_week || 0}</td>
+        </tr>`;
+      }).join("")}</tbody></table>`;
+    const jump = (uid) => { setMode("employee"); requestAnimationFrame(() => focusLane(uid)); };
+    S.qsa(".mon-tbl tbody tr").forEach((tr) => {
+      tr.onclick = () => jump(tr.dataset.uid);
+      tr.onkeydown = (e) => { if (e.key === "Enter") jump(tr.dataset.uid); };
+    });
+  }
+
+  function focusLane(uid) {
+    const lane = S.qs(`.lane[data-uid="${uid}"]`);
+    if (!lane) return;
+    lane.scrollIntoView({ behavior: "smooth", block: "start" });
+    lane.classList.remove("flash"); requestAnimationFrame(() => lane.classList.add("flash"));
+  }
+
+  function wireCardClicks() {
     S.qsa(".tcard").forEach((c) => c.onclick = () => { if (!c.classList.contains("dragging")) openDetail(c.dataset.id); });
   }
 
@@ -58,7 +196,7 @@ window.pageInit = async (S) => {
       </div></div>`;
   }
 
-  function wireDnD() {
+  function wireDnD(opts = {}) {
     let dragEl = null;
     S.qsa(".tcard").forEach((c) => {
       c.ondragstart = (e) => { dragEl = c; c.classList.add("dragging"); e.dataTransfer.effectAllowed = "move"; };
@@ -72,7 +210,9 @@ window.pageInit = async (S) => {
         e.preventDefault(); col.classList.remove("drag-over");
         if (!dragEl) return;
         const fromList = dragEl.closest(".col-list");
-        if (fromList !== list) moveCard(dragEl, list, list.dataset.status, fromList, fromList.dataset.status);
+        // In swimlanes, only allow moves within the same person's lane (status change, not reassign).
+        const sameLane = !opts.sameLane || fromList.dataset.uid === list.dataset.uid;
+        if (fromList !== list && sameLane) moveCard(dragEl, list, list.dataset.status, fromList, fromList.dataset.status);
         dragEl = null;
       };
     });
