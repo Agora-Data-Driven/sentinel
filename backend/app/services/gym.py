@@ -53,15 +53,35 @@ def normalize_week(week: dict) -> dict[str, str]:
     return out
 
 
-def _overrides(db: Session, user_id: int, start: date, end: date) -> dict[date, str]:
-    rows = db.execute(
-        select(GymPlanOverride).where(
-            GymPlanOverride.user_id == user_id,
-            GymPlanOverride.date >= start,
-            GymPlanOverride.date <= end,
-        )
-    ).scalars().all()
-    return {r.date: r.day_type for r in rows}
+def _clean_cardio(v) -> str | None:
+    """A cardio note is free text (e.g. '5k run'); keep it short, drop blanks."""
+    if isinstance(v, str) and v.strip():
+        return v.strip()[:120]
+    return None
+
+
+def normalize_cardio(cardio: dict) -> dict[str, str]:
+    """Sparse Mon..Sun map of cardio notes — only weekdays that actually have one."""
+    out: dict[str, str] = {}
+    for wd in GYM_WEEKDAYS:
+        c = _clean_cardio((cardio or {}).get(wd))
+        if c:
+            out[wd] = c
+    return out
+
+
+def get_cardio(db: Session, user_id: int) -> dict[str, str]:
+    """The user's per-weekday cardio notes (sparse — absent weekdays have no run)."""
+    row = db.execute(
+        select(GymSchedule).where(GymSchedule.user_id == user_id)
+    ).scalar_one_or_none()
+    stored = {}
+    if row and row.cardio_json:
+        try:
+            stored = json.loads(row.cardio_json)
+        except (ValueError, TypeError):
+            stored = {}
+    return normalize_cardio(stored)
 
 
 def effective_plan(db: Session, user_id: int, on: date) -> str:
@@ -76,19 +96,32 @@ def effective_plan(db: Session, user_id: int, on: date) -> str:
     return get_week(db, user_id)[GYM_WEEKDAYS[on.weekday()]]
 
 
-def plan_for_range(db: Session, user_id: int, start: date, end: date) -> dict[date, str]:
-    """Effective planned day-type for every date in [start, end] (overrides beat the template)."""
+def plan_for_range(db: Session, user_id: int, start: date, end: date) -> dict[date, dict]:
+    """Effective {day_type, cardio} for every date in [start, end] (overrides beat the template)."""
     week = get_week(db, user_id)
-    overrides = _overrides(db, user_id, start, end)
-    out: dict[date, str] = {}
+    cardio = get_cardio(db, user_id)
+    rows = db.execute(
+        select(GymPlanOverride).where(
+            GymPlanOverride.user_id == user_id,
+            GymPlanOverride.date >= start,
+            GymPlanOverride.date <= end,
+        )
+    ).scalars().all()
+    ov = {r.date: r for r in rows}
+    out: dict[date, dict] = {}
     d = start
     while d <= end:
-        out[d] = overrides.get(d) or week[GYM_WEEKDAYS[d.weekday()]]
+        wd = GYM_WEEKDAYS[d.weekday()]
+        if d in ov:
+            out[d] = {"day_type": ov[d].day_type, "cardio": ov[d].cardio or None}
+        else:
+            out[d] = {"day_type": week[wd], "cardio": cardio.get(wd)}
         d += timedelta(days=1)
     return out
 
 
-def set_week(db: Session, user_id: int, week: dict) -> dict[str, str]:
+def set_week(db: Session, user_id: int, week: dict, cardio: dict | None = None) -> tuple[dict[str, str], dict[str, str]]:
+    """Replace the weekly split (and, when given, the weekly cardio notes)."""
     normalized = normalize_week(week)
     row = db.execute(
         select(GymSchedule).where(GymSchedule.user_id == user_id)
@@ -97,11 +130,14 @@ def set_week(db: Session, user_id: int, week: dict) -> dict[str, str]:
         row = GymSchedule(user_id=user_id)
         db.add(row)
     row.week_json = json.dumps(normalized)
+    norm_cardio = normalize_cardio(cardio) if cardio is not None else get_cardio(db, user_id)
+    if cardio is not None:
+        row.cardio_json = json.dumps(norm_cardio)
     db.commit()
-    return normalized
+    return normalized, norm_cardio
 
 
-def set_override(db: Session, user_id: int, on: date, day_type: str) -> None:
+def set_override(db: Session, user_id: int, on: date, day_type: str, cardio: str | None = None) -> None:
     row = db.execute(
         select(GymPlanOverride).where(
             GymPlanOverride.user_id == user_id, GymPlanOverride.date == on
@@ -111,6 +147,7 @@ def set_override(db: Session, user_id: int, on: date, day_type: str) -> None:
         row = GymPlanOverride(user_id=user_id, date=on)
         db.add(row)
     row.day_type = day_type
+    row.cardio = _clean_cardio(cardio)
     db.commit()
 
 
@@ -137,7 +174,7 @@ def upcoming_overrides(db: Session, user_id: int, start: date, days: int = 60) -
         )
         .order_by(GymPlanOverride.date)
     ).scalars().all()
-    return [{"date": r.date.isoformat(), "day_type": r.day_type} for r in rows]
+    return [{"date": r.date.isoformat(), "day_type": r.day_type, "cardio": r.cardio or None} for r in rows]
 
 
 def previous_for_exercise(db: Session, user_id: int, exercise_name: str, before: date) -> dict | None:

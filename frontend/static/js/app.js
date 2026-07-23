@@ -419,8 +419,8 @@
         case "delete_skill": return api(`${DEV}/skills/${id}`, { method: "DELETE" });
         case "set_reading_progress": return api(`${DEV}/reading/${args.reading_item_id}/progress`, { method: "PUT", body: pick(args, READ) });
         // Gym schedule (the weekly split + per-date overrides that drive the calendar).
-        case "set_gym_week": return api(`${GYM}/plan/week`, { method: "POST", body: { week: args.week || {} } });
-        case "set_gym_day": return api(`${GYM}/plan/day`, { method: "POST", body: pick(args, ["date", "day_type"]) });
+        case "set_gym_week": return api(`${GYM}/plan/week`, { method: "POST", body: { week: args.week || {}, ...(args.cardio ? { cardio: args.cardio } : {}) } });
+        case "set_gym_day": return api(`${GYM}/plan/day`, { method: "POST", body: pick(args, ["date", "day_type", "cardio"]) });
         case "clear_gym_day": return api(`${GYM}/plan/day/${args.date}`, { method: "DELETE" });
         default: return Promise.reject(new Error("Unknown action: " + a.op));
       }

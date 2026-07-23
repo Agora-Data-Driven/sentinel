@@ -114,14 +114,17 @@ class GymSessionEditIn(BaseModel):
 
 
 class GymPlanWeekIn(BaseModel):
-    """Replace the recurring weekly split. Keys are Mon..Sun; values a plan day-type or Rest."""
+    """Replace the recurring weekly split (+ optional per-weekday cardio notes).
+    week: {Mon..Sun -> day-type|Rest}; cardio: {Mon..Sun -> free text, e.g. '5k run'}."""
     week: dict[str, str] = Field(default_factory=dict)
+    cardio: dict[str, str] | None = None
 
 
 class GymPlanDayIn(BaseModel):
-    """Override the plan for a single date (e.g. move a split, or make it a Rest day)."""
+    """Override the plan for a single date (e.g. move a split, mark Rest, or note a run)."""
     date: _dt.date
     day_type: str
+    cardio: str | None = None
 
 
 # --- Development (holistic) ------------------------------------------------

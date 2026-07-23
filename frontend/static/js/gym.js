@@ -66,9 +66,10 @@ window.pageInit = async (S) => {
       const done = log && (log.status === "Completed" || log.status === "Incomplete")
         ? `<span class="cal-done ${log.status}" title="${log.day_type} · ${log.status}">${S.ICON.check}</span>` : "";
       const meta = log ? `<span class="cal-logmeta">${log.exercise_count} ex · ${log.duration_minutes}m</span>` : "";
+      const cardio = day.cardio ? `<span class="cal-cardio" title="${S.esc(day.cardio)}">🏃 ${S.esc(day.cardio)}</span>` : "";
       return `<button class="cal-cell ${day.is_today ? "today" : ""} ${rest ? "rest" : ""}" data-date="${day.date}">
         <span class="d">${dayNum(day.date)}</span>
-        <span class="pill day ${day.planned} cal-plan">${day.planned}</span>${meta}${done}</button>`;
+        <span class="pill day ${day.planned} cal-plan">${day.planned}</span>${cardio}${meta}${done}</button>`;
     }).join("");
     S.qs("#tabc").innerHTML = `
       <div class="gym-cal-head">
@@ -100,37 +101,44 @@ window.pageInit = async (S) => {
   }
   function setMonthFromIso(iso) { state.calY = Number(iso.slice(0, 4)); state.calM = Number(iso.slice(5, 7)); }
 
-  // Tap a calendar day: re-plan it and/or log a workout. Both live here so the grid stays clean.
+  // Tap a calendar day: re-plan it (split + cardio) and/or log a workout. Both live here so the grid stays clean.
   function dayMenu(dateStr) {
     const cell = state.cal.days.find((d) => d.date === dateStr) || {};
     const weekly = state.plan.week[cell.weekday];
-    const isOverride = cell.planned !== weekly;
+    const weeklyCardio = (state.plan.cardio || {})[cell.weekday] || "";
+    const isOverride = cell.planned !== weekly || (cell.cardio || "") !== weeklyCardio;
     const log = cell.log;
+    let chosen = cell.planned;
     const m = S.modal({
       title: `${cell.weekday}, ${S.fmtDateFull(dateStr + "T00:00:00+08:00")}`,
       body: `<div class="section-label">Planned split</div>
-        <div class="row" style="gap:8px;margin:8px 0 4px;flex-wrap:wrap">
-          ${PLAN_DAYS.map((d) => `<button class="btn sm ${d === cell.planned ? "primary" : "ghost"}" data-plan="${d}">${d}</button>`).join("")}
+        <div class="row" id="dm-plan" style="gap:8px;margin:8px 0 4px;flex-wrap:wrap">
+          ${PLAN_DAYS.map((d) => `<button class="btn sm ${d === chosen ? "primary" : "ghost"}" data-plan="${d}">${d}</button>`).join("")}
         </div>
+        <label class="field" style="margin:10px 0 6px"><span>Cardio / run (optional)</span>
+          <input id="dm-cardio" placeholder="e.g. 5k run, intervals" value="${S.esc(cell.cardio || "")}"></label>
         <div class="sub" style="font-size:12px">${isOverride
-          ? `Custom for this day. <a href="#" class="linky" id="dm-revert">Revert to your weekly ${cell.weekday} (${weekly})</a>`
-          : `From your weekly ${cell.weekday} split.`}</div>
+          ? `Custom for this day. <a href="#" class="linky" id="dm-revert">Revert to your weekly ${cell.weekday} (${weekly}${weeklyCardio ? " + " + S.esc(weeklyCardio) : ""})</a>`
+          : `Matches your weekly ${cell.weekday} plan.`}</div>
         <hr style="border:0;border-top:1px solid var(--line);margin:16px 0">
         ${log
           ? `<div class="row between"><div>${planPill(log.day_type)} ${S.statusPill(log.status)}
                <div class="sub" style="font-size:12px;margin-top:4px">${log.duration_minutes}m · ${log.exercise_count} exercises</div></div></div>`
           : '<div class="sub" style="font-size:13px">No workout logged this day yet.</div>'}`,
       footer: `<button class="btn ghost" id="dm-x">Close</button>
+        <button class="btn ghost" id="dm-saveplan">Save plan</button>
         <button class="btn success" id="dm-open">${log ? "Edit workout" : "Log a workout"}</button>`,
     });
+    const paint = () => S.qsa("#dm-plan [data-plan]").forEach((x) => x.className = "btn sm " + (x.dataset.plan === chosen ? "primary" : "ghost"));
+    S.qsa("#dm-plan [data-plan]").forEach((b) => b.onclick = () => { chosen = b.dataset.plan; paint(); });
     S.qs("#dm-x").onclick = m.close;
     S.qs("#dm-open").onclick = () => { m.close(); openDay(dateStr, "Calendar"); };
-    S.qsa("[data-plan]").forEach((b) => b.onclick = async () => {
+    S.qs("#dm-saveplan").onclick = async () => {
       try {
-        await S.api("/api/gym/plan/day", { method: "POST", body: { date: dateStr, day_type: b.dataset.plan } });
-        m.close(); S.toast(`${cell.weekday} planned as ${b.dataset.plan}`, "ok"); renderCalendar();
+        await S.api("/api/gym/plan/day", { method: "POST", body: { date: dateStr, day_type: chosen, cardio: S.qs("#dm-cardio").value.trim() || null } });
+        m.close(); S.toast("Plan updated for this day", "ok"); renderCalendar();
       } catch (e) { S.toast(e.detail || "Couldn't update plan", "err"); }
-    });
+    };
     const rev = S.qs("#dm-revert");
     if (rev) rev.onclick = async (e) => {
       e.preventDefault();
@@ -139,23 +147,28 @@ window.pageInit = async (S) => {
     };
   }
 
-  // Weekly recurring split editor.
+  // Weekly recurring split editor — day-type + an optional cardio note per weekday.
   function planEditor() {
-    const wk = state.plan.week;
+    const wk = state.plan.week, cardio = state.plan.cardio || {};
     const m = S.modal({
       title: "Your weekly split",
-      body: `<div class="sub" style="font-size:13px;margin-bottom:10px">This repeats every week. Override a single date from its day on the calendar, or ask your Coach.</div>
+      body: `<div class="sub" style="font-size:13px;margin-bottom:10px">This repeats every week. Add a run under any day (e.g. “5k run”, “intervals”) — your Coach reads it too. Override a single date from the calendar.</div>
         ${DOW.map((d) => `<div class="wk-row"><span class="wd">${d}</span>
-          <select data-wd="${d}">${PLAN_DAYS.map((p) => `<option ${p === wk[d] ? "selected" : ""}>${p}</option>`).join("")}</select></div>`).join("")}`,
+          <div class="row" style="gap:8px">
+            <select data-wd="${d}" style="max-width:128px">${PLAN_DAYS.map((p) => `<option ${p === wk[d] ? "selected" : ""}>${p}</option>`).join("")}</select>
+            <input data-cardio="${d}" placeholder="cardio (optional)" value="${S.esc(cardio[d] || "")}" style="flex:1;min-width:0">
+          </div></div>`).join("")}`,
       footer: `<button class="btn ghost" id="wk-x">Cancel</button><button class="btn primary" id="wk-save">Save plan</button>`,
     });
     S.qs("#wk-x").onclick = m.close;
     S.qs("#wk-save").onclick = async () => {
-      const week = {};
+      const week = {}, cardioOut = {};
       S.qsa("[data-wd]").forEach((sel) => week[sel.dataset.wd] = sel.value);
+      S.qsa("[data-cardio]").forEach((inp) => { const v = inp.value.trim(); if (v) cardioOut[inp.dataset.cardio] = v; });
       try {
-        const res = await S.api("/api/gym/plan/week", { method: "POST", body: { week } });
-        state.plan.week = res.week; m.close(); S.toast("Weekly plan saved", "ok"); renderCalendar();
+        const res = await S.api("/api/gym/plan/week", { method: "POST", body: { week, cardio: cardioOut } });
+        state.plan.week = res.week; state.plan.cardio = res.cardio || {};
+        m.close(); S.toast("Weekly plan saved", "ok"); renderCalendar();
       } catch (e) { S.toast(e.detail || "Couldn't save", "err"); }
     };
   }

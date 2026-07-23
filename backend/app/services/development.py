@@ -178,6 +178,7 @@ def holistic_digest(db: Session, user: User) -> dict:
     # to (and edit) the schedule.
     today = today_ph()
     weekly_split = gym_svc.get_week(db, user.id)
+    weekly_cardio = gym_svc.get_cardio(db, user.id)
     since = today - timedelta(days=14)
     sessions_14d = db.execute(
         select(func.count(GymLog.id)).where(GymLog.user_id == user.id, GymLog.date >= since)
@@ -213,6 +214,7 @@ def holistic_digest(db: Session, user: User) -> dict:
         },
         "gym": {
             "weekly_split": weekly_split,
+            "weekly_cardio": weekly_cardio,
             "sessions_last_14d": sessions_14d,
             "completed_last_14d": completed_14d,
         },
