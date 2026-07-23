@@ -60,6 +60,8 @@ class GymSchedule(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, unique=True, index=True)
     # {"Mon":"Push","Tue":"Pull",...,"Sun":"Rest"} — see constants.GYM_WEEKDAYS / GYM_DEFAULT_WEEK.
     week_json: Mapped[str] = mapped_column(Text, default="{}")
+    # Optional per-weekday cardio note, e.g. {"Mon":"5k run","Thu":"~10k run","Sat":"intervals"}.
+    cardio_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
@@ -73,6 +75,7 @@ class GymPlanOverride(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     day_type: Mapped[str] = mapped_column(String(16), nullable=False)  # Push|Pull|Legs|Custom|Rest
+    cardio: Mapped[str | None] = mapped_column(String(120), nullable=True)  # e.g. "5k run"
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     __table_args__ = (UniqueConstraint("user_id", "date", name="uq_gym_override_user_date"),)

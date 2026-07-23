@@ -35,6 +35,37 @@ def test_set_weekly_split_and_override(client, make_user, auth):
     assert cell["planned"] == "Push"  # reverted to the weekly split
 
 
+def test_weekly_cardio_notes(client, make_user, auth):
+    auth(make_user())
+    week = {"Mon": "Push", "Tue": "Pull", "Wed": "Legs", "Thu": "Push",
+            "Fri": "Legs", "Sat": "Legs", "Sun": "Rest"}
+    cardio = {"Mon": "5k run", "Thu": "~10k run", "Sat": "intervals", "Tue": "   "}  # blank dropped
+    r = client.post("/api/gym/plan/week", json={"week": week, "cardio": cardio})
+    assert r.status_code == 200
+    plan = client.get("/api/gym/plan").json()
+    assert plan["cardio"] == {"Mon": "5k run", "Thu": "~10k run", "Sat": "intervals"}
+
+    # Cardio rides along on the calendar per day.
+    cal = client.get("/api/gym/calendar?month=2099-02").json()  # Feb 2099: 1st is a Sunday
+    by_wd = {}
+    for d in cal["days"]:
+        by_wd.setdefault(d["weekday"], d)
+    assert by_wd["Mon"]["cardio"] == "5k run"
+    assert by_wd["Thu"]["cardio"] == "~10k run"
+    assert by_wd["Wed"]["cardio"] is None
+
+    # A per-date override can carry its own cardio note, and clearing reverts to the weekly one.
+    day = next(d["date"] for d in cal["days"] if d["weekday"] == "Mon")
+    client.post("/api/gym/plan/day", json={"date": day, "day_type": "Rest", "cardio": "easy jog"})
+    cal2 = client.get("/api/gym/calendar?month=2099-02").json()
+    cell = next(d for d in cal2["days"] if d["date"] == day)
+    assert cell["planned"] == "Rest" and cell["cardio"] == "easy jog"
+    client.delete(f"/api/gym/plan/day/{day}")
+    cal3 = client.get("/api/gym/calendar?month=2099-02").json()
+    cell = next(d for d in cal3["days"] if d["date"] == day)
+    assert cell["planned"] == "Push" and cell["cardio"] == "5k run"
+
+
 def test_bad_plan_day_type_rejected(client, make_user, auth):
     auth(make_user())
     r = client.post("/api/gym/plan/day", json={"date": "2099-01-07", "day_type": "Bogus"})

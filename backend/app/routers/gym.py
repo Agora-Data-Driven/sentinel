@@ -198,6 +198,7 @@ def get_plan(user: User = Depends(get_current_user), db: Session = Depends(get_d
     today = today_ph()
     return {
         "week": gym_svc.get_week(db, user.id),
+        "cardio": gym_svc.get_cardio(db, user.id),
         "weekdays": GYM_WEEKDAYS,
         "day_types": GYM_PLAN_DAY_TYPES,
         "overrides": gym_svc.upcoming_overrides(db, user.id, today),
@@ -207,18 +208,18 @@ def get_plan(user: User = Depends(get_current_user), db: Session = Depends(get_d
 
 @router.post("/plan/week")
 def set_plan_week(payload: GymPlanWeekIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Replace the recurring weekly split (Mon..Sun → a plan day-type or Rest)."""
-    week = gym_svc.set_week(db, user.id, payload.week)
-    return {"week": week}
+    """Replace the recurring weekly split (Mon..Sun → a plan day-type or Rest) + optional cardio notes."""
+    week, cardio = gym_svc.set_week(db, user.id, payload.week, payload.cardio)
+    return {"week": week, "cardio": cardio}
 
 
 @router.post("/plan/day")
 def set_plan_day(payload: GymPlanDayIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Override the plan for a single date (move a split onto it, or mark it Rest)."""
+    """Override the plan for a single date (move a split onto it, mark it Rest, and/or note a run)."""
     if payload.day_type not in GYM_PLAN_DAY_TYPES:
         raise HTTPException(status_code=400, detail="Invalid day type")
-    gym_svc.set_override(db, user.id, payload.date, payload.day_type)
-    return {"date": payload.date.isoformat(), "day_type": payload.day_type}
+    gym_svc.set_override(db, user.id, payload.date, payload.day_type, payload.cardio)
+    return {"date": payload.date.isoformat(), "day_type": payload.day_type, "cardio": payload.cardio or None}
 
 
 @router.delete("/plan/day/{on}", status_code=204)
@@ -258,7 +259,8 @@ def calendar(
         days.append({
             "date": d.isoformat(),
             "weekday": GYM_WEEKDAYS[d.weekday()],
-            "planned": plan[d],
+            "planned": plan[d]["day_type"],
+            "cardio": plan[d]["cardio"],
             "is_today": d == today,
             "log": {
                 "id": g.id,
