@@ -6,6 +6,7 @@ from PATCH /api/tasks/{id}/priority, and priority is ignored on create unless th
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from sqlalchemy import select
@@ -22,6 +23,7 @@ from ..constants import (
     ROLE_EMPLOYEE,
     ROLE_INTERN,
     ROLE_TEAM_LEAD,
+    TASK_COMPLETED,
     TASK_FOR_REVIEW,
     TASK_STATUSES,
 )
@@ -34,11 +36,11 @@ from ..schemas import (
     TaskStatusIn,
     TaskUpdateIn,
 )
-from ..security import get_current_user, is_account_manager, require_roles
-from ..serializers import atrium_payload, comment_dict, task_card, task_detail
+from ..security import get_current_user, is_account_manager, is_manager, require_roles
+from ..serializers import atrium_payload, comment_dict, task_card, task_detail, user_public
 from ..services import audit
 from ..services import notifications as notif
-from ..utils.time import utcnow
+from ..utils.time import today_ph, to_ph, utcnow
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
@@ -94,6 +96,54 @@ def list_tasks(
         q = q.where(Task.priority == priority)
     tasks = [t for t in db.execute(q).scalars().all() if _can_view(user, t)]
     return [task_card(t, db) for t in tasks]
+
+
+def _aggregate(pts: list[Task], today, week_start) -> dict:
+    """Roll a single person's tasks into the Monitor row's counts."""
+    counts = dict.fromkeys(TASK_STATUSES, 0)
+    overdue = completed_week = 0
+    for t in pts:
+        counts[t.status] = counts.get(t.status, 0) + 1
+        if t.status == TASK_COMPLETED:
+            if t.updated_at and to_ph(t.updated_at).date() >= week_start:
+                completed_week += 1
+        elif t.due_date and t.due_date < today:
+            overdue += 1
+    open_total = sum(n for st, n in counts.items() if st != TASK_COMPLETED)
+    return {"counts": counts, "overdue": overdue, "open_total": open_total,
+            "completed_week": completed_week, "total": len(pts)}
+
+
+@router.get("/summary")
+def employee_summary(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Per-employee task rollup for the Monitor view (managers only).
+
+    Scope mirrors the board's `_can_view`: admins / super-admin / account managers see everyone;
+    a team lead sees only their own team. Employees / interns get a 403 — monitoring is a
+    management surface. Declared BEFORE `/{task_id}` so "summary" isn't parsed as a task id.
+    """
+    if not is_manager(user):
+        raise HTTPException(status_code=403, detail="Only managers can monitor the team")
+
+    # Who this manager may see: all active staff, or (team lead) just their own team.
+    people = db.execute(select(User).where(User.is_active.is_(True))).scalars().all()
+    if user.role == ROLE_TEAM_LEAD:
+        people = [p for p in people if p.team_id == user.team_id]
+    people = sorted(people, key=lambda p: (p.name or "").lower())
+
+    tasks = db.execute(select(Task)).scalars().all()
+    by_assignee: dict[int, list[Task]] = {}
+    for t in tasks:
+        if t.assigned_to_id is not None:
+            by_assignee.setdefault(t.assigned_to_id, []).append(t)
+
+    today = today_ph()
+    week_start = today - timedelta(days=7)
+    rows = [{"user": user_public(p), **_aggregate(by_assignee.get(p.id, []), today, week_start)}
+            for p in people]
+    # Heaviest / most-behind first is what a manager wants to see.
+    rows.sort(key=lambda r: (r["overdue"], r["open_total"]), reverse=True)
+    return rows
 
 
 @router.get("/{task_id}")
