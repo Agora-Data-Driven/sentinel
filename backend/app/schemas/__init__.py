@@ -70,14 +70,6 @@ class AttendanceEditIn(BaseModel):
 
 
 # --- Gym -------------------------------------------------------------------
-class GymStartIn(BaseModel):
-    day_type: str = "Custom"
-
-
-class GymEndIn(BaseModel):
-    notes: str | None = None
-
-
 class GymAdminEditIn(BaseModel):
     """Super Admin correction of any user's gym session."""
     day_type: str | None = None
@@ -105,6 +97,31 @@ class GymExerciseIn(BaseModel):
     sets_detail: list[GymSetIn] = Field(default_factory=list)
     duration_minutes: int = 0
     notes: str | None = None
+
+
+class GymDayOpenIn(BaseModel):
+    """Open (upsert) a day's editable session. Date defaults to today; day_type to the plan."""
+    date: _dt.date | None = None  # _dt.date, not `date`: the field name shadows the bare type
+    day_type: str | None = None
+
+
+class GymSessionEditIn(BaseModel):
+    """The user's own no-lock edits to a session's meta (never locks — always re-editable)."""
+    day_type: str | None = None
+    duration_minutes: int | None = None
+    notes: str | None = None
+    done: bool | None = None
+
+
+class GymPlanWeekIn(BaseModel):
+    """Replace the recurring weekly split. Keys are Mon..Sun; values a plan day-type or Rest."""
+    week: dict[str, str] = Field(default_factory=dict)
+
+
+class GymPlanDayIn(BaseModel):
+    """Override the plan for a single date (e.g. move a split, or make it a Rest day)."""
+    date: _dt.date
+    day_type: str
 
 
 # --- Development (holistic) ------------------------------------------------

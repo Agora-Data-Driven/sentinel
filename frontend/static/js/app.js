@@ -386,6 +386,7 @@
     // op is a fixed endpoint with a whitelisted body — the coach can't reach anything else.
     const coachOrigin = new URL(base, location.href).origin;
     const DEV = "/api/development";
+    const GYM = "/api/gym";
     const pick = (o, keys) => { const r = {}; keys.forEach((k) => { if (o && o[k] !== undefined) r[k] = o[k]; }); return r; };
     const PR = ["exercise_name", "weight_value", "weight_unit", "reps", "detail", "achieved_on", "notes"];
     const GOAL = ["title", "description", "target_date", "status", "progress_pct"];
@@ -417,6 +418,10 @@
         case "update_skill": return api(`${DEV}/skills/${id}`, { method: "PATCH", body: pick(args, SKILL) });
         case "delete_skill": return api(`${DEV}/skills/${id}`, { method: "DELETE" });
         case "set_reading_progress": return api(`${DEV}/reading/${args.reading_item_id}/progress`, { method: "PUT", body: pick(args, READ) });
+        // Gym schedule (the weekly split + per-date overrides that drive the calendar).
+        case "set_gym_week": return api(`${GYM}/plan/week`, { method: "POST", body: { week: args.week || {} } });
+        case "set_gym_day": return api(`${GYM}/plan/day`, { method: "POST", body: pick(args, ["date", "day_type"]) });
+        case "clear_gym_day": return api(`${GYM}/plan/day/${args.date}`, { method: "DELETE" });
         default: return Promise.reject(new Error("Unknown action: " + a.op));
       }
     }
@@ -431,8 +436,9 @@
         const label = (d.action && d.action.summary) || "Updated";
         reply(true, label);
         toast("Coach: " + label, "ok");
-        // Refresh the Development hub if it's the current page, so the change shows immediately.
+        // Refresh whichever page is showing (Development hub or Gym) so the change appears at once.
         if (window.SentinelReloadDevelopment) window.SentinelReloadDevelopment();
+        if (window.SentinelReloadGym) window.SentinelReloadGym();
       } catch (err) {
         reply(false, err.detail || err.message || "Couldn't apply that");
       }

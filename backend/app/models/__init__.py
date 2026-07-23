@@ -31,7 +31,7 @@ from .development import (
     ReadingProgress,
     Skill,
 )
-from .gym import ExerciseLibrary, GymExercise, GymLog
+from .gym import ExerciseLibrary, GymExercise, GymLog, GymPlanOverride, GymSchedule
 from .leave import LeaveBalance, LeaveRequest, LeaveType
 from .notification import Notification
 from .payroll import PayrollEntry
@@ -56,6 +56,8 @@ __all__ = [
     "LeaveRequest",
     "GymLog",
     "GymExercise",
+    "GymSchedule",
+    "GymPlanOverride",
     "ExerciseLibrary",
     "BodyMetric",
     "PersonalRecord",

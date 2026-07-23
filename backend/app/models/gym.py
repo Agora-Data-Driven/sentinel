@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..database import Base
@@ -49,6 +49,33 @@ class GymExercise(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     log: Mapped[GymLog] = relationship(back_populates="exercises")
+
+
+class GymSchedule(Base):
+    """One row per user — the recurring weekly split (which day-type each weekday is)."""
+
+    __tablename__ = "gym_schedules"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, unique=True, index=True)
+    # {"Mon":"Push","Tue":"Pull",...,"Sun":"Rest"} — see constants.GYM_WEEKDAYS / GYM_DEFAULT_WEEK.
+    week_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class GymPlanOverride(Base):
+    """A per-date override of the weekly split (e.g. "make the 25th Pull", "Rest today")."""
+
+    __tablename__ = "gym_plan_overrides"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    day_type: Mapped[str] = mapped_column(String(16), nullable=False)  # Push|Pull|Legs|Custom|Rest
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    __table_args__ = (UniqueConstraint("user_id", "date", name="uq_gym_override_user_date"),)
 
 
 class ExerciseLibrary(Base):
