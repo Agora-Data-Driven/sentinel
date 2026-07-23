@@ -17,11 +17,8 @@ from ..config import settings
 from ..constants import (
     ALL_ROLES,
     GYM_DAY_TYPES,
-    PRIORITIES,
     ROLE_LABELS,
     SET_TYPES,
-    TASK_LABELS,
-    TASK_STATUSES,
 )
 from ..database import get_db
 from ..models import Client, Team, User
@@ -108,13 +105,20 @@ def create_client(payload: dict, db: Session = Depends(get_db)):
 
 
 @router.get("/vocab")
-def vocab(user: User = Depends(get_current_user)):
-    """All enum vocabularies in one shot — labels, statuses, priorities, day types, etc."""
+def vocab(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """All enum vocabularies in one shot. Task statuses/priorities/labels are DB-backed (editable in
+    Manage) — returned as name lists (unchanged shape) plus a `colors` map for inline rendering."""
+    from ..services import task_config
     return {
         "roles": [{"value": r, "label": ROLE_LABELS[r]} for r in ALL_ROLES],
-        "task_statuses": TASK_STATUSES,
-        "priorities": PRIORITIES,
-        "task_labels": TASK_LABELS,
+        "task_statuses": task_config.statuses(db),
+        "priorities": task_config.priorities(db),
+        "task_labels": task_config.labels(db),
+        "colors": {
+            "statuses": task_config.colors(db, "status"),
+            "priorities": task_config.colors(db, "priority"),
+            "labels": task_config.colors(db, "label"),
+        },
         "gym_day_types": GYM_DAY_TYPES,
         "set_types": SET_TYPES,
     }

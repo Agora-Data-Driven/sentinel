@@ -102,14 +102,39 @@ def client_dict(c: Client) -> dict:
     }
 
 
+def maintask_list(t: Task, db: Session) -> list[dict]:
+    """The two-level breakdown with assignees resolved to user_public (assignee cached per call)."""
+    from .services import maintasks as MT
+
+    mts = MT.normalize(getattr(t, "maintasks_json", "[]"), t.checklist_json)
+    cache: dict[int, dict | None] = {}
+
+    def usr(uid):
+        if not uid:
+            return None
+        if uid not in cache:
+            cache[uid] = user_public(db.get(User, uid))
+        return cache[uid]
+
+    return [{
+        "id": m["id"], "title": m["title"],
+        "assignee_id": m["assignee_id"], "assignee": usr(m["assignee_id"]),
+        "subs": [{"id": s["id"], "text": s["text"], "done": s["done"],
+                  "assignee_id": s["assignee_id"], "assignee": usr(s["assignee_id"])} for s in m["subs"]],
+    } for m in mts]
+
+
 def task_card(t: Task, db: Session) -> dict:
     """Compact shape for the Kanban board."""
+    from .services import maintasks as MT
+
     comment_count = len(t.comments)
     attach_count = sum(len(_loads(c.attachments_json, [])) for c in t.comments)
     client = db.get(Client, t.client_id) if t.client_id else None
     assignee = db.get(User, t.assigned_to_id) if t.assigned_to_id else None
-    checklist = _loads(t.checklist_json, [])
-    done = sum(1 for i in checklist if i.get("done"))
+    # Progress now spans the two-level breakdown (all sub-tasks of all main tasks); a legacy flat
+    # checklist is migrated by normalize(), so the count stays correct for old tasks too.
+    done, total = MT.sub_stats(MT.normalize(getattr(t, "maintasks_json", "[]"), t.checklist_json))
     return {
         "id": t.id,
         "title": t.title,
@@ -124,7 +149,7 @@ def task_card(t: Task, db: Session) -> dict:
         "assigned_team_id": t.assigned_team_id,
         "comment_count": comment_count,
         "attachment_count": attach_count,
-        "checklist_total": len(checklist),
+        "checklist_total": total,
         "checklist_done": done,
         "atrium_visible": t.atrium_visible,
     }
@@ -143,7 +168,8 @@ def task_detail(t: Task, db: Session) -> dict:
             "account_manager_id": t.account_manager_id,
             "account_manager": user_public(am),
             "assigned_team_name": team.name if team else None,
-            "checklist": _loads(t.checklist_json, []),
+            "checklist": _loads(t.checklist_json, []),  # legacy flat list (kept for compatibility)
+            "maintasks": maintask_list(t, db),
             "deliverable_url": t.deliverable_url,
             "internal_notes": t.internal_notes,
             "client_facing_notes": t.client_facing_notes,

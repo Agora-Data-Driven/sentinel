@@ -10,7 +10,11 @@ window.pageInit = async (S) => {
 
   // Dynamic option sources for select fields.
   const [teams, vocab] = await Promise.all([S.api("/api/teams"), S.api("/api/vocab")]);
-  const OPTS = { roles: vocab.roles, teams: teams.map((t) => ({ value: t.id, label: t.name })) };
+  const OPTS = {
+    roles: vocab.roles,
+    teams: teams.map((t) => ({ value: t.id, label: t.name })),
+    teamNames: teams.map((t) => ({ value: t.name, label: t.name })),  // service dept is stored by name
+  };
 
   const ENTITIES = {
     Employees: {
@@ -99,7 +103,40 @@ window.pageInit = async (S) => {
       ],
       help: "Leave types appear in the Leave request form; changing balances affects new balances going forward.",
     },
+    Services: {
+      api: "/api/manage/service-templates", singular: "service",
+      cols: [
+        { k: "label", label: "Service" },
+        { k: "dept", label: "Department" },
+        { k: "content_type", label: "Content type" },
+        { k: "maintasks", label: "Recipe", fmt: (v) => `${(v || []).length} main · ${(v || []).reduce((n, m) => n + (m.subs || []).length, 0)} sub-tasks` },
+      ],
+      customForm: true,  // has a nested main-task -> sub-task recipe editor (openServiceForm)
+      help: "The services the New Task form offers per department. Pick one and its whole main-task → sub-task breakdown is seeded into the new task. Fully editable here — no developer needed.",
+    },
+    Statuses: {
+      api: "/api/manage/task-vocab", listUrl: "/api/manage/task-vocab?kind=status", fixed: { kind: "status" }, singular: "status",
+      cols: [{ k: "name", label: "Status" }, { k: "color", label: "Colour", fmt: (v) => _swatch(v) }],
+      fields: [{ k: "name", label: "Name", type: "text", req: true }, { k: "color", label: "Colour", type: "color" }],
+      help: "The Task Board's columns, in order. Renaming one updates every task using it; you can't delete a status still in use.",
+    },
+    Labels: {
+      api: "/api/manage/task-vocab", listUrl: "/api/manage/task-vocab?kind=label", fixed: { kind: "label" }, singular: "label",
+      cols: [{ k: "name", label: "Label" }, { k: "color", label: "Colour", fmt: (v) => _swatch(v) }],
+      fields: [{ k: "name", label: "Name", type: "text", req: true }, { k: "color", label: "Colour", type: "color" }],
+      help: "The colour-coded label chips on task cards. Renaming updates tasks; deleting is blocked while a task still uses it.",
+    },
+    Priorities: {
+      api: "/api/manage/task-vocab", listUrl: "/api/manage/task-vocab?kind=priority", fixed: { kind: "priority" }, singular: "priority",
+      cols: [{ k: "name", label: "Priority" }, { k: "color", label: "Colour", fmt: (v) => _swatch(v) }],
+      fields: [{ k: "name", label: "Name", type: "text", req: true }, { k: "color", label: "Colour", type: "color" }],
+      help: "Priority levels + their dot colour. Renaming updates tasks; deleting is blocked while a task still uses it.",
+    },
   };
+
+  const _swatch = (hex) => hex
+    ? `<span class="dot" style="background:${S.esc(hex)};vertical-align:middle"></span> <span class="muted">${S.esc(hex)}</span>`
+    : "—";
 
   const keys = Object.keys(ENTITIES);
   view.innerHTML = `<div class="pagehead"><div><h2>Manage</h2>
@@ -121,7 +158,7 @@ window.pageInit = async (S) => {
     const body = S.qs("#mbody");
     body.innerHTML = '<div class="skeleton" style="height:180px"></div>';
     let rows;
-    try { rows = await S.api(cfg.api); }
+    try { rows = await S.api(cfg.listUrl || cfg.api); }
     catch (e) { body.innerHTML = `<div class="empty">${S.esc(e.detail || "Failed to load")}</div>`; return; }
     body.innerHTML = `
       <div class="row between" style="margin-bottom:12px">
@@ -138,8 +175,9 @@ window.pageInit = async (S) => {
             <button class="btn sm danger" data-del="${r.id}">Delete</button></td></tr>`).join("")
         : `<tr><td colspan="${cfg.cols.length + 1}"><div class="empty">No ${cfg.singular}s yet. Add one.</div></td></tr>`}</tbody></table></div>`;
 
-    S.qs("#m-add").onclick = () => openForm(key, null);
-    S.qsa("[data-edit]").forEach((b) => b.onclick = () => openForm(key, rows.find((r) => r.id == b.dataset.edit)));
+    const openEditor = (item) => (cfg.customForm ? openServiceForm(item) : openForm(key, item));
+    S.qs("#m-add").onclick = () => openEditor(null);
+    S.qsa("[data-edit]").forEach((b) => b.onclick = () => openEditor(rows.find((r) => r.id == b.dataset.edit)));
     S.qsa("[data-del]").forEach((b) => b.onclick = () => del(key, rows.find((r) => r.id == b.dataset.del)));
     S.qsa("[data-rowact]").forEach((b) => b.onclick = () => cfg.rowActions[+b.dataset.rowact].handler(rows.find((r) => r.id == b.dataset.id)));
   }
@@ -200,6 +238,7 @@ window.pageInit = async (S) => {
       return `<select data-mf="${f.k}">${resolveOpts(f).map((o) => `<option value="${S.esc(o.value)}" ${String(o.value) === String(v == null ? "" : v) ? "selected" : ""}>${S.esc(o.label)}</option>`).join("")}</select>`;
     }
     if (f.type === "multi") return `<div class="row wrap">${resolveOpts(f).map((o) => `<label class="chip" style="cursor:pointer"><input type="checkbox" style="width:auto" data-mf="${f.k}" value="${S.esc(o.value)}" ${(v || []).includes(o.value) ? "checked" : ""}> ${S.esc(o.label)}</label>`).join("")}</div>`;
+    if (f.type === "color") return `<input type="color" data-mf="${f.k}" value="${S.esc(v || "#6B7280")}" style="width:56px;height:34px;padding:2px">`;
     const t = f.type === "number" ? "number" : f.type === "time" ? "time" : f.type === "date" ? "date" : f.type === "password" ? "password" : "text";
     return `<input type="${t}" data-mf="${f.k}" value="${S.esc(v == null ? "" : v)}"${f.type === "number" ? ' step="1"' : ""}${f.type === "password" ? ' autocomplete="new-password"' : ""}>`;
   }
@@ -225,7 +264,7 @@ window.pageInit = async (S) => {
       catch (e) { inp.select(); document.execCommand("copy"); S.toast("Password copied", "ok"); }
     });
     S.qs("#m-save").onclick = async () => {
-      const payload = {};
+      const payload = { ...(cfg.fixed || {}) };   // e.g. {kind:"status"} for task-vocab
       for (const f of cfg.fields) {
         let val;
         if (f.type === "multi") val = S.qsa(`[data-mf="${f.k}"]:checked`).map((c) => c.value);
@@ -250,9 +289,70 @@ window.pageInit = async (S) => {
       : key === "Leave Types" ? " Existing balances and requests for this type will be removed."
       : key === "Departments" ? " Employees/tasks in it will just be unassigned."
       : key === "Clients" ? " Tasks for this client will be unassigned." : "";
-    if (!confirm(`Delete "${item.name}"?${extra}`)) return;
+    if (!confirm(`Delete "${item.name || item.label}"?${extra}`)) return;
     try { await S.api(`${ENTITIES[key].api}/${item.id}`, { method: "DELETE" }); S.toast("Deleted", "ok"); render(key); }
     catch (e) { S.toast(e.detail, "err"); }
+  }
+
+  // Service recipe editor — a main-task title + one-sub-task-per-line textarea per group. Low-code:
+  // the whole two-level breakdown a new task is seeded with, edited without touching any code.
+  function openServiceForm(item) {
+    const editing = !!item;
+    // recipe rows: {title, subsText}
+    let recipe = (item && item.maintasks || []).map((m) => ({
+      title: m.title || "", subsText: (m.subs || []).map((s) => s.text).join("\n"),
+    }));
+    if (!recipe.length) recipe = [{ title: "", subsText: "" }];
+    const deptOpts = [{ value: "", label: "—" }].concat(OPTS.teamNames);
+    const m = S.modal({
+      title: `${editing ? "Edit" : "Add"} service`, wide: true,
+      body: `
+        <label class="field"><span>Service name *</span><input id="sf-label" value="${S.esc(item ? item.label : "")}"></label>
+        <div class="grid" style="grid-template-columns:1fr 1fr;gap:12px">
+          <label class="field"><span>Department</span><select id="sf-dept">${deptOpts.map((o) => `<option value="${S.esc(o.value)}" ${item && item.dept === o.value ? "selected" : ""}>${S.esc(o.label)}</option>`).join("")}</select></label>
+          <label class="field"><span>Content type</span><input id="sf-ctype" value="${S.esc(item ? item.content_type || "" : "")}"></label>
+        </div>
+        <div class="section-label" style="margin:6px 0 4px">Recipe — main tasks &amp; their sub-tasks</div>
+        <div class="muted" style="font-size:12px;margin-bottom:8px">One sub-task per line. This is what gets seeded into a new task's breakdown.</div>
+        <div id="sf-recipe"></div>
+        <button type="button" class="btn sm ghost" id="sf-addmain" style="margin-top:8px">${S.ICON.plus}Add main task</button>`,
+      footer: `<button class="btn ghost" id="sf-cancel">Cancel</button><button class="btn primary" id="sf-save">${editing ? "Save" : "Create"}</button>`,
+    });
+
+    function readDom() {
+      recipe = S.qsa("#sf-recipe .mtask").map((row) => ({
+        title: row.querySelector(".mtask-title").value,
+        subsText: row.querySelector("textarea").value,
+      }));
+    }
+    function renderRecipe() {
+      S.qs("#sf-recipe").innerHTML = recipe.map((r, i) => `
+        <div class="mtask" data-i="${i}">
+          <div class="mtask-head">
+            <input class="mtask-title" value="${S.esc(r.title)}" placeholder="Main task title">
+            <button type="button" class="bd-x" data-del="${i}" title="Remove main task">✕</button>
+          </div>
+          <div style="padding:8px 10px"><textarea rows="4" placeholder="One sub-task per line…">${S.esc(r.subsText)}</textarea></div>
+        </div>`).join("");
+      S.qsa("#sf-recipe [data-del]").forEach((b) => b.onclick = () => { readDom(); recipe.splice(+b.dataset.del, 1); if (!recipe.length) recipe = [{ title: "", subsText: "" }]; renderRecipe(); });
+    }
+    renderRecipe();
+    S.qs("#sf-addmain").onclick = () => { readDom(); recipe.push({ title: "", subsText: "" }); renderRecipe(); };
+    S.qs("#sf-cancel").onclick = m.close;
+    S.qs("#sf-save").onclick = async () => {
+      const label = S.qs("#sf-label").value.trim();
+      if (!label) { S.toast("Service name is required", "err"); return; }
+      readDom();
+      const maintasks = recipe
+        .map((r) => ({ title: r.title.trim(), subs: r.subsText.split("\n").map((l) => l.trim()).filter(Boolean).map((text) => ({ text })) }))
+        .filter((g) => g.title || g.subs.length);
+      const payload = { label, dept: S.qs("#sf-dept").value || null, content_type: S.qs("#sf-ctype").value || null, maintasks };
+      try {
+        if (editing) await S.api(`/api/manage/service-templates/${item.id}`, { method: "PATCH", body: payload });
+        else await S.api("/api/manage/service-templates", { method: "POST", body: payload });
+        S.toast(`Service ${editing ? "updated" : "created"}`, "ok"); m.close(); render("Services");
+      } catch (e) { S.toast(e.detail || "Couldn't save the service", "err"); }
+    };
   }
 
   render(keys[0]);

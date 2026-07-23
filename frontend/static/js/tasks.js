@@ -1,8 +1,9 @@
 window.pageInit = async (S) => {
   const view = S.view();
-  const canCreate = S.can("account_manager");
-  const canMonitor = S.can("team_lead");   // team leads and up get the Monitor / employee overview
-  const isAM = S.user.role === "account_manager";
+  const canCreate = true;                   // all staff can add + edit tasks (internal employee tool)
+  const canManage = S.can("account_manager"); // AM+ only: the Atrium bridge and deleting tasks
+  const canMonitor = S.can("team_lead");    // team leads and up get the Monitor / employee overview
+  const isAM = canManage;   // priority is settable by AM + admin + super_admin (not team leads/staff)
 
   const [vocab, clients, teams, people, templates] = await Promise.all([
     S.api("/api/vocab"), S.api("/api/clients"), S.api("/api/teams"), S.api("/api/people"),
@@ -189,8 +190,18 @@ window.pageInit = async (S) => {
     S.qsa(".tcard").forEach((c) => c.onclick = () => { if (!c.classList.contains("dragging")) openDetail(c.dataset.id); });
   }
 
+  // "Today" in Manila as an ISO date (en-CA → YYYY-MM-DD), so due-date colouring matches the
+  // server's Asia/Manila business rule instead of the viewer's local timezone.
+  const PH_TODAY = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
+  function dueClass(due) {
+    if (!due) return "";
+    if (due < PH_TODAY) return "over";
+    const days = (Date.parse(due + "T00:00:00Z") - Date.parse(PH_TODAY + "T00:00:00Z")) / 864e5;
+    return days <= 2 ? "soon" : "";
+  }
+
   function card(t) {
-    const dueCls = t.due_date ? (new Date(t.due_date) < new Date(new Date().toDateString()) ? "over" : (new Date(t.due_date) - Date.now() < 2 * 864e5 ? "soon" : "")) : "";
+    const dueCls = dueClass(t.due_date);
     return `<div class="tcard" draggable="true" data-id="${t.id}">
       ${t.labels.length ? `<div class="labels">${S.labelPills(t.labels)}</div>` : ""}
       <div class="t-title">${S.esc(t.title)}</div>
@@ -286,8 +297,7 @@ window.pageInit = async (S) => {
     let t;
     try { t = await S.api("/api/tasks/" + id); }
     catch (err) { S.toast(err.detail || "Couldn't open that task", "err"); return; }
-    const done = t.checklist.filter((i) => i.done).length;
-    const pct = t.checklist.length ? Math.round(100 * done / t.checklist.length) : 0;
+    if (!Array.isArray(t.maintasks)) t.maintasks = [];
     const body = `<div class="stack" style="gap:22px">
       <div>
         <div class="labels" style="margin-bottom:8px">${S.labelPills(t.labels)}</div>
@@ -313,9 +323,10 @@ window.pageInit = async (S) => {
         </div>
       </div>
       <div>
-        <div class="section-label">Checklist <span id="d-check-count">${t.checklist.length ? `· ${done}/${t.checklist.length}` : ""}</span></div>
-        <div class="progress" style="margin:8px 0 10px"><i id="d-check-bar" style="width:${pct}%"></i></div>
-        <ul class="checklist" id="d-check">${t.checklist.map((c, i) => `<li class="${c.done ? "done" : ""}"><input type="checkbox" data-ci="${i}" ${c.done ? "checked" : ""}><span>${S.esc(c.text)}</span></li>`).join("") || '<li class="muted">No checklist items.</li>'}</ul>
+        <div class="spread" style="align-items:center;margin-bottom:2px"><div class="section-label">Work breakdown <span id="d-bd-count"></span></div></div>
+        <div class="progress" style="margin:8px 0 12px"><i id="d-bd-bar" style="width:0%"></i></div>
+        <div id="d-breakdown"></div>
+        <button class="btn sm ghost" id="d-bd-addmain" style="margin-top:10px">${S.ICON.plus}Add main task</button>
         <div class="section-label" style="margin-top:18px">Comments</div>
         <div class="thread" id="d-thread" style="margin:10px 0">${t.comments.map(cmt).join("") || '<div class="muted">No comments yet.</div>'}</div>
         <div class="row" style="gap:8px"><input id="d-comment" placeholder="Write a comment… use @name to mention"><button class="btn primary sm" id="d-send">Send</button></div>
@@ -323,37 +334,93 @@ window.pageInit = async (S) => {
         <ul class="activity">${t.history.map((h) => `<li><span>${h.actor ? S.esc(h.actor.name) : "System"}</span> ${S.esc(h.field)} ${h.old_value ? `<span class="muted">${S.esc(h.old_value)} → </span>` : ""}<strong>${S.esc(h.new_value || "")}</strong> <span class="muted">· ${S.timeAgo(h.changed_at)}</span></li>`).join("")}</ul>
       </div></div>`;
     const footer = `${t.status !== "For Review" ? `<button class="btn ghost" id="d-review">Move to Review</button>` : ""}
-      ${canCreate ? `<button class="btn ghost" id="d-atrium">${t.atrium_visible ? "✓ In Atrium" : "Send to Atrium"}</button>
       <button class="btn ghost" id="d-edit">Edit</button>
+      ${canManage ? `<button class="btn ghost" id="d-atrium">${t.atrium_visible ? "✓ In Atrium" : "Send to Atrium"}</button>
       <button class="btn danger" id="d-delete">Delete</button>` : ""}
       <button class="btn primary" id="d-close">Close</button>`;
     const m = S.modal({ title: "Task #" + t.id, body, footer, drawer: true });
     S.qs("#d-close").onclick = m.close;
 
-    // Keep the progress bar + "· done/total" count in sync as items are ticked.
-    const syncChecklistProgress = () => {
-      const n = t.checklist.length;
-      const d = t.checklist.filter((i) => i.done).length;
-      const bar = S.qs("#d-check-bar"); if (bar) bar.style.width = (n ? Math.round(100 * d / n) : 0) + "%";
-      const cnt = S.qs("#d-check-count"); if (cnt) cnt.textContent = n ? `· ${d}/${n}` : "";
-    };
-    // Checklist toggle — optimistic, reverts on failure so the UI never lies about a save.
-    S.qsa("#d-check input").forEach((cb) => cb.onchange = async () => {
-      const idx = +cb.dataset.ci;
-      const prev = t.checklist[idx].done;
-      t.checklist[idx].done = cb.checked;
-      cb.closest("li").classList.toggle("done", cb.checked);
-      syncChecklistProgress();
+    // ---- Two-level work breakdown (main tasks -> sub-tasks, each optionally assigned) ----
+    const mById = (mid) => t.maintasks.find((m) => m.id === mid);
+    const sById = (m, sid) => (m ? m.subs.find((s) => s.id === sid) : null);
+    // Strip the resolved-assignee objects back to the storable shape the API expects.
+    const storable = () => t.maintasks.map((m) => ({
+      id: m.id, title: m.title, assignee_id: m.assignee_id,
+      subs: m.subs.map((s) => ({ id: s.id, text: s.text, done: s.done, assignee_id: s.assignee_id })),
+    }));
+
+    const assigneeSelect = (act, mid, sid, current, placeholder) =>
+      `<select class="bd-assignee" data-act="${act}" data-mid="${mid}"${sid ? ` data-sid="${sid}"` : ""}>
+        <option value="">${placeholder}</option>
+        ${people.map((p) => `<option value="${p.id}" ${p.id === current ? "selected" : ""}>${S.esc(p.name)}</option>`).join("")}
+      </select>`;
+
+    function renderBreakdown() {
+      let d = 0, total = 0;
+      t.maintasks.forEach((m) => m.subs.forEach((s) => { total += 1; if (s.done) d += 1; }));
+      S.qs("#d-bd-count").textContent = total ? `· ${d}/${total}` : "";
+      S.qs("#d-bd-bar").style.width = (total ? Math.round(100 * d / total) : 0) + "%";
+      S.qs("#d-breakdown").innerHTML = t.maintasks.map((m) => `
+        <div class="mtask" data-mid="${m.id}">
+          <div class="mtask-head">
+            <input class="mtask-title" data-act="mt-title" data-mid="${m.id}" value="${S.esc(m.title)}" aria-label="Main task title">
+            ${assigneeSelect("mt-assignee", m.id, null, m.assignee_id, "Owner…")}
+            <button class="bd-x" data-act="mt-del" data-mid="${m.id}" title="Delete main task">✕</button>
+          </div>
+          <ul class="mtask-subs">${m.subs.map((s) => `
+            <li class="${s.done ? "done" : ""}" data-sid="${s.id}">
+              <input type="checkbox" data-act="sub-toggle" data-mid="${m.id}" data-sid="${s.id}" ${s.done ? "checked" : ""}>
+              <input class="sub-text" data-act="sub-text" data-mid="${m.id}" data-sid="${s.id}" value="${S.esc(s.text)}" aria-label="Sub-task">
+              ${assigneeSelect("sub-assignee", m.id, s.id, s.assignee_id, "Assign…")}
+              <button class="bd-x" data-act="sub-del" data-mid="${m.id}" data-sid="${s.id}" title="Delete sub-task">✕</button>
+            </li>`).join("")}</ul>
+          <div class="mtask-addsub">
+            <input placeholder="Add a sub-task, then Enter…" data-act="sub-add-input" data-mid="${m.id}" aria-label="New sub-task">
+          </div>
+        </div>`).join("") || '<div class="muted" style="padding:4px 0">No breakdown yet — add a main task to start.</div>';
+      wireBreakdown();
+    }
+
+    // Persist the whole breakdown; refresh from the server response (gets ids for new items),
+    // and roll back to a snapshot if the save fails.
+    let saving = false;
+    async function commit() {
+      if (saving) return;
+      saving = true;
+      const snapshot = JSON.parse(JSON.stringify(t.maintasks));
       try {
-        await S.api("/api/tasks/" + id, { method: "PATCH", body: { checklist: t.checklist } });
+        const updated = await S.api("/api/tasks/" + id, { method: "PATCH", body: { maintasks: storable() } });
+        t.maintasks = Array.isArray(updated.maintasks) ? updated.maintasks : [];
+        renderBreakdown();
       } catch (err) {
-        t.checklist[idx].done = prev;
-        cb.checked = prev;
-        cb.closest("li").classList.toggle("done", prev);
-        syncChecklistProgress();
-        S.toast(err.detail || "Couldn't save the checklist", "err");
-      }
-    });
+        t.maintasks = snapshot;
+        renderBreakdown();
+        S.toast(err.detail || "Couldn't save the breakdown", "err");
+      } finally { saving = false; }
+    }
+
+    function wireBreakdown() {
+      const q = (act) => S.qsa(`#d-breakdown [data-act="${act}"]`);
+      q("mt-title").forEach((el) => el.onchange = () => { const m = mById(el.dataset.mid); if (m) { m.title = el.value.trim() || "Untitled"; commit(); } });
+      q("mt-assignee").forEach((el) => el.onchange = () => { const m = mById(el.dataset.mid); if (m) { m.assignee_id = el.value ? +el.value : null; commit(); } });
+      q("mt-del").forEach((el) => el.onclick = () => { t.maintasks = t.maintasks.filter((m) => m.id !== el.dataset.mid); commit(); });
+      q("sub-toggle").forEach((el) => el.onchange = () => { const s = sById(mById(el.dataset.mid), el.dataset.sid); if (s) { s.done = el.checked; commit(); } });
+      q("sub-text").forEach((el) => el.onchange = () => { const s = sById(mById(el.dataset.mid), el.dataset.sid); if (s) { s.text = el.value.trim(); commit(); } });
+      q("sub-assignee").forEach((el) => el.onchange = () => { const s = sById(mById(el.dataset.mid), el.dataset.sid); if (s) { s.assignee_id = el.value ? +el.value : null; commit(); } });
+      q("sub-del").forEach((el) => el.onclick = () => { const m = mById(el.dataset.mid); if (m) { m.subs = m.subs.filter((s) => s.id !== el.dataset.sid); commit(); } });
+      q("sub-add-input").forEach((el) => el.onkeydown = (e) => {
+        if (e.key !== "Enter") return;
+        const m = mById(el.dataset.mid); const text = el.value.trim();
+        if (m && text) { m.subs.push({ id: "st_new_" + Date.now(), text, done: false, assignee_id: null }); commit(); }
+      });
+    }
+
+    S.qs("#d-bd-addmain").onclick = () => {
+      t.maintasks.push({ id: "mt_new_" + Date.now(), title: "New main task", assignee_id: null, subs: [] });
+      commit();
+    };
+    renderBreakdown();
     // Comment
     S.qs("#d-send").onclick = async () => {
       const val = S.qs("#d-comment").value.trim(); if (!val) return;
