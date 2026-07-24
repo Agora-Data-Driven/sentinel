@@ -48,7 +48,7 @@ window.pageInit = async (S) => {
   const LEADS = {
     board: "Drag cards across columns. Client-safe fields sync to Atrium; internal fields stay here.",
     employee: "Every teammate's tasks, grouped by person. Drag a card between columns to change its status.",
-    monitor: "Team workload at a glance — open work, what's overdue, and what shipped this week. Click a row to see that person's tasks.",
+    monitor: "Team workload at a glance: open work, what's overdue, and what shipped this week. Click a row to see that person's tasks.",
   };
 
   S.qs("#f-search").oninput = (e) => { search = e.target.value.trim().toLowerCase(); render(); };
@@ -310,7 +310,7 @@ window.pageInit = async (S) => {
         ${t.deliverable_url ? `<div style="margin-top:12px"><div class="section-label">Deliverable</div><a href="${S.esc(t.deliverable_url)}" target="_blank" class="btn sm ghost" style="margin-top:6px">Open deliverable →</a></div>` : ""}
         ${t.client_facing_notes ? `<div style="margin-top:12px"><div class="section-label">Client notes</div><div class="sub">${S.esc(t.client_facing_notes)}</div></div>` : ""}
         <div style="margin-top:18px;padding-top:14px;border-top:1px dashed var(--line)">
-          <div class="section-label" style="color:var(--sentinel-2)">🔒 Internal — not visible to clients</div>
+          <div class="section-label" style="color:var(--sentinel-2)">${S.ICON.lock}Internal, not visible to clients</div>
           <div class="spread" style="margin-top:10px">
             ${field("Account Manager", t.account_manager ? t.account_manager.name : "—")}
             ${field("Assigned team", t.assigned_team_name)}
@@ -378,7 +378,7 @@ window.pageInit = async (S) => {
           <div class="mtask-addsub">
             <input placeholder="Add a sub-task, then Enter…" data-act="sub-add-input" data-mid="${m.id}" aria-label="New sub-task">
           </div>
-        </div>`).join("") || '<div class="muted" style="padding:4px 0">No breakdown yet — add a main task to start.</div>';
+        </div>`).join("") || '<div class="muted" style="padding:4px 0">No breakdown yet. Add a main task to start.</div>';
       wireBreakdown();
     }
 
@@ -489,7 +489,7 @@ window.pageInit = async (S) => {
         <label class="field" style="grid-column:1/-1"><span>Description</span><textarea id="t-desc">${S.esc(e.description || "")}</textarea></label>
         <label class="field"><span>Deliverable URL (client-safe)</span><input id="t-deliv" value="${S.esc(e.deliverable_url || "")}"></label>
         <label class="field"><span>Client-facing notes</span><input id="t-cnotes" value="${S.esc(e.client_facing_notes || "")}"></label>
-        <label class="field" style="grid-column:1/-1"><span>🔒 Internal notes</span><textarea id="t-inotes">${S.esc(e.internal_notes || "")}</textarea></label>`,
+        <label class="field" style="grid-column:1/-1"><span>${S.ICON.lock}Internal notes</span><textarea id="t-inotes">${S.esc(e.internal_notes || "")}</textarea></label>`,
       footer: `<button class="btn ghost" id="t-cancel">Cancel</button><button class="btn primary" id="t-save">${existing ? "Save changes" : "Create task"}</button>`,
     });
     S.qs("#t-cancel").onclick = m.close;

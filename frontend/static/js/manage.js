@@ -34,12 +34,12 @@ window.pageInit = async (S) => {
         { k: "email", label: "Email", type: "text", req: true },
         { k: "role", label: "Role", type: "select", optsKey: "roles" },
         { k: "team_id", label: "Department", type: "select", optsKey: "teams", allowEmpty: true, coerce: "intOrNull" },
-        { k: "shift_template_id", label: "Shift (override — blank = use department's)", type: "select", optsKey: "shiftTemplates", allowEmpty: true, coerce: "intOrNull" },
+        { k: "shift_template_id", label: "Shift (override; blank = use department's)", type: "select", optsKey: "shiftTemplates", allowEmpty: true, coerce: "intOrNull" },
         { k: "phone", label: "Phone", type: "text" },
         { k: "hired_date", label: "Hired date", type: "date" },
         { k: "password", label: "Password (blank = leave unchanged; they can also use Google)", type: "password", omitIfBlank: true },
       ],
-      help: "Everyone in Sentinel — attendance, gym, tasks, leave. Add a person here and they're available across the whole app (they get a QR badge + code automatically). Use Badge to view/print their QR or copy the code if they lost it.",
+      help: "Everyone in Sentinel: attendance, gym, tasks, leave. Add a person here and they're available across the whole app (they get a QR badge + code automatically). Use Badge to view/print their QR or copy the code if they lost it.",
       rowActions: [{ label: "Badge", handler: (item) => openBadge(item) }],
     },
     Exercises: {
@@ -83,7 +83,7 @@ window.pageInit = async (S) => {
         { k: "name", label: "Name", type: "text", req: true },
         { k: "shift_template_id", label: "Shift template (blank = the ★ company-default template)", type: "select", optsKey: "shiftTemplates", allowEmpty: true, coerce: "intOrNull" },
       ],
-      help: "Departments drive the Task Board filter, People, and each team's shift/late rules. A department's hours come entirely from its Shift Template — edit the times once in the Shift Templates tab and everyone on it updates. Leave blank to use the ★ company-default template.",
+      help: "Departments drive the Task Board filter, People, and each team's shift/late rules. A department's hours come entirely from its Shift Template: edit the times once in the Shift Templates tab and everyone on it updates. Leave blank to use the ★ company-default template.",
     },
     "Shift Templates": {
       api: "/api/manage/shift-templates", singular: "shift template",
@@ -102,9 +102,9 @@ window.pageInit = async (S) => {
         { k: "end", label: "End (24-hour, e.g. 22:00)", type: "time" },
         { k: "break_min", label: "Unpaid break minutes (set 0 for short/part-time shifts)", type: "number" },
         { k: "grace_min", label: "Late grace minutes (blank = system default)", type: "number" },
-        { k: "is_default", label: "Company default — the shift everyone uses unless their department/employee overrides it (only one template can be default)", type: "bool" },
+        { k: "is_default", label: "Company default: the shift everyone uses unless their department/employee overrides it (only one template can be default)", type: "bool" },
       ],
-      help: "Reusable shift schedules — the single place shift times live. Assign one to a department or an individual employee; editing a template updates everyone on it. Set break to 0 on a short shift (e.g. 6PM–10PM) so a 4-hour day isn't docked a lunch. One template is the ★ company default (the base every shift falls back to).",
+      help: "Reusable shift schedules, the single place shift times live. Assign one to a department or an individual employee; editing a template updates everyone on it. Set break to 0 on a short shift (e.g. 6PM–10PM) so a 4-hour day isn't docked a lunch. One template is the ★ company default (the base every shift falls back to).",
     },
     "Leave Types": {
       api: "/api/manage/leave-types", singular: "leave type",
@@ -117,7 +117,7 @@ window.pageInit = async (S) => {
       ],
       fields: [
         { k: "name", label: "Name", type: "text", req: true },
-        { k: "annual_balance", label: "Annual balance (days) — use -1 for unlimited", type: "number" },
+        { k: "annual_balance", label: "Annual balance (days); use -1 for unlimited", type: "number" },
         { k: "accrual_type", label: "Accrual", type: "select", opts: ["Monthly", "Yearly", "—"] },
         { k: "requires_approval", label: "Approval rule", type: "text" },
         { k: "carry_over_days", label: "Carry-over days", type: "number" },
@@ -136,7 +136,7 @@ window.pageInit = async (S) => {
       ],
       customForm: true,  // has a nested main-task -> sub-task recipe editor (openServiceForm)
       rowActions: [{ label: "Duplicate", handler: (item) => openServiceForm(item, true) }],
-      help: "The services the New Task form offers per department. Pick one and its whole main-task → sub-task breakdown — plus any default priority, labels and description — is seeded into the new task. Fully editable here — no developer needed.",
+      help: "The services the New Task form offers per department. Pick one and its whole main-task → sub-task breakdown (plus any default priority, labels and description) is seeded into the new task. Fully editable here, no developer needed.",
     },
     // One tab for the three Task Board vocabularies — they're the same shape (name + colour) and the
     // same endpoint, differing only by `kind`. A sub-selector switches between them so admins learn
@@ -190,7 +190,7 @@ window.pageInit = async (S) => {
 
   const keys = Object.keys(ENTITIES);
   view.innerHTML = `<div class="pagehead"><div><h2>Manage</h2>
-      <div class="lead">Add your team and edit everything behind the app — no developer needed.</div></div></div>
+      <div class="lead">Add your team and edit everything behind the app, no developer needed.</div></div></div>
     <div class="tabs" id="mtabs">${keys.map((k, i) => `<button class="${i ? "" : "active"}" data-k="${k}">${k}</button>`).join("")}</div>
     <div id="mbody"></div>`;
   S.qsa("#mtabs button").forEach((b) => b.onclick = () => {
@@ -239,7 +239,7 @@ window.pageInit = async (S) => {
 
   // Employee badge: view/print the QR + copy the typeable code, or reissue if lost.
   async function openBadge(item) {
-    const m = S.modal({ title: `${item.name} — attendance badge`, body: `<div id="bg" style="text-align:center;min-height:120px">Loading…</div>` });
+    const m = S.modal({ title: `${item.name} · attendance badge`, body: `<div id="bg" style="text-align:center;min-height:120px">Loading…</div>` });
     const load = async () => {
       try {
         const b = await S.api(`/api/people/${item.id}/badge`);
@@ -374,7 +374,7 @@ window.pageInit = async (S) => {
           <label class="field"><span>Department</span><select id="sf-dept">${deptOpts.map((o) => `<option value="${S.esc(o.value)}" ${item && item.dept === o.value ? "selected" : ""}>${S.esc(o.label)}</option>`).join("")}</select></label>
           <label class="field"><span>Content type</span><input id="sf-ctype" value="${S.esc(item ? item.content_type || "" : "")}"></label>
         </div>
-        <div class="section-label" style="margin:6px 0 4px">Recipe — main tasks &amp; their sub-tasks</div>
+        <div class="section-label" style="margin:6px 0 4px">Recipe: main tasks &amp; their sub-tasks</div>
         <div class="muted" style="font-size:12px;margin-bottom:8px">One sub-task per line. This is what gets seeded into a new task's breakdown.</div>
         <div id="sf-recipe"></div>
         <button type="button" class="btn sm ghost" id="sf-addmain" style="margin-top:8px">${S.ICON.plus}Add main task</button>

@@ -4,7 +4,7 @@ window.pageInit = async (S) => {
   const [teams, vocab] = await Promise.all([S.api("/api/teams"), S.api("/api/vocab")]);
   let filters = { search: "", team: "", role: "", status: "" };
 
-  view.innerHTML = `<div class="pagehead"><div><h2>People</h2><div class="lead">Employee directory — profiles, QR badges, attendance & gym at a glance. Add or edit people in the Manage console.</div></div></div>
+  view.innerHTML = `<div class="pagehead"><div><h2>People</h2><div class="lead">Employee directory: profiles, QR badges, attendance & gym at a glance. Add or edit people in the Manage console.</div></div></div>
     <div class="filters">
       <div class="grow" style="position:relative"><input id="f-search" placeholder="Search by name, email, department…"></div>
       <select id="f-team"><option value="">All Departments</option>${teams.map((t) => `<option value="${t.id}">${S.esc(t.name)}</option>`).join("")}</select>

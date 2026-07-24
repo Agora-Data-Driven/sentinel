@@ -246,6 +246,7 @@ h2 { letter-spacing: -0.6px; } h1 { letter-spacing: -0.5px; }
 .card-body { padding: 16px 18px; }
 .grid { display: grid; gap: 16px; }
 .section-label { font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--sub); }
+.section-label .svg-ic, .field > span .svg-ic { display: inline-block; width: 13px; height: 13px; vertical-align: -2px; margin-right: 5px; }
 
 /* KPI tiles — compact, uniform stat cards: icon chip + label, value, sub. */
 .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 16px; }
@@ -335,7 +336,8 @@ h2 { letter-spacing: -0.6px; } h1 { letter-spacing: -0.5px; }
 .cal-cell.rest { opacity: .72; }
 .cal-cell .d { font-size: 13px; font-weight: 700; color: var(--ink); }
 .cal-plan { align-self: flex-start; font-size: 11px; font-weight: 700; padding: 2px 9px; border-radius: var(--pill); }
-.cal-cardio { font-size: 10px; font-weight: 600; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.cal-cardio { display: inline-flex; align-items: center; gap: 3px; font-size: 10px; font-weight: 600; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.cal-cardio .svg-ic { width: 11px; height: 11px; flex: none; }
 .cal-logmeta { font-size: 10.5px; color: var(--sub); margin-top: auto; }
 .cal-done { position: absolute; top: 7px; right: 7px; display: grid; place-items: center; width: 19px; height: 19px; border-radius: 50%; }
 .cal-done svg { width: 13px; height: 13px; }

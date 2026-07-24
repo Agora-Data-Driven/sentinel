@@ -154,7 +154,7 @@ window.pageInit = async (S) => {
     return `<div class="card">
       <div class="card-head"><h3>${S.ICON.target}Skills</h3>${readOnly ? "" : `<button class="btn sm ghost" id="add-skill">${S.ICON.plus}Add skill</button>`}</div>
       <div class="card-body">
-        <div class="sub" style="margin-bottom:8px">What you can already do — including skills you proved on real projects, not just in the Academy. Your coach uses these.</div>
+        <div class="sub" style="margin-bottom:8px">What you can already do, including skills you proved on real projects, not just in the Academy. Your coach uses these.</div>
         ${skills.length ? order.map((src) => `
           <div style="margin-bottom:10px">
             <div class="section-label" style="margin-bottom:6px">${esc(srcLabel(src))}</div>
@@ -174,7 +174,7 @@ window.pageInit = async (S) => {
       <div class="card-head"><h3>${S.ICON.book}Reading &amp; Philosophy</h3><a href="/reading" class="btn sm ghost">Open</a></div>
       <div class="card-body">
         <div class="sub" style="margin-bottom:8px">${done.length}/${r.length} of the canon complete${now.length ? ` · reading ${now.length}` : ""}.</div>
-        ${now.length ? `<div class="section-label">Reading now</div><ul class="tickitems">${now.map((x) => `<li>${S.ICON.book}${esc(x.title)}</li>`).join("")}</ul>` : '<div class="empty">Nothing in progress — open the canon to start.</div>'}
+        ${now.length ? `<div class="section-label">Reading now</div><ul class="tickitems">${now.map((x) => `<li>${S.ICON.book}${esc(x.title)}</li>`).join("")}</ul>` : '<div class="empty">Nothing in progress. Open the canon to start.</div>'}
       </div></div>`;
   }
 
@@ -212,7 +212,7 @@ window.pageInit = async (S) => {
         <div>
           <div class="dev-eyebrow">${eyebrow}</div>
           <h1>${who}</h1>
-          <div class="lede">Everything you're becoming, in one place — body, mind, craft, and character.</div>
+          <div class="lede">Everything you're becoming, in one place: body, mind, craft, and character.</div>
         </div>
         <div class="dev-mast-right">
           ${readOnly ? "" : `<button class="btn primary dev-coach" id="ask-coach">${S.ICON.sparkle}Ask your coach</button>`}

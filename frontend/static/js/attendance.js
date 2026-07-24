@@ -60,7 +60,7 @@ window.pageInit = async (S) => {
   // Super Admin: correct a day's punches / status directly.
   function openEdit(s, refresh) {
     const m = S.modal({
-      title: `Edit attendance — ${S.esc(s.user ? s.user.name : "")} · ${S.fmtDate(s.date + "T00:00:00+08:00")}`,
+      title: `Edit attendance · ${S.esc(s.user ? s.user.name : "")} · ${S.fmtDate(s.date + "T00:00:00+08:00")}`,
       body: `<div class="row" style="gap:10px">
           <label class="field" style="flex:1"><span>Clock in</span><input type="time" id="e-in" value="${toHM(s.clock_in)}"></label>
           <label class="field" style="flex:1"><span>Clock out</span><input type="time" id="e-out" value="${toHM(s.clock_out)}"></label></div>
@@ -84,7 +84,7 @@ window.pageInit = async (S) => {
     tabc.innerHTML = `<div class="card pad" style="margin-bottom:16px">
         <div class="section-label">Today</div>
         <div class="row" style="margin-top:8px;gap:14px"><span class="pill ${t.state === "in" ? "green" : t.state === "on_break" ? "amber" : t.state === "out" ? "grey" : "grey"}">${t.state === "none" ? "Not clocked in" : t.state === "in" ? "Clocked in" : t.state === "on_break" ? "On break" : "Clocked out"}</span>
-        <span class="sub">Punch at the kiosk — actions available: ${t.valid_actions.length ? t.valid_actions.map((a) => a.replace("_", " ")).join(", ") : "none"}</span></div>
+        <span class="sub">Punch at the kiosk. Actions available: ${t.valid_actions.length ? t.valid_actions.map((a) => a.replace("_", " ")).join(", ") : "none"}</span></div>
       </div>
       <div class="table-wrap"><table>
         <thead><tr><th>Date</th><th>In</th><th>Out</th><th>Hours</th><th>Status</th></tr></thead>
@@ -99,7 +99,7 @@ window.pageInit = async (S) => {
       title: "Attendance request",
       body: `<input type="hidden" id="r-type" value="regularization">
         <label class="field"><span>Date</span><input type="date" id="r-date" value="${today}"></label>
-        <div class="row" style="gap:10px"><label class="field" style="flex:1"><span>Old value</span><input id="r-old" placeholder="e.g. — or 8h"></label>
+        <div class="row" style="gap:10px"><label class="field" style="flex:1"><span>Old value</span><input id="r-old" placeholder="e.g. 8h"></label>
         <label class="field" style="flex:1"><span>New value</span><input id="r-new" placeholder="e.g. 17:10 or 9h40m"></label></div>
         <label class="field"><span>Reason</span><textarea id="r-reason" placeholder="Explain the correction…"></textarea></label>`,
       footer: `<button class="btn ghost" id="r-cancel">Cancel</button><button class="btn primary" id="r-submit">Submit request</button>`,

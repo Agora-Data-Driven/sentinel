@@ -88,7 +88,7 @@
 
   // ============ Attendance trend (stacked bars) ============
   function attendanceTrend(host, trend) {
-    if (!trend || !trend.length) { host.classList.add("chart-card"); host.innerHTML = `<div class="chart-head"><h3>Attendance — last 14 days</h3></div><div class="chart-empty">No attendance yet.</div>`; return; }
+    if (!trend || !trend.length) { host.classList.add("chart-card"); host.innerHTML = `<div class="chart-head"><h3>Attendance, last 14 days</h3></div><div class="chart-empty">No attendance yet.</div>`; return; }
 
     const legendHtml = () => { const c = ATT[isDark() ? "dark" : "light"]; return `<div class="chart-legend">${SERIES.map(([k, lbl]) => `<span class="lg"><span class="sw" style="background:${c[k]}"></span>${lbl}</span>`).join("")}</div>`; };
 
@@ -136,12 +136,12 @@
     const renderTable = () => `<table class="chart-tbl"><thead><tr><th>Date</th><th>On-time</th><th>Late</th><th>Absent</th></tr></thead>
       <tbody>${trend.map((d) => `<tr><td>${wday(d.date)} ${shortDay(d.date)}</td><td>${d.ontime}</td><td>${d.late}</td><td>${d.absent}</td></tr>`).join("")}</tbody></table>`;
 
-    mountChart(host, "Attendance — last 14 days", null, () => { const f = document.createDocumentFragment(); f.appendChild(renderPlot()); const l = document.createElement("div"); l.innerHTML = legendHtml(); f.appendChild(l.firstChild); return f; }, renderTable);
+    mountChart(host, "Attendance, last 14 days", null, () => { const f = document.createDocumentFragment(); f.appendChild(renderPlot()); const l = document.createElement("div"); l.innerHTML = legendHtml(); f.appendChild(l.firstChild); return f; }, renderTable);
   }
 
   // ============ Open tasks by status (horizontal bars, single hue) ============
   function tasksByStatus(host, rows) {
-    if (!rows || !rows.length) { host.classList.add("chart-card"); host.innerHTML = `<div class="chart-head"><h3>Open tasks by status</h3></div><div class="chart-empty">No open tasks. 🎉</div>`; return; }
+    if (!rows || !rows.length) { host.classList.add("chart-card"); host.innerHTML = `<div class="chart-head"><h3>Open tasks by status</h3></div><div class="chart-empty">No open tasks.</div>`; return; }
     const renderPlot = () => {
       const hue = BAR_HUE[isDark() ? "dark" : "light"];
       const rowH = 30, W = 720, padL = 128, padR = 40, padT = 6;

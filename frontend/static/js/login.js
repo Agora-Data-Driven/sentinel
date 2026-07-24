@@ -45,7 +45,7 @@ window.pageInit = async (S) => {
     S.qs("#devwrap").style.display = "block";
     try {
       const users = await S.api("/api/auth/dev-users");
-      S.qs("#user-select").innerHTML = users.map((u) => `<option value="${u.id}">${S.esc(u.name)} — ${S.esc(u.role.replace("_", " "))}</option>`).join("");
+      S.qs("#user-select").innerHTML = users.map((u) => `<option value="${u.id}">${S.esc(u.name)} · ${S.esc(u.role.replace("_", " "))}</option>`).join("");
       S.qs("#devsignin").onclick = async () => {
         try { await S.api("/api/auth/dev-login", { method: "POST", body: { user_id: Number(S.qs("#user-select").value) } }); location.href = "/dashboard"; }
         catch (e) { showErr(e.detail || "Dev sign in failed"); }

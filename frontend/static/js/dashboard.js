@@ -22,7 +22,7 @@ window.pageInit = async (S) => {
       <div class="k-sub">${sub || ""}</div>
     </div>`;
 
-  let html = `<div class="pagehead"><div><h2>${greeting}, ${S.esc(u.name.split(" ")[0])} 👋</h2>
+  let html = `<div class="pagehead"><div><h2>${greeting}, ${S.esc(u.name.split(" ")[0])}</h2>
     <div class="lead">${S.fmtDateFull(d.date + "T00:00:00+08:00")} · Here's what's happening across Agora today.</div></div></div>`;
 
   if (d.is_admin) {
@@ -51,7 +51,7 @@ window.pageInit = async (S) => {
           <div class="row between" style="padding:7px 0;border-bottom:1px solid var(--line)">
             <div class="t-name">${S.avatar(s.user, "sm")}<span>${S.esc(s.user.name)}</span></div>
             <div>${S.statusPill("Late")} <span class="sub">${S.fmtTime(s.clock_in)}</span></div>
-          </div>`).join("") : '<div class="empty">Everyone on time. 🎯</div>'}</div></div>
+          </div>`).join("") : '<div class="empty">Everyone on time.</div>'}</div></div>
 
       <div class="card"><div class="card-head"><h3>Handover notes</h3><span class="chip">yesterday</span></div>
         <div class="card-body">${d.handovers && d.handovers.length ? d.handovers.map((h) => `

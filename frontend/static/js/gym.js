@@ -23,7 +23,7 @@ window.pageInit = async (S) => {
     <div class="dev-mast"><div>
       <div class="dev-eyebrow">Development · Gym</div>
       <h1>Train</h1>
-      <div class="lede">Plan your week, log a workout on any day, and edit sets & reps whenever — nothing gets locked. Your body fat and PRs live here too.</div>
+      <div class="lede">Plan your week, log a workout on any day, and edit sets & reps whenever, nothing gets locked. Your body fat and PRs live here too.</div>
     </div><div class="dev-mast-right"><div class="dev-mast-meta">${isMgr ? "TEAM VIEW" : "PUSH · PULL · LEGS"}</div></div></div>
     <div id="gym-body"></div>
     <div class="tabs" id="tabs">${tabs.map((t, i) => `<button class="${i ? "" : "active"}" data-tab="${t}">${t}</button>`).join("")}</div>
@@ -66,7 +66,7 @@ window.pageInit = async (S) => {
       const done = log && (log.status === "Completed" || log.status === "Incomplete")
         ? `<span class="cal-done ${log.status}" title="${log.day_type} · ${log.status}">${S.ICON.check}</span>` : "";
       const meta = log ? `<span class="cal-logmeta">${log.exercise_count} ex · ${log.duration_minutes}m</span>` : "";
-      const cardio = day.cardio ? `<span class="cal-cardio" title="${S.esc(day.cardio)}">🏃 ${S.esc(day.cardio)}</span>` : "";
+      const cardio = day.cardio ? `<span class="cal-cardio" title="${S.esc(day.cardio)}">${S.ICON.run}${S.esc(day.cardio)}</span>` : "";
       return `<button class="cal-cell ${day.is_today ? "today" : ""} ${rest ? "rest" : ""}" data-date="${day.date}">
         <span class="d">${dayNum(day.date)}</span>
         <span class="pill day ${day.planned} cal-plan">${day.planned}</span>${cardio}${meta}${done}</button>`;
@@ -152,7 +152,7 @@ window.pageInit = async (S) => {
     const wk = state.plan.week, cardio = state.plan.cardio || {};
     const m = S.modal({
       title: "Your weekly split",
-      body: `<div class="sub" style="font-size:13px;margin-bottom:10px">This repeats every week. Add a run under any day (e.g. “5k run”, “intervals”) — your Coach reads it too. Override a single date from the calendar.</div>
+      body: `<div class="sub" style="font-size:13px;margin-bottom:10px">This repeats every week. Add a run under any day (e.g. “5k run”, “intervals”), and your Coach reads it too. Override a single date from the calendar.</div>
         ${DOW.map((d) => `<div class="wk-row"><span class="wd">${d}</span>
           <div class="row" style="gap:8px">
             <select data-wd="${d}" style="max-width:128px">${PLAN_DAYS.map((p) => `<option ${p === wk[d] ? "selected" : ""}>${p}</option>`).join("")}</select>
@@ -425,7 +425,7 @@ window.pageInit = async (S) => {
     if (willBeDone && !state.day.duration_minutes && isTodaySession()) patch.duration_minutes = elapsedMinutes(state.day.start_time);
     await saveSession(patch);
     stopTimer(); renderDayEditor();
-    if (willBeDone) S.toast("Nice work 💪", "ok");
+    if (willBeDone) S.toast("Nice work", "ok");
   }
 
   // ============================ HISTORY ============================
@@ -473,7 +473,7 @@ window.pageInit = async (S) => {
   // Super Admin: edit/delete any employee's gym sessions (this week).
   function manageSessions(r) {
     const m = S.modal({
-      title: `${S.esc(r.name)} — sessions this week`,
+      title: `${S.esc(r.name)}: sessions this week`,
       body: `<div id="ms-list"></div>`,
     });
     const draw = () => {
