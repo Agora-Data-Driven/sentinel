@@ -3,9 +3,10 @@ window.pageInit = async (S) => {
   const d = await S.api("/api/admin/settings");
   const s = d.settings, desc = d.descriptions;
 
+  // Shift times & breaks live in Manage → Shift Templates now (one is the ★ company default), so
+  // they're intentionally not here. This card holds only the company-wide rules.
   const FIELDS = [
-    ["work_start", "time"], ["work_end", "time"], ["late_grace", "number"],
-    ["break_duration", "number"], ["gym_required_hours", "number"], ["work_days", "text"],
+    ["late_grace", "number"], ["gym_required_hours", "number"], ["work_days", "text"],
     ["timezone", "text"],
   ];
   const nice = (k) => k.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
@@ -13,7 +14,7 @@ window.pageInit = async (S) => {
   view.innerHTML = `<div class="pagehead"><div><h2>Settings</h2><div class="lead">System configuration. Every change is written to the audit log.</div></div></div>
     <div class="grid" style="grid-template-columns:1fr;gap:18px">
       <div class="card"><div class="card-head"><div><h3>Work & attendance rules</h3>
-          <div class="sub" style="font-size:12px;margin-top:2px">Company defaults. Each department's actual hours come from its Shift Template (Manage → Departments); these apply only where no template is set. Late grace &amp; work days apply everywhere.</div></div>
+          <div class="sub" style="font-size:12px;margin-top:2px">Company-wide rules. Shift times &amp; breaks live in <b>Manage → Shift Templates</b> (one is the ★ company default). Late grace is the default for every shift — a template can override it; work days &amp; timezone apply everywhere.</div></div>
           <button class="btn primary sm" id="save">Save changes</button></div>
         <div class="card-body"><div class="grid" style="grid-template-columns:1fr 1fr;gap:14px">
           ${FIELDS.map(([k, t]) => `<label class="field"><span title="${S.esc(desc[k] || "")}">${nice(k)}</span>

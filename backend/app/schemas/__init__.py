@@ -319,8 +319,6 @@ class PersonCreateIn(BaseModel):
     phone: str | None = None
     hired_date: date | None = None
     shift_template_id: int | None = None
-    shift_start: str | None = None
-    shift_end: str | None = None
     password: str | None = None  # optional initial password
 
 
@@ -332,8 +330,6 @@ class PersonUpdateIn(BaseModel):
     phone: str | None = None
     hired_date: date | None = None
     shift_template_id: int | None = None
-    shift_start: str | None = None
-    shift_end: str | None = None
     is_active: bool | None = None
     password: str | None = None  # admin set/reset (blank/None = leave unchanged)
 

@@ -53,34 +53,29 @@ def effective_shift(db: Session, user: User, day: date | None = None) -> Shift:
     without changing any call sites. Data-driven: shifts are edited in Manage, never in code.
     """
     smap = settings_svc.get_map(db)
+    # Base = the company-default Shift Template. System settings are only a null-safe backstop for
+    # the (transient) case where no template is flagged default yet.
     shift = Shift(
         start=smap.get("work_start", "08:00"),
         end=smap.get("work_end", "17:00"),
         grace_min=int(smap.get("late_grace", "15")),
         break_min=int(smap.get("break_duration", "60")),
     )
+    default_tpl = db.execute(
+        select(ShiftTemplate).where(ShiftTemplate.is_default.is_(True))
+    ).scalars().first()
+    if default_tpl:
+        shift = _apply_template(default_tpl, shift)
 
-    # Team base: its template, else its legacy shift fields.
+    # Department's template overrides the company default.
     if user.team_id:
         team = db.get(Team, user.team_id)
-        if team:
-            if team.shift_template_id:
-                shift = _apply_template(db.get(ShiftTemplate, team.shift_template_id), shift)
-            elif team.shift_start:
-                shift = Shift(start=team.shift_start, end=team.shift_end,
-                              grace_min=shift.grace_min, break_min=team.break_duration_min,
-                              name=team.name)
+        if team and team.shift_template_id:
+            shift = _apply_template(db.get(ShiftTemplate, team.shift_template_id), shift)
 
-    # Employee override beats the team: template first, else legacy per-employee times.
+    # Employee's own template overrides the department.
     if user.shift_template_id:
         shift = _apply_template(db.get(ShiftTemplate, user.shift_template_id), shift)
-    else:
-        if user.shift_start:
-            shift = Shift(start=user.shift_start, end=shift.end, grace_min=shift.grace_min,
-                          break_min=shift.break_min, name="Custom")
-        if user.shift_end:
-            shift = Shift(start=shift.start, end=user.shift_end, grace_min=shift.grace_min,
-                          break_min=shift.break_min, name=shift.name or "Custom")
 
     # Null/blank-safe: a missing value must never collapse the shift to midnight.
     return Shift(

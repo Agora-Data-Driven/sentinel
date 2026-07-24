@@ -66,6 +66,7 @@ from app.models import (  # noqa: E402
     LeaveRequest,
     LeaveType,
     Notification,
+    ShiftTemplate,
     Task,
     TaskComment,
     TaskHistory,
@@ -217,10 +218,27 @@ def run(minimal: bool = False) -> None:
             settings_svc.set_value(db, k, v, None)
         db.commit()
 
-        # --- Teams -----------------------------------------------------------
+        # --- Shift templates (the single source of truth for schedules) ------
+        # One template per distinct window in TEAMS; the standard 8–5 is the company default.
+        DEFAULT_WINDOW = ("08:00", "17:00", 60)
+        WINDOW_NAMES = {("08:00", "17:00", 60): "Day (8AM–5PM)", ("09:00", "18:00", 60): "Day (9AM–6PM)"}
+        tpl_by_window: dict[tuple, ShiftTemplate] = {}
+        for _name, s, e, brk in TEAMS:
+            key = (s, e, brk)
+            if key not in tpl_by_window:
+                tpl = ShiftTemplate(name=WINDOW_NAMES.get(key, f"{s}–{e}"), start=s, end=e,
+                                    break_min=brk, is_default=(key == DEFAULT_WINDOW))
+                db.add(tpl)
+                tpl_by_window[key] = tpl
+        db.commit()
+        if not any(t.is_default for t in tpl_by_window.values()):
+            next(iter(tpl_by_window.values())).is_default = True
+            db.commit()
+
+        # --- Teams (each points at a template; blank would inherit the default) ----
         teams: dict[str, Team] = {}
         for name, s, e, brk in TEAMS:
-            t = Team(name=name, shift_start=s, shift_end=e, break_duration_min=brk)
+            t = Team(name=name, shift_template_id=tpl_by_window[(s, e, brk)].id)
             db.add(t)
             teams[name] = t
         db.commit()

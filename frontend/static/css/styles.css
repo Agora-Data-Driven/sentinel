@@ -607,6 +607,10 @@ textarea { resize: vertical; min-height: 78px; }
 .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 16px; }
 .tabs button { background: none; border: none; padding: 10px 14px; font-weight: 700; font-size: 13.5px; color: var(--sub); cursor: pointer; border-bottom: 2px solid transparent; }
 .tabs button.active { color: var(--green-d); border-bottom-color: var(--green); }
+/* Secondary, in-page sub-selector (e.g. Task Fields → Statuses/Labels/Priorities): pill style, no underline, so it reads as a level below the main tab bar. */
+.tabs.sub { border-bottom: none; gap: 6px; margin-bottom: 14px; }
+.tabs.sub button { padding: 5px 12px; border-radius: 999px; font-size: 12.5px; background: var(--input); border-bottom: none; }
+.tabs.sub button.active { background: var(--green-soft); color: var(--green-strong); border-bottom: none; }
 
 /* ---------- Responsive ---------- */
 @media (max-width: 900px) {
