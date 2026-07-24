@@ -1,13 +1,10 @@
 window.pageInit = async (S) => {
   const view = S.view();
-  const isSA = S.user.role === "super_admin";
-  const isAdmin = S.can("admin");
+  const isAdmin = S.can("admin");  // gates the QR badge view (managers+); all edits now live in Manage
   const [teams, vocab] = await Promise.all([S.api("/api/teams"), S.api("/api/vocab")]);
-  const teamName = Object.fromEntries(teams.map((t) => [t.id, t.name]));
   let filters = { search: "", team: "", role: "", status: "" };
 
-  view.innerHTML = `<div class="pagehead"><div><h2>People</h2><div class="lead">Employee directory — profiles, QR badges, attendance & gym at a glance.</div></div>
-      ${isSA ? `<button class="btn primary" id="add">${S.ICON.plus}Add Employee</button>` : ""}</div>
+  view.innerHTML = `<div class="pagehead"><div><h2>People</h2><div class="lead">Employee directory — profiles, QR badges, attendance & gym at a glance. Add or edit people in the Manage console.</div></div></div>
     <div class="filters">
       <div class="grow" style="position:relative"><input id="f-search" placeholder="Search by name, email, department…"></div>
       <select id="f-team"><option value="">All Departments</option>${teams.map((t) => `<option value="${t.id}">${S.esc(t.name)}</option>`).join("")}</select>
@@ -21,7 +18,6 @@ window.pageInit = async (S) => {
   S.qs("#f-team").onchange = (e) => { filters.team = e.target.value; load(); };
   S.qs("#f-role").onchange = (e) => { filters.role = e.target.value; load(); };
   S.qs("#f-status").onchange = (e) => { filters.status = e.target.value; load(); };
-  if (isSA) S.qs("#add").onclick = () => addForm();  // no arg — else the click Event becomes `existing` and the form thinks it's editing
 
   async function load() {
     const q = new URLSearchParams();
@@ -73,65 +69,13 @@ window.pageInit = async (S) => {
         <div class="section-label">Leave balance</div>
         <div class="stack" style="margin-top:8px">${d.leave_balances.map((b) => `<div class="row between"><span>${S.esc(b.leave_type)}</span><strong>${b.unlimited ? "∞" : b.remaining + " left"}</strong></div>`).join("")}</div>
       </div></div>`;
-    let footer = "";
-    if (isSA) footer += `<button class="btn danger" id="p-delete">Remove</button>`;
-    if (isAdmin) footer += `<button class="btn ghost" id="p-edit">Edit</button>`;
-    if (isAdmin) footer += `<button class="btn ghost" id="p-regen">Reissue QR</button>`;
-    footer += `<button class="btn primary" id="p-close">Close</button>`;
+    // Read-only directory: create / edit / delete / reissue-badge all live in the Manage console
+    // (super-admin), so there's a single source of truth for employee records. Here we only view.
+    const footer = `<button class="btn primary" id="p-close">Close</button>`;
     const m = S.modal({ title: "Profile", body, footer, wide: true });
     S.qs("#p-close").onclick = m.close;
-    if (isAdmin && S.qs("#p-edit")) S.qs("#p-edit").onclick = () => { m.close(); addForm(p); };
-    if (isAdmin && S.qs("#p-regen")) S.qs("#p-regen").onclick = async () => {
-      if (!confirm(`Reissue ${p.name}'s QR badge? Their current badge will stop working.`)) return;
-      try {
-        await S.api(`/api/people/${id}/qr/regenerate`, { method: "POST" });
-        S.toast("New QR badge issued", "ok");
-        const img = S.qs(`img[alt="QR"]`); if (img) img.src = `/api/people/${id}/qr?t=` + Date.now();
-      } catch (e) { S.toast(e.detail, "err"); }
-    };
-    if (isSA && S.qs("#p-delete")) S.qs("#p-delete").onclick = async () => {
-      if (Number(id) === S.user.id) { S.toast("You can't remove your own account", "err"); return; }
-      if (!confirm(`Permanently remove ${p.name}? Their attendance, gym, leave and notifications will be deleted. This can't be undone.\n\n(To keep their history instead, use Edit and set status to Inactive.)`)) return;
-      try { await S.api(`/api/people/${id}`, { method: "DELETE" }); S.toast(`${p.name} removed`, "ok"); m.close(); load(); }
-      catch (e) { S.toast(e.detail, "err"); }
-    };
   }
   const row = (l, v) => `<div class="row between"><span class="sub">${l}</span><strong>${S.esc(v || "—")}</strong></div>`;
-
-  function addForm(existing) {
-    const e = existing || {};
-    const editing = !!existing;
-    const m = S.modal({
-      title: editing ? "Edit employee" : "Add employee",
-      body: `<div class="grid" style="grid-template-columns:1fr 1fr;gap:14px">
-        <label class="field"><span>Name</span><input id="e-name" value="${S.esc(e.name || "")}"></label>
-        <label class="field"><span>Email</span><input id="e-email" value="${S.esc(e.email || "")}"></label>
-        <label class="field"><span>Role</span><select id="e-role">${vocab.roles.map((r) => `<option value="${r.value}" ${r.value === e.role ? "selected" : ""}>${S.esc(r.label)}</option>`).join("")}</select></label>
-        <label class="field"><span>Department</span><select id="e-team"><option value="">—</option>${teams.map((t) => `<option value="${t.id}" ${t.id === e.team_id ? "selected" : ""}>${S.esc(t.name)}</option>`).join("")}</select></label>
-        <label class="field"><span>Phone</span><input id="e-phone" value="${S.esc(e.phone || "")}"></label>
-        <label class="field"><span>Hired date</span><input type="date" id="e-hired" value="${e.hired_date || ""}"></label>
-        <label class="field"><span>Shift start (override)</span><input id="e-ss" placeholder="08:00" value="${S.esc(e.shift_start || "")}"></label>
-        <label class="field"><span>Shift end (override)</span><input id="e-se" placeholder="17:00" value="${S.esc(e.shift_end || "")}"></label>
-        ${editing ? `<label class="field"><span>Status</span><select id="e-active"><option value="true" ${e.is_active !== false ? "selected" : ""}>Active</option><option value="false" ${e.is_active === false ? "selected" : ""}>Inactive</option></select></label>` : ""}
-      </div>`,
-      footer: `<button class="btn ghost" id="e-cancel">Cancel</button><button class="btn primary" id="e-save">${editing ? "Save" : "Create"}</button>`,
-    });
-    S.qs("#e-cancel").onclick = m.close;
-    S.qs("#e-save").onclick = async () => {
-      const payload = {
-        name: v("e-name"), email: v("e-email"), role: S.qs("#e-role").value,
-        team_id: S.qs("#e-team").value ? Number(S.qs("#e-team").value) : null,
-        phone: v("e-phone"), hired_date: v("e-hired") || null, shift_start: v("e-ss"), shift_end: v("e-se"),
-      };
-      if (editing) payload.is_active = S.qs("#e-active").value === "true";
-      try {
-        if (editing) await S.api("/api/people/" + existing.id, { method: "PATCH", body: payload });
-        else await S.api("/api/people", { method: "POST", body: payload });
-        S.toast(editing ? "Employee updated" : "Employee added", "ok"); m.close(); load();
-      } catch (err) { S.toast(err.detail, "err"); }
-    };
-    function v(id) { return S.qs("#" + id).value || null; }
-  }
 
   await load();
   // Deep-link: /people?open=<id> (from the command palette / a notification).
