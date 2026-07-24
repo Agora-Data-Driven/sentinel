@@ -195,9 +195,6 @@ def create_team(payload: dict, actor: User = Depends(get_current_user), db: Sess
     t = Team(
         name=name,
         shift_template_id=_opt_int(payload, "shift_template_id", None),
-        shift_start=_shift_time(payload, "shift_start", "08:00"),
-        shift_end=_shift_time(payload, "shift_end", "17:00"),
-        break_duration_min=_opt_int(payload, "break_duration_min", 60),
     )
     db.add(t)
     db.commit()
@@ -212,20 +209,23 @@ def update_team(item_id: int, payload: dict, actor: User = Depends(get_current_u
         raise HTTPException(404, "Department not found")
     if "name" in payload and payload["name"]:
         t.name = payload["name"].strip()
-    if "shift_template_id" in payload:  # may be null to clear the template and use raw times
+    if "shift_template_id" in payload:  # null clears it → falls back to the company-default template
         t.shift_template_id = _opt_int(payload, "shift_template_id", None)
-    if "shift_start" in payload and payload["shift_start"]:
-        t.shift_start = _shift_time(payload, "shift_start", t.shift_start)
-    if "shift_end" in payload and payload["shift_end"]:
-        t.shift_end = _shift_time(payload, "shift_end", t.shift_end)
-    if "break_duration_min" in payload and payload["break_duration_min"] not in (None, ""):
-        t.break_duration_min = _opt_int(payload, "break_duration_min", t.break_duration_min)
     db.commit()
     audit.record(db, actor_id=actor.id, table_name="teams", record_id=t.id, action="update", new={"name": t.name})
     return team_dict(t)
 
 
 # ---------------- Shift templates ----------------
+def _make_sole_default(db: Session, keep_id: int) -> None:
+    """Enforce exactly one company-default template: clear every other, set ``keep_id``."""
+    db.query(ShiftTemplate).filter(ShiftTemplate.id != keep_id).update(
+        {ShiftTemplate.is_default: False}, synchronize_session=False)
+    kept = db.get(ShiftTemplate, keep_id)
+    if kept:
+        kept.is_default = True
+
+
 @router.get("/shift-templates")
 def list_shift_templates(db: Session = Depends(get_db)):
     return [shift_template_dict(s) for s in db.execute(select(ShiftTemplate).order_by(ShiftTemplate.name)).scalars()]
@@ -245,8 +245,12 @@ def create_shift_template(payload: dict, actor: User = Depends(get_current_user)
         break_min=_opt_int(payload, "break_min", 60),
         grace_min=_opt_int(payload, "grace_min", None),
         active=bool(payload.get("active", True)),
+        is_default=bool(payload.get("is_default", False)),
     )
     db.add(s)
+    db.flush()
+    if s.is_default:
+        _make_sole_default(db, s.id)
     db.commit()
     audit.record(db, actor_id=actor.id, table_name="shift_templates", record_id=s.id, action="create", new={"name": name})
     return shift_template_dict(s)
@@ -269,6 +273,10 @@ def update_shift_template(item_id: int, payload: dict, actor: User = Depends(get
         s.grace_min = _opt_int(payload, "grace_min", None)
     if "active" in payload:
         s.active = bool(payload["active"])
+    # Making this the default clears any other default. We never let the default be un-set to
+    # nothing — there must always be exactly one — so a falsey is_default here is ignored.
+    if payload.get("is_default"):
+        _make_sole_default(db, s.id)
     db.commit()
     audit.record(db, actor_id=actor.id, table_name="shift_templates", record_id=s.id, action="update", new={"name": s.name})
     return shift_template_dict(s)
@@ -279,6 +287,8 @@ def delete_shift_template(item_id: int, actor: User = Depends(get_current_user),
     s = db.get(ShiftTemplate, item_id)
     if not s:
         raise HTTPException(404, "Shift template not found")
+    if s.is_default:
+        raise HTTPException(409, "This is the company-default shift — make another template the default first")
     name = s.name
     # Detach from anyone using it so their shift cleanly falls back to team/default.
     db.query(Team).filter(Team.shift_template_id == item_id).update({Team.shift_template_id: None}, synchronize_session=False)

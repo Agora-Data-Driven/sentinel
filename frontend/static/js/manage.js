@@ -16,7 +16,7 @@ window.pageInit = async (S) => {
     roles: vocab.roles,
     teams: teams.map((t) => ({ value: t.id, label: t.name })),
     teamNames: teams.map((t) => ({ value: t.name, label: t.name })),  // service dept is stored by name
-    shiftTemplates: shiftTemplates.map((t) => ({ value: t.id, label: `${t.name} (${t.start}–${t.end})` })),
+    shiftTemplates: shiftTemplates.map((t) => ({ value: t.id, label: `${t.name} (${t.start}–${t.end})${t.is_default ? " · company default" : ""}` })),
   };
 
   const ENTITIES = {
@@ -81,14 +81,15 @@ window.pageInit = async (S) => {
       ],
       fields: [
         { k: "name", label: "Name", type: "text", req: true },
-        { k: "shift_template_id", label: "Shift template (blank = company default from Settings)", type: "select", optsKey: "shiftTemplates", allowEmpty: true, coerce: "intOrNull" },
+        { k: "shift_template_id", label: "Shift template (blank = the ★ company-default template)", type: "select", optsKey: "shiftTemplates", allowEmpty: true, coerce: "intOrNull" },
       ],
-      help: "Departments drive the Task Board filter, People, and each team's shift/late rules. A department's hours come entirely from its Shift Template — edit the times once in the Shift Templates tab and everyone on it updates. Leave blank to use the company default shift (Settings).",
+      help: "Departments drive the Task Board filter, People, and each team's shift/late rules. A department's hours come entirely from its Shift Template — edit the times once in the Shift Templates tab and everyone on it updates. Leave blank to use the ★ company-default template.",
     },
     "Shift Templates": {
       api: "/api/manage/shift-templates", singular: "shift template",
       cols: [
         { k: "name", label: "Name" },
+        { k: "is_default", label: "Default", fmt: (v) => (v ? `<span class="pill green">★ Company default</span>` : "") },
         { k: "start", label: "Start" },
         { k: "end", label: "End" },
         { k: "break_min", label: "Break (min)" },
@@ -101,8 +102,9 @@ window.pageInit = async (S) => {
         { k: "end", label: "End (24-hour, e.g. 22:00)", type: "time" },
         { k: "break_min", label: "Unpaid break minutes (set 0 for short/part-time shifts)", type: "number" },
         { k: "grace_min", label: "Late grace minutes (blank = system default)", type: "number" },
+        { k: "is_default", label: "Company default — the shift everyone uses unless their department/employee overrides it (only one template can be default)", type: "bool" },
       ],
-      help: "Reusable shift schedules — assign them to a department or an individual employee. Editing a template updates everyone on it, with no code changes. Set break to 0 on a short shift (e.g. 6PM–10PM) so a 4-hour day isn't docked a lunch.",
+      help: "Reusable shift schedules — the single place shift times live. Assign one to a department or an individual employee; editing a template updates everyone on it. Set break to 0 on a short shift (e.g. 6PM–10PM) so a 4-hour day isn't docked a lunch. One template is the ★ company default (the base every shift falls back to).",
     },
     "Leave Types": {
       api: "/api/manage/leave-types", singular: "leave type",
@@ -136,25 +138,35 @@ window.pageInit = async (S) => {
       rowActions: [{ label: "Duplicate", handler: (item) => openServiceForm(item, true) }],
       help: "The services the New Task form offers per department. Pick one and its whole main-task → sub-task breakdown — plus any default priority, labels and description — is seeded into the new task. Fully editable here — no developer needed.",
     },
-    Statuses: {
-      api: "/api/manage/task-vocab", listUrl: "/api/manage/task-vocab?kind=status", fixed: { kind: "status" }, singular: "status",
-      cols: [{ k: "name", label: "Status" }, { k: "color", label: "Colour", fmt: (v) => _swatch(v) }],
+    // One tab for the three Task Board vocabularies — they're the same shape (name + colour) and the
+    // same endpoint, differing only by `kind`. A sub-selector switches between them so admins learn
+    // one screen instead of three near-identical tabs.
+    "Task Fields": {
+      api: "/api/manage/task-vocab",
+      cols: [{ k: "name", label: "Name" }, { k: "color", label: "Colour", fmt: (v) => _swatch(v) }],
       fields: [{ k: "name", label: "Name", type: "text", req: true }, { k: "color", label: "Colour", type: "color" }],
-      help: "The Task Board's columns, in order. Renaming one updates every task using it; you can't delete a status still in use.",
-    },
-    Labels: {
-      api: "/api/manage/task-vocab", listUrl: "/api/manage/task-vocab?kind=label", fixed: { kind: "label" }, singular: "label",
-      cols: [{ k: "name", label: "Label" }, { k: "color", label: "Colour", fmt: (v) => _swatch(v) }],
-      fields: [{ k: "name", label: "Name", type: "text", req: true }, { k: "color", label: "Colour", type: "color" }],
-      help: "The colour-coded label chips on task cards. Renaming updates tasks; deleting is blocked while a task still uses it.",
-    },
-    Priorities: {
-      api: "/api/manage/task-vocab", listUrl: "/api/manage/task-vocab?kind=priority", fixed: { kind: "priority" }, singular: "priority",
-      cols: [{ k: "name", label: "Priority" }, { k: "color", label: "Colour", fmt: (v) => _swatch(v) }],
-      fields: [{ k: "name", label: "Name", type: "text", req: true }, { k: "color", label: "Colour", type: "color" }],
-      help: "Priority levels + their dot colour. Renaming updates tasks; deleting is blocked while a task still uses it.",
+      kinds: [
+        { kind: "status", tab: "Statuses", singular: "status",
+          help: "The Task Board's columns, in order. Renaming one updates every task using it; you can't delete a status still in use." },
+        { kind: "label", tab: "Labels", singular: "label",
+          help: "The colour-coded label chips on task cards. Renaming updates tasks; deleting is blocked while a task still uses it." },
+        { kind: "priority", tab: "Priorities", singular: "priority",
+          help: "Priority levels + their dot colour. Renaming updates tasks; deleting is blocked while a task still uses it." },
+      ],
     },
   };
+
+  // Which sub-vocabulary the "Task Fields" tab is showing (persists while the tab is open).
+  let vocabKind = "status";
+
+  // Resolve a tab's config, applying the active sub-kind for the merged "Task Fields" tab.
+  function cfgFor(key) {
+    const cfg = ENTITIES[key];
+    if (!cfg.kinds) return cfg;
+    const k = cfg.kinds.find((x) => x.kind === vocabKind) || cfg.kinds[0];
+    return { ...cfg, fixed: { kind: k.kind }, singular: k.singular, help: k.help,
+             listUrl: `${cfg.api}?kind=${k.kind}` };
+  }
 
   const _swatch = (hex) => hex
     ? `<span class="dot" style="background:${S.esc(hex)};vertical-align:middle"></span> <span class="muted">${S.esc(hex)}</span>`
@@ -192,13 +204,17 @@ window.pageInit = async (S) => {
   }
 
   async function render(key) {
-    const cfg = ENTITIES[key];
+    const cfg = cfgFor(key);
     const body = S.qs("#mbody");
     body.innerHTML = '<div class="skeleton" style="height:180px"></div>';
     let rows;
     try { rows = await S.api(cfg.listUrl || cfg.api); }
     catch (e) { body.innerHTML = `<div class="empty">${S.esc(e.detail || "Failed to load")}</div>`; return; }
-    body.innerHTML = `
+    // Sub-selector for a multi-kind tab (Task Fields → Statuses / Labels / Priorities).
+    const subTabs = cfg.kinds
+      ? `<div class="tabs sub" id="msub">${cfg.kinds.map((k) => `<button class="${k.kind === vocabKind ? "active" : ""}" data-sub="${k.kind}">${k.tab}</button>`).join("")}</div>`
+      : "";
+    body.innerHTML = `${subTabs}
       <div class="row between" style="margin-bottom:12px">
         <div class="lead">${cfg.help}</div>
         <button class="btn primary" id="m-add">${S.ICON.plus}Add ${cfg.singular}</button>
@@ -213,6 +229,7 @@ window.pageInit = async (S) => {
             <button class="btn sm danger" data-del="${r.id}">Delete</button></td></tr>`).join("")
         : `<tr><td colspan="${cfg.cols.length + 1}"><div class="empty">No ${cfg.singular}s yet. Add one.</div></td></tr>`}</tbody></table></div>`;
 
+    S.qsa("#msub button").forEach((b) => b.onclick = () => { vocabKind = b.dataset.sub; render(key); });
     const openEditor = (item) => (cfg.customForm ? openServiceForm(item) : openForm(key, item));
     S.qs("#m-add").onclick = () => openEditor(null);
     S.qsa("[data-edit]").forEach((b) => b.onclick = () => openEditor(rows.find((r) => r.id == b.dataset.edit)));
@@ -277,12 +294,13 @@ window.pageInit = async (S) => {
     }
     if (f.type === "multi") return `<div class="row wrap">${resolveOpts(f).map((o) => `<label class="chip" style="cursor:pointer"><input type="checkbox" style="width:auto" data-mf="${f.k}" value="${S.esc(o.value)}" ${(v || []).includes(o.value) ? "checked" : ""}> ${S.esc(o.label)}</label>`).join("")}</div>`;
     if (f.type === "color") return `<input type="color" data-mf="${f.k}" value="${S.esc(v || "#6B7280")}" style="width:56px;height:34px;padding:2px">`;
+    if (f.type === "bool") return `<label class="chip" style="cursor:pointer;align-self:start"><input type="checkbox" style="width:auto" data-mf="${f.k}" ${v ? "checked" : ""}> Enabled</label>`;
     const t = f.type === "number" ? "number" : f.type === "time" ? "time" : f.type === "date" ? "date" : f.type === "password" ? "password" : "text";
     return `<input type="${t}" data-mf="${f.k}" value="${S.esc(v == null ? "" : v)}"${f.type === "number" ? ' step="1"' : ""}${f.type === "password" ? ' autocomplete="new-password"' : ""}>`;
   }
 
   function openForm(key, item) {
-    const cfg = ENTITIES[key];
+    const cfg = cfgFor(key);
     const editing = !!item;
     const m = S.modal({
       title: `${editing ? "Edit" : "Add"} ${cfg.singular}`,
@@ -306,6 +324,7 @@ window.pageInit = async (S) => {
       for (const f of cfg.fields) {
         let val;
         if (f.type === "multi") val = S.qsa(`[data-mf="${f.k}"]:checked`).map((c) => c.value);
+        else if (f.type === "bool") val = S.qs(`[data-mf="${f.k}"]`).checked;
         else val = S.qs(`[data-mf="${f.k}"]`).value;
         if (f.coerce === "intOrNull") val = (val === "" ? null : Number(val));
         else if ((f.type === "date" || f.type === "number") && val === "") val = null;

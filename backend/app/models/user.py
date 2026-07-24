@@ -29,6 +29,9 @@ class ShiftTemplate(Base):
     break_min: Mapped[int] = mapped_column(Integer, default=60)
     grace_min: Mapped[int | None] = mapped_column(Integer, nullable=True)  # NULL => system default grace
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Exactly one template is the company default — it's the base every shift resolves from when a
+    # team/employee has no template of their own. Setting one default clears any previous default.
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
@@ -37,13 +40,8 @@ class Team(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(80), unique=True, nullable=False)
-    # Preferred: a reusable shift template. The raw shift_* fields below stay as a legacy fallback
-    # for teams created before templates existed (effective_shift honours whichever is set).
+    # A team's hours come entirely from its Shift Template. Blank = the company-default template.
     shift_template_id: Mapped[int | None] = mapped_column(ForeignKey("shift_templates.id"), nullable=True)
-    # Legacy configurable shift window. "HH:MM" 24h strings, applied in PH time.
-    shift_start: Mapped[str] = mapped_column(String(5), default="08:00")
-    shift_end: Mapped[str] = mapped_column(String(5), default="17:00")
-    break_duration_min: Mapped[int] = mapped_column(Integer, default=60)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     members: Mapped[list["User"]] = relationship(back_populates="team")
@@ -63,10 +61,8 @@ class User(Base):
     # Password login (PBKDF2). Null = no password set yet (must use Google, or admin sets one).
     password_hash: Mapped[str | None] = mapped_column(String(200), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    # Per-employee shift override. Prefer a template; the raw shift_* fields remain a legacy fallback.
+    # Per-employee shift override (a Shift Template). Blank = use the department's shift.
     shift_template_id: Mapped[int | None] = mapped_column(ForeignKey("shift_templates.id"), nullable=True)
-    shift_start: Mapped[str | None] = mapped_column(String(5), nullable=True)
-    shift_end: Mapped[str | None] = mapped_column(String(5), nullable=True)
     hired_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     # Monthly base salary (Super Admin only — never exposed via public serializers).
     monthly_salary: Mapped[float | None] = mapped_column(Float, nullable=True)

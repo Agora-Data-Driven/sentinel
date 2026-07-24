@@ -26,7 +26,7 @@ from app import constants as C  # noqa: E402
 from app.config import settings  # noqa: E402
 from app.database import Base, SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
-from app.models import LeaveType, Team, User  # noqa: E402
+from app.models import LeaveType, ShiftTemplate, Team, User  # noqa: E402
 from app.security import create_access_token  # noqa: E402
 
 
@@ -58,8 +58,15 @@ def client():
 
 @pytest.fixture
 def make_team(db):
+    _n = {"i": 0}
+
     def _make(name="Creative", shift_start="08:00", shift_end="17:00", break_min=60):
-        team = Team(name=name, shift_start=shift_start, shift_end=shift_end, break_duration_min=break_min)
+        # Shifts are template-driven now: build a template for the requested window and point at it.
+        _n["i"] += 1
+        tpl = ShiftTemplate(name=f"{name} shift {_n['i']}", start=shift_start, end=shift_end, break_min=break_min)
+        db.add(tpl)
+        db.commit()
+        team = Team(name=name, shift_template_id=tpl.id)
         db.add(team)
         db.commit()
         db.refresh(team)

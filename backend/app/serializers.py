@@ -76,8 +76,6 @@ def user_full(u: User, team: Team | None = None) -> dict:
             "is_active": u.is_active,
             "hired_date": _d(u.hired_date),
             "shift_template_id": u.shift_template_id,
-            "shift_start": u.shift_start,
-            "shift_end": u.shift_end,
             "team_name": team.name if team else None,
         }
     )
@@ -89,9 +87,6 @@ def team_dict(t: Team) -> dict:
         "id": t.id,
         "name": t.name,
         "shift_template_id": t.shift_template_id,
-        "shift_start": t.shift_start,
-        "shift_end": t.shift_end,
-        "break_duration_min": t.break_duration_min,
     }
 
 
@@ -112,6 +107,7 @@ def shift_template_dict(t) -> dict:
         "break_min": t.break_min,
         "grace_min": t.grace_min,
         "active": t.active,
+        "is_default": t.is_default,
         "paid_hours": round(paid / 60.0, 2),
     }
 
