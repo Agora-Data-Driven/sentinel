@@ -474,22 +474,27 @@ window.pageInit = async (S) => {
       title: existing ? "Edit task" : "New task",
       wide: true,
       body: `<div class="grid" style="grid-template-columns:1fr 1fr;gap:16px">
-        <label class="field" style="grid-column:1/-1"><span>Title</span><input id="t-title" value="${S.esc(e.title || "")}"></label>
-        <label class="field"><span>Client</span><select id="t-client"><option value="">—</option>${clients.map((c) => `<option value="${c.id}" ${c.id === e.client_id ? "selected" : ""}>${S.esc(c.name)}</option>`).join("")}</select></label>
-        <label class="field"><span>Campaign</span><input id="t-campaign" value="${S.esc(e.campaign || "")}"></label>
+        <label class="field" style="grid-column:1/-1"><span>Client</span><select id="t-client"><option value="">—</option>${clients.map((c) => `<option value="${c.id}" ${c.id === e.client_id ? "selected" : ""}>${S.esc(c.name)}</option>`).join("")}</select></label>
         <label class="field"><span>Department</span><select id="t-team"><option value="">—</option>${teams.map((t) => `<option value="${t.id}" ${t.id === e.assigned_team_id ? "selected" : ""}>${S.esc(t.name)}</option>`).join("")}</select></label>
-        ${!existing ? `<label class="field"><span>Service type <span class="muted" style="font-weight:400">· auto-fills the checklist</span></span><select id="t-svc"><option value="">Custom (blank)</option></select></label>
+        <label class="field"><span>Lead (main)</span><select id="t-assignee"><option value="">Unassigned</option>${people.map((p) => `<option value="${p.id}" ${p.id === e.assigned_to_id ? "selected" : ""}>${S.esc(p.name)}</option>`).join("")}</select></label>
+        ${!existing ? `<label class="field" style="grid-column:1/-1"><span>Service type</span><select id="t-svc"><option value="">Custom (blank)</option></select></label>
+        <div class="field" style="grid-column:1/-1"><div class="form-hint">Pick a department, then a service type. The phases, steps, and labels are created for you. Choose Custom (blank) to start empty.</div></div>
         <div class="field" style="grid-column:1/-1" id="t-svc-preview" hidden></div>` : ""}
-        <label class="field"><span>Assignee</span><select id="t-assignee"><option value="">Unassigned</option>${people.map((p) => `<option value="${p.id}" ${p.id === e.assigned_to_id ? "selected" : ""}>${S.esc(p.name)}</option>`).join("")}</select></label>
-        <label class="field"><span>Content type</span><input id="t-ctype" value="${S.esc(e.content_type || "")}"></label>
-        <label class="field"><span>Due date</span><input type="date" id="t-due" value="${e.due_date || ""}"></label>
+        <label class="field" style="grid-column:1/-1"><span>Campaign/Title <span class="req">*</span></span><input id="t-campaign" value="${S.esc(e.campaign || e.title || "")}" placeholder="Unique campaign or service name"></label>
         ${isAM ? `<label class="field"><span>Priority</span><select id="t-priority">${vocab.priorities.map((p) => `<option ${p === (e.priority || "Medium") ? "selected" : ""}>${p}</option>`).join("")}</select></label>` : ""}
-        <label class="field"><span>Status</span><select id="t-status">${STATUSES.map((s) => `<option ${s === (e.status || "To Do") ? "selected" : ""}>${s}</option>`).join("")}</select></label>
-        <label class="field" style="grid-column:1/-1"><span>Labels</span><div class="row wrap" id="t-labels">${vocab.task_labels.map((l) => `<label class="chip" style="cursor:pointer"><input type="checkbox" style="width:auto" value="${l}" ${(e.labels || []).includes(l) ? "checked" : ""}> ${l}</label>`).join("")}</div></label>
-        <label class="field" style="grid-column:1/-1"><span>Description</span><textarea id="t-desc">${S.esc(e.description || "")}</textarea></label>
-        <label class="field"><span>Deliverable URL (client-safe)</span><input id="t-deliv" value="${S.esc(e.deliverable_url || "")}"></label>
-        <label class="field"><span>Client-facing notes</span><input id="t-cnotes" value="${S.esc(e.client_facing_notes || "")}"></label>
-        <label class="field" style="grid-column:1/-1"><span>${S.ICON.lock}Internal notes</span><textarea id="t-inotes">${S.esc(e.internal_notes || "")}</textarea></label>`,
+        <label class="field"><span>Due date</span><input type="date" id="t-due" value="${e.due_date || ""}"></label>
+        <div class="field" style="grid-column:1/-1">
+          <details class="tk-extra"${existing ? " open" : ""}>
+            <summary>Additional details (optional)</summary>
+            <div class="grid" style="grid-template-columns:1fr 1fr;gap:16px;margin-top:12px">
+              <label class="field"><span>Content type</span><input id="t-ctype" value="${S.esc(e.content_type || "")}"></label>
+              <label class="field"><span>Status</span><select id="t-status">${STATUSES.map((s) => `<option ${s === (e.status || "To Do") ? "selected" : ""}>${s}</option>`).join("")}</select></label>
+              <label class="field" style="grid-column:1/-1"><span>Description</span><textarea id="t-desc">${S.esc(e.description || "")}</textarea></label>
+              <label class="field" style="grid-column:1/-1"><span>Deliverable URL (client-safe)</span><input id="t-deliv" value="${S.esc(e.deliverable_url || "")}"></label>
+              <label class="field" style="grid-column:1/-1"><span>${S.ICON.lock}Internal notes</span><textarea id="t-inotes">${S.esc(e.internal_notes || "")}</textarea></label>
+            </div>
+          </details>
+        </div>`,
       footer: `<button class="btn ghost" id="t-cancel">Cancel</button><button class="btn primary" id="t-save">${existing ? "Save changes" : "Create task"}</button>`,
     });
     S.qs("#t-cancel").onclick = m.close;
@@ -506,13 +511,11 @@ window.pageInit = async (S) => {
         preview.innerHTML = `<div class="section-label">Auto checklist · ${tpl.steps.length} steps</div>
           <ul class="svc-preview">${tpl.steps.map((s) => `<li>${S.esc(s)}</li>`).join("")}</ul>`;
         // Prefill the template's defaults, but never clobber something the user already set.
+        // Labels are no longer a manual field — the server seeds them from the template's
+        // default_labels whenever the create request carries none (see routers/tasks.py).
         const ct = S.qs("#t-ctype"); if (ct && !ct.value) ct.value = tpl.content_type || "";
         const prio = S.qs("#t-priority"); if (prio && tpl.default_priority && prio.value === "Medium") prio.value = tpl.default_priority;
         const desc = S.qs("#t-desc"); if (desc && !desc.value.trim() && tpl.default_description) desc.value = tpl.default_description;
-        const lbls = S.qsa("#t-labels input");
-        if (lbls.length && (tpl.default_labels || []).length && !lbls.some((c) => c.checked)) {
-          lbls.forEach((c) => { if (tpl.default_labels.includes(c.value)) c.checked = true; });
-        }
       };
       const fillServices = () => {
         const opts = templatesForTeam(numOrNull("t-team"));
@@ -527,16 +530,18 @@ window.pageInit = async (S) => {
     }
 
     S.qs("#t-save").onclick = async () => {
+      // The one name field is labelled "Campaign/Title" and drives BOTH — the campaign IS the task's
+      // title (mirrors Atrium). Labels aren't sent (the server seeds them from the service template).
+      const name = val("t-campaign");
       const payload = {
-        title: S.qs("#t-title").value, client_id: numOrNull("t-client"), campaign: val("t-campaign"),
+        title: name, campaign: name, client_id: numOrNull("t-client"),
         assigned_team_id: numOrNull("t-team"), assigned_to_id: numOrNull("t-assignee"),
         content_type: val("t-ctype"), due_date: val("t-due") || null, status: S.qs("#t-status").value,
-        labels: S.qsa("#t-labels input:checked").map((c) => c.value), description: val("t-desc"),
-        deliverable_url: val("t-deliv"), client_facing_notes: val("t-cnotes"), internal_notes: val("t-inotes"),
+        description: val("t-desc"), deliverable_url: val("t-deliv"), internal_notes: val("t-inotes"),
       };
       if (!existing && svcSel) payload.service_key = svcSel.value || null;
       if (isAM) payload.priority = S.qs("#t-priority").value;
-      if (!payload.title) { S.toast("Title is required", "err"); return; }
+      if (!name) { S.toast("Campaign/Title is required", "err"); return; }
       try {
         if (existing) await S.api("/api/tasks/" + existing.id, { method: "PATCH", body: payload });
         else await S.api("/api/tasks", { method: "POST", body: payload });
