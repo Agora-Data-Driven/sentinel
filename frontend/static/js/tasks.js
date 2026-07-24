@@ -306,6 +306,7 @@ window.pageInit = async (S) => {
         <div class="spread" style="margin-top:16px">
           ${field("Client", t.client_name)}${field("Campaign", t.campaign)}
           ${field("Content type", t.content_type)}${field("Due date", t.due_date ? S.fmtDateFull(t.due_date + "T00:00:00+08:00") : "—")}
+          ${t.service_charge_label ? field("Service charge", t.service_charge_label) : ""}
         </div>
         ${t.deliverable_url ? `<div style="margin-top:12px"><div class="section-label">Deliverable</div><a href="${S.esc(t.deliverable_url)}" target="_blank" class="btn sm ghost" style="margin-top:6px">Open deliverable →</a></div>` : ""}
         ${t.client_facing_notes ? `<div style="margin-top:12px"><div class="section-label">Client notes</div><div class="sub">${S.esc(t.client_facing_notes)}</div></div>` : ""}
@@ -483,6 +484,7 @@ window.pageInit = async (S) => {
         <label class="field" style="grid-column:1/-1"><span>Campaign/Title <span class="req">*</span></span><input id="t-campaign" value="${S.esc(e.campaign || e.title || "")}" placeholder="Unique campaign or service name"></label>
         ${isAM ? `<label class="field"><span>Priority</span><select id="t-priority">${vocab.priorities.map((p) => `<option ${p === (e.priority || "Medium") ? "selected" : ""}>${p}</option>`).join("")}</select></label>` : ""}
         <label class="field"><span>Due date</span><input type="date" id="t-due" value="${e.due_date || ""}"></label>
+        <label class="field"><span>Service charge ($)</span><input id="t-charge" inputmode="decimal" value="${S.esc(e.service_charge || "")}" placeholder="0" pattern="[0-9]*[.]?[0-9]*" title="Optional — numbers only (e.g. 4200 or 4200.50)"></label>
         <div class="field" style="grid-column:1/-1">
           <details class="tk-extra"${existing ? " open" : ""}>
             <summary>Additional details (optional)</summary>
@@ -537,6 +539,7 @@ window.pageInit = async (S) => {
         title: name, campaign: name, client_id: numOrNull("t-client"),
         assigned_team_id: numOrNull("t-team"), assigned_to_id: numOrNull("t-assignee"),
         content_type: val("t-ctype"), due_date: val("t-due") || null, status: S.qs("#t-status").value,
+        service_charge: val("t-charge") || null,
         description: val("t-desc"), deliverable_url: val("t-deliv"), internal_notes: val("t-inotes"),
       };
       if (!existing && svcSel) payload.service_key = svcSel.value || null;

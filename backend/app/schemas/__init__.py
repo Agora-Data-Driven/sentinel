@@ -4,9 +4,31 @@ from __future__ import annotations
 
 import datetime as _dt
 from datetime import date
-from typing import Any
+from typing import Annotated, Any
 
-from pydantic import BaseModel, Field
+from pydantic import AfterValidator, BaseModel, Field
+
+
+def _clean_money(v: str | None) -> str | None:
+    """Normalize an optional money input to a bare number string ('4200' / '4200.50').
+
+    Lenient on purpose (internal-only field): strip '$', thousands commas and whitespace; blank,
+    zero, or non-numeric input all collapse to None (= "no charge set")."""
+    if v is None:
+        return None
+    s = str(v).replace("$", "").replace(",", "").strip()
+    if not s:
+        return None
+    try:
+        if float(s) <= 0:
+            return None
+    except ValueError:
+        return None
+    return s
+
+
+# Optional money string, normalized on the way in. Shared by task create/update.
+MoneyStr = Annotated[str | None, AfterValidator(_clean_money)]
 
 
 # --- Auth ------------------------------------------------------------------
@@ -270,6 +292,7 @@ class TaskCreateIn(BaseModel):
     priority: str = "Medium"
     status: str = "To Do"
     due_date: date | None = None
+    service_charge: MoneyStr = None
     labels: list[str] = Field(default_factory=list)
     checklist: list[ChecklistItem] = Field(default_factory=list)
     maintasks: list[dict[str, Any]] = Field(default_factory=list)
@@ -288,6 +311,7 @@ class TaskUpdateIn(BaseModel):
     assigned_to_id: int | None = None
     priority: str | None = None   # honored only for roles that can_prioritize; ignored otherwise
     due_date: date | None = None
+    service_charge: MoneyStr = None
     labels: list[str] | None = None
     checklist: list[ChecklistItem] | None = None
     maintasks: list[dict[str, Any]] | None = None   # two-level breakdown (replaces the flat array)
