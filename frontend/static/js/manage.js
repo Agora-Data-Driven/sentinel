@@ -9,8 +9,15 @@ window.pageInit = async (S) => {
   }
 
   // Dynamic option sources for select fields.
-  const [teams, vocab] = await Promise.all([S.api("/api/teams"), S.api("/api/vocab")]);
-  const OPTS = { roles: vocab.roles, teams: teams.map((t) => ({ value: t.id, label: t.name })) };
+  const [teams, vocab, shiftTemplates] = await Promise.all([
+    S.api("/api/teams"), S.api("/api/vocab"), S.api("/api/manage/shift-templates").catch(() => []),
+  ]);
+  const OPTS = {
+    roles: vocab.roles,
+    teams: teams.map((t) => ({ value: t.id, label: t.name })),
+    teamNames: teams.map((t) => ({ value: t.name, label: t.name })),  // service dept is stored by name
+    shiftTemplates: shiftTemplates.map((t) => ({ value: t.id, label: `${t.name} (${t.start}–${t.end})` })),
+  };
 
   const ENTITIES = {
     Employees: {
@@ -27,6 +34,7 @@ window.pageInit = async (S) => {
         { k: "email", label: "Email", type: "text", req: true },
         { k: "role", label: "Role", type: "select", optsKey: "roles" },
         { k: "team_id", label: "Department", type: "select", optsKey: "teams", allowEmpty: true, coerce: "intOrNull" },
+        { k: "shift_template_id", label: "Shift (override — blank = use department's)", type: "select", optsKey: "shiftTemplates", allowEmpty: true, coerce: "intOrNull" },
         { k: "phone", label: "Phone", type: "text" },
         { k: "hired_date", label: "Hired date", type: "date" },
         { k: "password", label: "Password (blank = leave unchanged; they can also use Google)", type: "password", omitIfBlank: true },
@@ -75,11 +83,31 @@ window.pageInit = async (S) => {
       ],
       fields: [
         { k: "name", label: "Name", type: "text", req: true },
-        { k: "shift_start", label: "Shift start", type: "time" },
-        { k: "shift_end", label: "Shift end", type: "time" },
+        { k: "shift_template_id", label: "Shift template (recommended — overrides the times below)", type: "select", optsKey: "shiftTemplates", allowEmpty: true, coerce: "intOrNull" },
+        { k: "shift_start", label: "Shift start (used only if no template)", type: "time" },
+        { k: "shift_end", label: "Shift end (used only if no template)", type: "time" },
         { k: "break_duration_min", label: "Break duration (minutes)", type: "number" },
       ],
-      help: "Departments (teams) drive the Task Board department filter, People, and each team's shift/late rules.",
+      help: "Departments (teams) drive the Task Board department filter, People, and each team's shift/late rules. Assign a Shift Template (edit them in the Shift Templates tab) so shift changes never need code.",
+    },
+    "Shift Templates": {
+      api: "/api/manage/shift-templates", singular: "shift template",
+      cols: [
+        { k: "name", label: "Name" },
+        { k: "start", label: "Start" },
+        { k: "end", label: "End" },
+        { k: "break_min", label: "Break (min)" },
+        { k: "grace_min", label: "Grace (min)", fmt: (v) => (v == null ? "system default" : v) },
+        { k: "paid_hours", label: "Paid hours", fmt: (v) => `${v}h` },
+      ],
+      fields: [
+        { k: "name", label: "Name", type: "text", req: true },
+        { k: "start", label: "Start (24-hour, e.g. 13:00)", type: "time" },
+        { k: "end", label: "End (24-hour, e.g. 22:00)", type: "time" },
+        { k: "break_min", label: "Unpaid break minutes (set 0 for short/part-time shifts)", type: "number" },
+        { k: "grace_min", label: "Late grace minutes (blank = system default)", type: "number" },
+      ],
+      help: "Reusable shift schedules — assign them to a department or an individual employee. Editing a template updates everyone on it, with no code changes. Set break to 0 on a short shift (e.g. 6PM–10PM) so a 4-hour day isn't docked a lunch.",
     },
     "Leave Types": {
       api: "/api/manage/leave-types", singular: "leave type",
@@ -99,6 +127,51 @@ window.pageInit = async (S) => {
       ],
       help: "Leave types appear in the Leave request form; changing balances affects new balances going forward.",
     },
+    Services: {
+      api: "/api/manage/service-templates", singular: "service",
+      cols: [
+        { k: "label", label: "Service" },
+        { k: "dept", label: "Department" },
+        { k: "content_type", label: "Content type" },
+        { k: "maintasks", label: "Recipe", fmt: (v) => `${(v || []).length} main · ${(v || []).reduce((n, m) => n + (m.subs || []).length, 0)} sub-tasks` },
+        { k: "default_priority", label: "Defaults", fmt: (_v, r) => _svcDefaults(r) },
+        { k: "is_active", label: "In picker", fmt: (v) => (v === false ? `<span class="muted">Archived</span>` : `<span class="pill day Push">Active</span>`) },
+      ],
+      customForm: true,  // has a nested main-task -> sub-task recipe editor (openServiceForm)
+      rowActions: [{ label: "Duplicate", handler: (item) => openServiceForm(item, true) }],
+      help: "The services the New Task form offers per department. Pick one and its whole main-task → sub-task breakdown — plus any default priority, labels and description — is seeded into the new task. Fully editable here — no developer needed.",
+    },
+    Statuses: {
+      api: "/api/manage/task-vocab", listUrl: "/api/manage/task-vocab?kind=status", fixed: { kind: "status" }, singular: "status",
+      cols: [{ k: "name", label: "Status" }, { k: "color", label: "Colour", fmt: (v) => _swatch(v) }],
+      fields: [{ k: "name", label: "Name", type: "text", req: true }, { k: "color", label: "Colour", type: "color" }],
+      help: "The Task Board's columns, in order. Renaming one updates every task using it; you can't delete a status still in use.",
+    },
+    Labels: {
+      api: "/api/manage/task-vocab", listUrl: "/api/manage/task-vocab?kind=label", fixed: { kind: "label" }, singular: "label",
+      cols: [{ k: "name", label: "Label" }, { k: "color", label: "Colour", fmt: (v) => _swatch(v) }],
+      fields: [{ k: "name", label: "Name", type: "text", req: true }, { k: "color", label: "Colour", type: "color" }],
+      help: "The colour-coded label chips on task cards. Renaming updates tasks; deleting is blocked while a task still uses it.",
+    },
+    Priorities: {
+      api: "/api/manage/task-vocab", listUrl: "/api/manage/task-vocab?kind=priority", fixed: { kind: "priority" }, singular: "priority",
+      cols: [{ k: "name", label: "Priority" }, { k: "color", label: "Colour", fmt: (v) => _swatch(v) }],
+      fields: [{ k: "name", label: "Name", type: "text", req: true }, { k: "color", label: "Colour", type: "color" }],
+      help: "Priority levels + their dot colour. Renaming updates tasks; deleting is blocked while a task still uses it.",
+    },
+  };
+
+  const _swatch = (hex) => hex
+    ? `<span class="dot" style="background:${S.esc(hex)};vertical-align:middle"></span> <span class="muted">${S.esc(hex)}</span>`
+    : "—";
+
+  // Compact summary of a service's auto-fill defaults for the Services table.
+  const _svcDefaults = (r) => {
+    const bits = [];
+    if (r.default_priority) bits.push(S.esc(r.default_priority));
+    if ((r.default_labels || []).length) bits.push(r.default_labels.map((l) => S.esc(l)).join(", "));
+    if (r.default_description) bits.push("brief");
+    return bits.length ? bits.join(" · ") : "—";
   };
 
   const keys = Object.keys(ENTITIES);
@@ -121,7 +194,7 @@ window.pageInit = async (S) => {
     const body = S.qs("#mbody");
     body.innerHTML = '<div class="skeleton" style="height:180px"></div>';
     let rows;
-    try { rows = await S.api(cfg.api); }
+    try { rows = await S.api(cfg.listUrl || cfg.api); }
     catch (e) { body.innerHTML = `<div class="empty">${S.esc(e.detail || "Failed to load")}</div>`; return; }
     body.innerHTML = `
       <div class="row between" style="margin-bottom:12px">
@@ -131,15 +204,16 @@ window.pageInit = async (S) => {
       <div class="table-wrap"><table>
         <thead><tr>${cfg.cols.map((c) => `<th>${c.label}</th>`).join("")}<th style="text-align:right">Actions</th></tr></thead>
         <tbody>${rows.length ? rows.map((r) => `<tr>
-          ${cfg.cols.map((c) => `<td>${c.fmt ? c.fmt(r[c.k]) : S.esc(r[c.k] == null || r[c.k] === "" ? "—" : r[c.k])}</td>`).join("")}
+          ${cfg.cols.map((c) => `<td>${c.fmt ? c.fmt(r[c.k], r) : S.esc(r[c.k] == null || r[c.k] === "" ? "—" : r[c.k])}</td>`).join("")}
           <td style="text-align:right;white-space:nowrap">
             ${(cfg.rowActions || []).map((a, ai) => `<button class="btn sm ghost" data-rowact="${ai}" data-id="${r.id}">${S.esc(a.label)}</button>`).join("")}
             <button class="btn sm ghost" data-edit="${r.id}">Edit</button>
             <button class="btn sm danger" data-del="${r.id}">Delete</button></td></tr>`).join("")
         : `<tr><td colspan="${cfg.cols.length + 1}"><div class="empty">No ${cfg.singular}s yet. Add one.</div></td></tr>`}</tbody></table></div>`;
 
-    S.qs("#m-add").onclick = () => openForm(key, null);
-    S.qsa("[data-edit]").forEach((b) => b.onclick = () => openForm(key, rows.find((r) => r.id == b.dataset.edit)));
+    const openEditor = (item) => (cfg.customForm ? openServiceForm(item) : openForm(key, item));
+    S.qs("#m-add").onclick = () => openEditor(null);
+    S.qsa("[data-edit]").forEach((b) => b.onclick = () => openEditor(rows.find((r) => r.id == b.dataset.edit)));
     S.qsa("[data-del]").forEach((b) => b.onclick = () => del(key, rows.find((r) => r.id == b.dataset.del)));
     S.qsa("[data-rowact]").forEach((b) => b.onclick = () => cfg.rowActions[+b.dataset.rowact].handler(rows.find((r) => r.id == b.dataset.id)));
   }
@@ -200,6 +274,7 @@ window.pageInit = async (S) => {
       return `<select data-mf="${f.k}">${resolveOpts(f).map((o) => `<option value="${S.esc(o.value)}" ${String(o.value) === String(v == null ? "" : v) ? "selected" : ""}>${S.esc(o.label)}</option>`).join("")}</select>`;
     }
     if (f.type === "multi") return `<div class="row wrap">${resolveOpts(f).map((o) => `<label class="chip" style="cursor:pointer"><input type="checkbox" style="width:auto" data-mf="${f.k}" value="${S.esc(o.value)}" ${(v || []).includes(o.value) ? "checked" : ""}> ${S.esc(o.label)}</label>`).join("")}</div>`;
+    if (f.type === "color") return `<input type="color" data-mf="${f.k}" value="${S.esc(v || "#6B7280")}" style="width:56px;height:34px;padding:2px">`;
     const t = f.type === "number" ? "number" : f.type === "time" ? "time" : f.type === "date" ? "date" : f.type === "password" ? "password" : "text";
     return `<input type="${t}" data-mf="${f.k}" value="${S.esc(v == null ? "" : v)}"${f.type === "number" ? ' step="1"' : ""}${f.type === "password" ? ' autocomplete="new-password"' : ""}>`;
   }
@@ -225,7 +300,7 @@ window.pageInit = async (S) => {
       catch (e) { inp.select(); document.execCommand("copy"); S.toast("Password copied", "ok"); }
     });
     S.qs("#m-save").onclick = async () => {
-      const payload = {};
+      const payload = { ...(cfg.fixed || {}) };   // e.g. {kind:"status"} for task-vocab
       for (const f of cfg.fields) {
         let val;
         if (f.type === "multi") val = S.qsa(`[data-mf="${f.k}"]:checked`).map((c) => c.value);
@@ -250,9 +325,89 @@ window.pageInit = async (S) => {
       : key === "Leave Types" ? " Existing balances and requests for this type will be removed."
       : key === "Departments" ? " Employees/tasks in it will just be unassigned."
       : key === "Clients" ? " Tasks for this client will be unassigned." : "";
-    if (!confirm(`Delete "${item.name}"?${extra}`)) return;
+    if (!confirm(`Delete "${item.name || item.label}"?${extra}`)) return;
     try { await S.api(`${ENTITIES[key].api}/${item.id}`, { method: "DELETE" }); S.toast("Deleted", "ok"); render(key); }
     catch (e) { S.toast(e.detail, "err"); }
+  }
+
+  // Service recipe editor — a main-task title + one-sub-task-per-line textarea per group. Low-code:
+  // the whole two-level breakdown a new task is seeded with, edited without touching any code.
+  function openServiceForm(item, asNew) {
+    // asNew = pre-fill from `item` but save as a brand-new service (the Duplicate action).
+    const editing = !!item && !asNew;
+    // recipe rows: {title, subsText}
+    let recipe = (item && item.maintasks || []).map((m) => ({
+      title: m.title || "", subsText: (m.subs || []).map((s) => s.text).join("\n"),
+    }));
+    if (!recipe.length) recipe = [{ title: "", subsText: "" }];
+    const deptOpts = [{ value: "", label: "—" }].concat(OPTS.teamNames);
+    const prioOpts = [{ value: "", label: "— none —" }].concat((vocab.priorities || []).map((p) => ({ value: p, label: p })));
+    const curLabels = (item && item.default_labels) || [];
+    let defLabel = item ? item.label : "";
+    if (asNew && item) defLabel = `${item.label} (copy)`;
+    const m = S.modal({
+      title: `${editing ? "Edit" : "Add"} service`, wide: true,
+      body: `
+        <label class="field"><span>Service name *</span><input id="sf-label" value="${S.esc(defLabel)}"></label>
+        <div class="grid" style="grid-template-columns:1fr 1fr;gap:12px">
+          <label class="field"><span>Department</span><select id="sf-dept">${deptOpts.map((o) => `<option value="${S.esc(o.value)}" ${item && item.dept === o.value ? "selected" : ""}>${S.esc(o.label)}</option>`).join("")}</select></label>
+          <label class="field"><span>Content type</span><input id="sf-ctype" value="${S.esc(item ? item.content_type || "" : "")}"></label>
+        </div>
+        <div class="section-label" style="margin:6px 0 4px">Recipe — main tasks &amp; their sub-tasks</div>
+        <div class="muted" style="font-size:12px;margin-bottom:8px">One sub-task per line. This is what gets seeded into a new task's breakdown.</div>
+        <div id="sf-recipe"></div>
+        <button type="button" class="btn sm ghost" id="sf-addmain" style="margin-top:8px">${S.ICON.plus}Add main task</button>
+        <div class="section-label" style="margin:16px 0 4px">Auto-fill defaults</div>
+        <div class="muted" style="font-size:12px;margin-bottom:8px">Pre-filled onto a new task when this service is picked. Each stays editable on the task.</div>
+        <div class="grid" style="grid-template-columns:1fr 1fr;gap:12px">
+          <label class="field"><span>Default priority</span><select id="sf-prio">${prioOpts.map((o) => `<option value="${S.esc(o.value)}" ${item && item.default_priority === o.value ? "selected" : ""}>${S.esc(o.label)}</option>`).join("")}</select></label>
+          <label class="field"><span>Show in the New Task picker</span><label class="chip" style="cursor:pointer;align-self:start"><input type="checkbox" id="sf-active" style="width:auto" ${item && item.is_active === false ? "" : "checked"}> Active</label></label>
+        </div>
+        <label class="field"><span>Default labels</span><div class="row wrap" id="sf-labels">${(vocab.task_labels || []).map((l) => `<label class="chip" style="cursor:pointer"><input type="checkbox" style="width:auto" value="${S.esc(l)}" ${curLabels.includes(l) ? "checked" : ""}> ${S.esc(l)}</label>`).join("")}</div></label>
+        <label class="field"><span>Default description / brief</span><textarea id="sf-desc" rows="3">${S.esc(item ? item.default_description || "" : "")}</textarea></label>`,
+      footer: `<button class="btn ghost" id="sf-cancel">Cancel</button><button class="btn primary" id="sf-save">${editing ? "Save" : "Create"}</button>`,
+    });
+
+    function readDom() {
+      recipe = S.qsa("#sf-recipe .mtask").map((row) => ({
+        title: row.querySelector(".mtask-title").value,
+        subsText: row.querySelector("textarea").value,
+      }));
+    }
+    function renderRecipe() {
+      S.qs("#sf-recipe").innerHTML = recipe.map((r, i) => `
+        <div class="mtask" data-i="${i}">
+          <div class="mtask-head">
+            <input class="mtask-title" value="${S.esc(r.title)}" placeholder="Main task title">
+            <button type="button" class="bd-x" data-del="${i}" title="Remove main task">✕</button>
+          </div>
+          <div style="padding:8px 10px"><textarea rows="4" placeholder="One sub-task per line…">${S.esc(r.subsText)}</textarea></div>
+        </div>`).join("");
+      S.qsa("#sf-recipe [data-del]").forEach((b) => b.onclick = () => { readDom(); recipe.splice(+b.dataset.del, 1); if (!recipe.length) recipe = [{ title: "", subsText: "" }]; renderRecipe(); });
+    }
+    renderRecipe();
+    S.qs("#sf-addmain").onclick = () => { readDom(); recipe.push({ title: "", subsText: "" }); renderRecipe(); };
+    S.qs("#sf-cancel").onclick = m.close;
+    S.qs("#sf-save").onclick = async () => {
+      const label = S.qs("#sf-label").value.trim();
+      if (!label) { S.toast("Service name is required", "err"); return; }
+      readDom();
+      const maintasks = recipe
+        .map((r) => ({ title: r.title.trim(), subs: r.subsText.split("\n").map((l) => l.trim()).filter(Boolean).map((text) => ({ text })) }))
+        .filter((g) => g.title || g.subs.length);
+      const payload = {
+        label, dept: S.qs("#sf-dept").value || null, content_type: S.qs("#sf-ctype").value || null, maintasks,
+        default_priority: S.qs("#sf-prio").value || null,
+        default_labels: S.qsa("#sf-labels input:checked").map((c) => c.value),
+        default_description: S.qs("#sf-desc").value.trim() || null,
+        is_active: S.qs("#sf-active").checked,
+      };
+      try {
+        if (editing) await S.api(`/api/manage/service-templates/${item.id}`, { method: "PATCH", body: payload });
+        else await S.api("/api/manage/service-templates", { method: "POST", body: payload });
+        S.toast(`Service ${editing ? "updated" : "created"}`, "ok"); m.close(); render("Services");
+      } catch (e) { S.toast(e.detail || "Couldn't save the service", "err"); }
+    };
   }
 
   render(keys[0]);
