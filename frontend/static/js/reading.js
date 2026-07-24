@@ -80,7 +80,7 @@ window.pageInit = async (S) => {
           <div>
             <div class="dev-eyebrow">Development · Reading &amp; Philosophy</div>
             <h1>Read &amp; reflect</h1>
-            <div class="lede">Grow the person, not only the engineer — the ideas worth carrying, and what you make of them.</div>
+            <div class="lede">Grow the person, not only the engineer: the ideas worth carrying, and what you make of them.</div>
           </div>
           <div class="dev-mast-right">${isAdmin && ac.adminUrl ? `<button class="btn ghost" id="rp-admin">Manage in admin</button>` : ""}
             <div class="dev-mast-meta">${(items || []).length} IN CANON</div></div>
@@ -90,7 +90,7 @@ window.pageInit = async (S) => {
           ? `<h2 class="rp-h">Study</h2><div class="rp-progs">${progs.map(programCard).join("")}</div>`
           : (isAdmin
               ? `<div class="card pad" style="margin-bottom:26px"><strong>No philosophy program yet.</strong>
-                   <div class="sub" style="margin-top:6px">Create one in the Academy admin (Subject → <em>Personal growth / philosophy</em>), enrol people, and it appears here — same engine, separate subject.</div></div>`
+                   <div class="sub" style="margin-top:6px">Create one in the Academy admin (Subject → <em>Personal growth / philosophy</em>), enrol people, and it appears here: same engine, separate subject.</div></div>`
               : "")}
 
         <div class="row between" style="align-items:baseline;margin-bottom:12px">

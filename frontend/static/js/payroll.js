@@ -60,7 +60,7 @@ window.pageInit = async (S) => {
       <div class="pr-stat"><div class="k">Base salaries</div><div class="v">${peso(t.base)}</div></div>
       <div class="pr-stat"><div class="k">Bonuses</div><div class="v">${peso(t.bonus)}</div></div>
       <div class="pr-stat"><div class="k">Deductions</div><div class="v">${peso(t.deductions)}</div></div>
-      <div class="pr-stat net"><div class="k">Net payout — ${S.esc(monthLabel(period))}</div><div class="v">${peso(t.net)}</div></div>`;
+      <div class="pr-stat net"><div class="k">Net payout · ${S.esc(monthLabel(period))}</div><div class="v">${peso(t.net)}</div></div>`;
   }
 
   function renderTable(rows, workingDays) {
@@ -84,7 +84,7 @@ window.pageInit = async (S) => {
           const ded = (r.deduction || 0) + (r.absence_deduction || 0);
           return `<tr class="${r.finalized ? "lock" : ""}">
             <td>${S.avatar(r)}<div style="display:inline-block;vertical-align:middle;margin-left:8px">
-              <div style="font-weight:600">${S.esc(r.name)}${r.finalized ? ' <span class="pill green" title="Finalized — locked">Final</span>' : ""}</div>
+              <div style="font-weight:600">${S.esc(r.name)}${r.finalized ? ' <span class="pill green" title="Finalized, locked">Final</span>' : ""}</div>
               <div class="sub" style="font-size:12px;color:var(--muted)">${S.esc(r.email || "")}</div></div></td>
             <td class="num">${r.monthly_salary ? peso(r.monthly_salary) : '<span style="color:var(--muted)">—</span>'}</td>
             <td class="num">${r.present_days}</td>
@@ -102,7 +102,7 @@ window.pageInit = async (S) => {
 
   function openEdit(r) {
     const m = S.modal({
-      title: `${r.name} — ${monthLabel(period)}`,
+      title: `${r.name} · ${monthLabel(period)}`,
       body: `
         <label class="field"><span>Monthly salary (₱)</span>
           <input type="number" id="pr-salary" min="0" step="0.01" value="${r.monthly_salary || 0}"></label>

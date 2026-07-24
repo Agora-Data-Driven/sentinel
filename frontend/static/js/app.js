@@ -56,6 +56,8 @@
     book: P('<path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5z"/><path d="M4 20.5A2.5 2.5 0 0 1 6.5 18H20v3H6.5A2.5 2.5 0 0 1 4 20.5z"/>'),
     target: P('<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.2"/>'),
     heart: P('<path d="M12 20s-7-4.6-9.2-9A4.7 4.7 0 0 1 12 6a4.7 4.7 0 0 1 9.2 5C19 15.4 12 20 12 20z"/>'),
+    lock: P('<rect x="4.5" y="10.5" width="15" height="10" rx="2.2"/><path d="M8 10.5V7a4 4 0 0 1 8 0v3.5"/><path d="M12 14.5v2.5"/>'),
+    run: P('<circle cx="14" cy="4.8" r="1.8"/><path d="M13 8.5l-3.2 2 1.6 3.2M11.4 13.7L9.5 20M11.4 13.7l3 1.4.9 4.9M13 8.5l3.2 1.4 1 2.8 2.3.6M13 8.5l-4.5 1"/>'),
   };
 
   const AGORA_LOGO =
@@ -260,7 +262,7 @@
     const title = document.body.dataset.title || "Sentinel";
     const path = location.pathname;
     // The page title lives in each page's own header + the browser tab — not repeated in the topbar.
-    document.title = title === "Sentinel" ? "Sentinel" : `${title} — Sentinel`;
+    document.title = title === "Sentinel" ? "Sentinel" : `${title} · Sentinel`;
 
     const navItems = renderNav(path);
 
@@ -283,7 +285,7 @@
       <div class="main">
         <header class="top">
           <button class="iconbtn hamburger" id="ham" aria-label="Menu">${ICON.menu}</button>
-          <button class="cmdk-trigger" id="cmdk-trigger" title="Search — Ctrl K" aria-label="Open command palette">${ICON.search}<span>Search anything</span><kbd>Ctrl K</kbd></button>
+          <button class="cmdk-trigger" id="cmdk-trigger" title="Search (Ctrl K)" aria-label="Open command palette">${ICON.search}<span>Search anything</span><kbd>Ctrl K</kbd></button>
           <div class="theme-toggle" id="theme-toggle">
             <button data-set-theme="light" title="Light mode">${ICON.sun}</button>
             <button data-set-theme="dark" title="Dark mode">${ICON.moon}</button>
@@ -366,7 +368,7 @@
     panel.id = "coach-panel";
     panel.innerHTML = `
       <div id="coach-head">
-        <div class="t">${ICON.sparkle}<div>Your Coach<small>Knows your growth — learning, gym, goals</small></div></div>
+        <div class="t">${ICON.sparkle}<div>Your Coach<small>Knows your growth: learning, gym, goals</small></div></div>
         <span class="x-close" id="coach-x">${ICON.x}</span>
       </div>
       <div id="coach-frame-wrap" style="flex:1;display:flex"></div>`;
@@ -480,7 +482,7 @@
         <div class="notif-list">${d.items.length ? d.items.map((n) => `
           <div class="notif ${n.is_read ? "" : "unread"}" data-id="${n.id}" data-link="${esc(n.link || "")}">
             <div style="flex:1"><div class="nt">${esc(n.title)}</div>${n.body ? `<div class="nb">${esc(n.body)}</div>` : ""}<div class="ntime">${timeAgo(n.created_at)}</div></div>
-          </div>`).join("") : '<div class="empty">You\'re all caught up 🎉</div>'}</div>`;
+          </div>`).join("") : '<div class="empty">You\'re all caught up.</div>'}</div>`;
       const ra = qs("#read-all", panel);
       if (ra) ra.onclick = async (e) => { e.stopPropagation(); await api("/api/notifications/read-all", { method: "PATCH" }); load(); };
       qsa(".notif", panel).forEach((el) => el.onclick = async () => {
@@ -619,7 +621,7 @@
     ov.className = "cmdk-ov"; ov.id = "cmdk";
     ov.innerHTML = `
       <div class="cmdk" role="dialog" aria-modal="true" aria-label="Command palette">
-        <div class="cmdk-in">${ICON.search}<input id="cmdk-input" type="text" role="combobox" aria-expanded="true" aria-controls="cmdk-list" aria-autocomplete="list" placeholder="Search people, tasks, pages — or run a command…" autocomplete="off" spellcheck="false"></div>
+        <div class="cmdk-in">${ICON.search}<input id="cmdk-input" type="text" role="combobox" aria-expanded="true" aria-controls="cmdk-list" aria-autocomplete="list" placeholder="Search people, tasks, pages, or run a command…" autocomplete="off" spellcheck="false"></div>
         <div class="cmdk-list" id="cmdk-list" role="listbox"></div>
         <div class="cmdk-foot"><span><kbd>↑</kbd><kbd>↓</kbd> navigate</span><span><kbd>↵</kbd> open</span><span><kbd>esc</kbd> close</span></div>
       </div>`;

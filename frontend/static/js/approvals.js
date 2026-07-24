@@ -63,7 +63,7 @@ window.pageInit = async (S) => {
             ${i.extra ? `<div class="sub" style="font-size:12px">${i.extra}</div>` : ""}</div>
           <div class="row"><button class="btn sm success" data-ok="${i.kind}:${i.id}">Approve</button>
             <button class="btn sm ghost" data-no="${i.kind}:${i.id}">Reject</button></div>
-        </div>`).join("") : '<div class="empty">Nothing to approve. ✅</div>'}</div></div>`;
+        </div>`).join("") : '<div class="empty">Nothing to approve.</div>'}</div></div>`;
     S.qsa("[data-ok]").forEach((b) => b.onclick = () => decide(b.dataset.ok, "Approved"));
     S.qsa("[data-no]").forEach((b) => b.onclick = () => decide(b.dataset.no, "Rejected"));
   }

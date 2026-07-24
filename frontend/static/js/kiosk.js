@@ -117,7 +117,7 @@ window.pageInit = async (S) => {
         if (cams && cams.length) await scanner.start(cams[0].id, config, onScan, () => {});
         else throw e1;
       } catch (e2) {
-        const r = S.qs("#reader"); if (r) r.innerHTML = '<div class="muted" style="padding:22px 8px">Camera unavailable here — use “type badge code” below.</div>';
+        const r = S.qs("#reader"); if (r) r.innerHTML = '<div class="muted" style="padding:22px 8px">Camera unavailable here. Use “type badge code” below.</div>';
         scanner = null; scanning = false;
       }
     }
@@ -187,7 +187,7 @@ window.pageInit = async (S) => {
     const m = S.modal({
       title: "Assign QR badge",
       body: `<label class="field"><span>Employee</span>
-          <select id="qa-user"><option value="">Choose an employee…</option>${people.map((p) => `<option value="${p.id}">${S.esc(p.name)} — ${S.esc(p.role_label || p.role)}</option>`).join("")}</select></label>
+          <select id="qa-user"><option value="">Choose an employee…</option>${people.map((p) => `<option value="${p.id}">${S.esc(p.name)} · ${S.esc(p.role_label || p.role)}</option>`).join("")}</select></label>
         <div id="qa-preview" style="text-align:center;margin-top:8px"></div>`,
       footer: `<button class="btn ghost" id="qa-close">Close</button>`,
     });
@@ -303,7 +303,7 @@ window.pageInit = async (S) => {
     // returns the station to idle (and resumes the scanner) instead of freezing it for everyone.
     if (action === "clock_in" && isLate(info.shift)) {
       let reason = "";
-      extra.innerHTML = `<div class="section-label">You're late — pick a reason (optional)</div>
+      extra.innerHTML = `<div class="section-label">You're late. Pick a reason (optional)</div>
         <div class="chips" id="chips">${LATE_REASONS.map((r) => `<span class="chip-sel" data-r="${S.esc(r)}">${S.esc(r)}</span>`).join("")}</div>
         <button class="btn success block" id="do" style="margin-top:14px">Confirm Clock In</button>`;
       S.qsa("#chips .chip-sel").forEach((c) => c.onclick = () => { S.qsa("#chips .chip-sel").forEach((x) => x.classList.remove("active")); c.classList.add("active"); reason = c.dataset.r; });
@@ -337,7 +337,7 @@ window.pageInit = async (S) => {
       if (transient) {
         await enqueue({ uid: newUid(), token, action, client_time: new Date().toISOString(), late_reason: payload.late_reason, handover_note: payload.handover_note });
         if (PERSIST) updateQueueBadge();
-        showTransient(confirmCard("warn", e.status === undefined ? "Saved offline" : "Saved — will retry", "It'll sync automatically."));
+        showTransient(confirmCard("warn", e.status === undefined ? "Saved offline" : "Saved, will retry", "It'll sync automatically."));
       } else {
         showTransient(confirmCard("err", "Couldn't punch", e.detail || "Try again."));
       }
