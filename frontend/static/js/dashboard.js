@@ -28,7 +28,6 @@ window.pageInit = async (S) => {
   if (d.is_admin) {
     const k = d.kpis;
     html += `<div class="kpis" style="margin-bottom:22px">
-      ${kpi("Headcount", k.headcount, "active employees", "", "users")}
       ${kpi("Present today", k.present_today, k.late_today + " late", "", "clock")}
       ${kpi("Absent today", k.absent_today, "not clocked in", k.absent_today ? "warn" : "", "coffee")}
       ${kpi("Open tasks", k.open_tasks, k.overdue_tasks + " overdue", k.overdue_tasks ? "danger" : "violet", "board")}

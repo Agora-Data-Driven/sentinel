@@ -189,6 +189,9 @@ h2 { letter-spacing: -0.6px; } h1 { letter-spacing: -0.5px; }
 }
 .avatar.sm { width: 28px; height: 28px; font-size: 11px; }
 .avatar.lg { width: 64px; height: 64px; font-size: 22px; }
+.avatar.has-photo { background: var(--card); box-shadow: 0 2px 8px rgba(0,0,0,.14); overflow: hidden; }
+.avatar.has-photo img { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; display: block; }
+.profile-photo-row { display: flex; align-items: center; gap: 16px; }
 .avatar.green { background: var(--green-d); }
 .avatar.amber { background: var(--sentinel-2); }
 

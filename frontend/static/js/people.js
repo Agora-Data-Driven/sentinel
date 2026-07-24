@@ -42,9 +42,15 @@ window.pageInit = async (S) => {
   async function profile(id) {
     const d = await S.api("/api/people/" + id);
     const p = d.profile;
+    // Anyone may change their OWN photo; admins may change anyone's.
+    const canPhoto = isAdmin || (S.user && S.user.id === p.id);
     const body = `<div class="grid" style="grid-template-columns:1fr 1.2fr;gap:22px">
       <div style="text-align:center">
-        ${S.avatar(p, "lg")}
+        <div id="pf-avatar" style="display:inline-block">${S.avatar(p, "lg")}</div>
+        ${canPhoto ? `<div class="row" style="justify-content:center;gap:6px;margin-top:8px">
+          <button class="btn sm ghost" id="pf-photo-btn">${S.ICON.plus}${p.profile_pic_url ? "Change photo" : "Add photo"}</button>
+          ${p.profile_pic_url ? `<button class="btn sm ghost" id="pf-photo-del">Remove</button>` : ""}
+          <input type="file" id="pf-photo-file" accept="image/*" hidden></div>` : ""}
         <h2 style="margin:12px 0 2px">${S.esc(p.name)}</h2>
         <div>${S.statusPill(p.status)}</div>
         <div class="stack" style="margin-top:14px;text-align:left">
@@ -74,6 +80,25 @@ window.pageInit = async (S) => {
     const footer = `<button class="btn primary" id="p-close">Close</button>`;
     const m = S.modal({ title: "Profile", body, footer, wide: true });
     S.qs("#p-close").onclick = m.close;
+
+    // Photo upload/remove (self or admin). Re-render the drawer avatar in place on success.
+    if (canPhoto) {
+      const paint = (url) => { const box = S.qs("#pf-avatar"); if (box) box.innerHTML = S.avatar({ name: p.name, profile_pic_url: url }, "lg"); };
+      const fileInput = S.qs("#pf-photo-file");
+      S.qs("#pf-photo-btn").onclick = () => fileInput.click();
+      fileInput.onchange = async () => {
+        const f = fileInput.files && fileInput.files[0];
+        if (!f) return;
+        try { const url = await S.uploadAvatar(p.id, f); paint(url); S.toast("Photo updated", "ok"); load(); }
+        catch (e) { S.toast(e.detail || e.message || "Couldn't upload photo", "err"); }
+        finally { fileInput.value = ""; }
+      };
+      const del = S.qs("#pf-photo-del");
+      if (del) del.onclick = async () => {
+        try { await S.removeAvatar(p.id); paint(null); S.toast("Photo removed", "ok"); m.close(); load(); }
+        catch (e) { S.toast(e.detail || "Couldn't remove photo", "err"); }
+      };
+    }
   }
   const row = (l, v) => `<div class="row between"><span class="sub">${l}</span><strong>${S.esc(v || "—")}</strong></div>`;
 
