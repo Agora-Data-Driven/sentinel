@@ -349,6 +349,12 @@ def edit_summary(
                 db.delete(e)
             elif payload.clock_out is not None and e.action == ACTION_CLOCK_OUT:
                 db.delete(e)
+        # Flush the deletes BEFORE inserting replacements. The (user_id, date) partial unique indexes
+        # (uq_att_one_clockin/clockout_per_day) allow only one clock-in/out per day; SQLAlchemy's unit
+        # of work emits INSERTs before DELETEs, so without this flush the new punch collides with the
+        # old row still in the table and Postgres raises UniqueViolation (SQLite dev DBs lack the
+        # partial index, so this only ever surfaced in prod).
+        db.flush()
         if payload.clock_in is not None and payload.clock_in.strip():
             db.add(AttendanceEvent(user_id=user.id, date=day, time=_ph_to_utc(day, payload.clock_in),
                                    action=ACTION_CLOCK_IN, device="manual", late_reason="Manual correction"))

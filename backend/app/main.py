@@ -340,6 +340,7 @@ def login_page(request: Request, db: Session = Depends(get_db)):
 _PAGES = {
     "/dashboard": "dashboard.html",
     "/attendance": "attendance.html",
+    "/approvals": "approvals.html",
     "/gym": "gym.html",
     "/growth": "growth.html",
     "/reading": "reading.html",

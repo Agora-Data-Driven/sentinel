@@ -86,6 +86,9 @@
     { group: "Time & Leave", icon: "clock", children: [
       { href: "/attendance", label: "Time", icon: "clock" },
       { href: "/leave", label: "Leave", icon: "calendar", hideRoles: ["super_admin"] },
+      // One inbox for attendance-correction + leave approvals (managers+). Replaces the separate
+      // "Approvals" tabs that used to live on the Time and Leave pages.
+      { href: "/approvals", label: "Approvals", icon: "inbox", min: "team_lead" },
       // Check-in (the QR scanner station) is an operational tool, not personal — visible to all
       // roles so a super_admin can reach it too (it was hidden before, hence "missing").
       { href: "/scanner", label: "Check-in", icon: "qr" },
