@@ -33,7 +33,7 @@ from ..models import (
     User,
 )
 from ..schemas import AttendanceEditIn, AttendanceRequestIn, EventIn, OfflineSyncIn, RequestDecisionIn, ScanIn
-from ..security import get_current_user, require_min_role, require_roles
+from ..security import get_current_user, get_current_user_optional, require_min_role, require_roles
 from ..serializers import attendance_request_dict, summary_dict, user_public
 from ..services import attendance as att
 from ..services import audit
@@ -45,23 +45,32 @@ router = APIRouter(prefix="/api/attendance", tags=["attendance"])
 
 
 # --- Kiosk trust ----------------------------------------------------------
-def kiosk_guard(request: Request):
-    """Gate the unauthenticated punch endpoints with the kiosk key.
+def kiosk_guard(request: Request, user: User | None = Depends(get_current_user_optional)):
+    """Gate the punch endpoints. Access is granted by EITHER of two trusted paths:
 
-    Secure-by-default: in PRODUCTION a key is REQUIRED — if it's unset the endpoints are closed
-    (so a missing config can't silently leave attendance open to anyone with a token). In dev the
-    endpoints stay open when no key is set, for zero-setup local testing.
+      * a valid kiosk key (``X-Kiosk-Key`` header or ``?kiosk_key=``) — for an unattended kiosk
+        device where employees self-scan without logging in, or
+      * an authenticated Super-Admin session — the ``/scanner`` phone tool is Super-Admin-only, so a
+        logged-in super_admin is already trusted and needs no separate key (this is the everyday
+        path; it means the scanner works out of the box without shipping a secret to the browser).
+
+    Secure-by-default: in PRODUCTION, with neither a key nor a trusted session, the endpoints are
+    closed. In dev they stay open when no key is set, for zero-setup local testing.
     """
+    if settings.kiosk_key:
+        supplied = request.headers.get("X-Kiosk-Key") or request.query_params.get("kiosk_key")
+        if supplied == settings.kiosk_key:
+            return
+    if user is not None and user.role == ROLE_SUPER_ADMIN:
+        return
     if not settings.kiosk_key:
         if settings.is_production:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Attendance kiosk is not configured (KIOSK_KEY unset). Set it to enable punching.",
+                detail="Attendance kiosk is not configured. Sign in as a Super Admin to scan, or set KIOSK_KEY for an unattended kiosk.",
             )
         return  # dev convenience: open on an unset key
-    supplied = request.headers.get("X-Kiosk-Key") or request.query_params.get("kiosk_key")
-    if supplied != settings.kiosk_key:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid kiosk key")
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid kiosk key")
 
 
 def _resolve_token(db: Session, token: str) -> User:
