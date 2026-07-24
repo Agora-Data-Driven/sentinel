@@ -423,7 +423,7 @@ textarea { resize: vertical; min-height: 78px; }
   margin-left: auto; font: inherit; font-size: 10px; font-weight: 700; color: var(--sub); background: transparent;
   border: 1px solid var(--line); border-radius: 6px; padding: 1px 6px; letter-spacing: .5px;
 }
-@media (max-width: 720px) { .cmdk-trigger span, .cmdk-trigger kbd { display: none; } .cmdk-trigger { padding: 0 9px; } }
+@media (max-width: 720px) { .cmdk-trigger span, .cmdk-trigger kbd { display: none; } .cmdk-trigger { padding: 0 9px; min-width: 0; flex: 0 0 auto; } }
 
 .cmdk-ov {
   position: fixed; inset: 0; z-index: 300; display: none;
@@ -613,11 +613,16 @@ textarea { resize: vertical; min-height: 78px; }
   .app { grid-template-columns: 1fr; }
   .side { position: fixed; left: 0; top: 0; width: 84vw; max-width: 320px; transform: translateX(-100%); transition: transform .22s ease; box-shadow: var(--shadow-lg); }
   .side.open { transform: none; }
-  .hamburger { display: grid; }
+  /* Hamburger is the anchored left control — order:-1 + margin-right:auto pin it to the
+     far left and push everything else right, so it can never be shoved off-screen. */
+  .hamburger { display: grid; order: -1; margin-right: auto; flex: 0 0 auto; }
   .scrim { position: fixed; inset: 0; background: rgba(14,15,18,.4); z-index: 39; display: none; }
   .scrim.open { display: block; }
   .content { padding: 16px 14px 60px; }
-  .top { padding: 12px 14px; }
+  /* Topbar must never overflow horizontally on mobile: no wrap, tolerate shrink, and
+     the search pill collapses (see its own min-width:0 rule) so the icons always fit. */
+  .top { padding: 12px 14px; gap: 8px; flex-wrap: nowrap; overflow: hidden; }
+  .top .cmdk-trigger { margin-right: 0; }  /* hamburger now owns the left anchor */
   .top .row { min-width: 0; }            /* let the title shrink instead of pushing the right cluster off */
   .kpi .k-val { font-size: 26px; }
   .notif-panel { width: calc(100vw - 28px); right: -6px; }
