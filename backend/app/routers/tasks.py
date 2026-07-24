@@ -197,6 +197,7 @@ def create_task(payload: TaskCreateIn, user: User = Depends(get_current_user), d
         priority=priority,
         status=payload.status,
         due_date=payload.due_date,
+        service_charge=payload.service_charge,  # already normalized by the schema (blank/zero → None)
         labels_json=json.dumps(labels),
         maintasks_json=maintasks_svc.dumps(maintasks),  # legacy checklist_json no longer written
         deliverable_url=payload.deliverable_url,

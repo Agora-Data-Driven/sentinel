@@ -46,6 +46,20 @@ def _d(d: date | None) -> str | None:
     return d.isoformat() if d else None
 
 
+def _money(raw: str | None) -> str | None:
+    """Display string ('$4,200' / '$4,200.50') from a stored bare charge; None for empty/zero/junk.
+    Internal-only — never included in the Atrium (client-facing) payload."""
+    if not raw:
+        return None
+    try:
+        f = float(str(raw).replace(",", "").replace("$", ""))
+    except ValueError:
+        return None
+    if f <= 0:
+        return None
+    return f"${f:,.0f}" if f == int(f) else f"${f:,.2f}"
+
+
 def _loads(raw: str | None, default):
     try:
         return json.loads(raw) if raw else default
@@ -184,6 +198,9 @@ def task_detail(t: Task, db: Session) -> dict:
             "description": t.description,
             "campaign": t.campaign,
             "content_type": t.content_type,
+            "service_charge": t.service_charge,               # internal-only; raw value for the edit form
+            "service_charge_label": _money(t.service_charge),  # internal-only; "$4,200" for display
+
             "account_manager_id": t.account_manager_id,
             "account_manager": user_public(am),
             "assigned_team_name": team.name if team else None,

@@ -28,6 +28,9 @@ class Task(Base):
     priority: Mapped[str] = mapped_column(String(16), default=PRIORITY_MEDIUM)  # AM-only to change
     status: Mapped[str] = mapped_column(String(32), default=TASK_TODO, index=True)
     due_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # Internal-only money field (never crosses to Atrium). Optional; stored bare — digits with an
+    # optional decimal, no "$" or thousands commas. Empty/blank = no charge set.
+    service_charge: Mapped[str | None] = mapped_column(String(32), nullable=True)
     labels_json: Mapped[str] = mapped_column(Text, default="[]")  # ["Design","Ads",...]
     checklist_json: Mapped[str] = mapped_column(Text, default="[]")  # [{text,done}] — legacy flat list
     # Two-level work breakdown: [{id,title,assignee_id,subs:[{id,text,done,assignee_id}]}].
