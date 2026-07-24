@@ -40,9 +40,19 @@ from ..security import get_current_user, is_admin, require_min_role, require_rol
 from ..serializers import gym_log_dict, leave_balance_dict, summary_dict, task_card, user_full
 from ..services import audit
 from ..services import leave as leave_svc
-from ..utils.time import today_ph, utcnow
+from ..utils.time import normalize_hhmm, today_ph, utcnow
 from ..utils.qr import make_qr_png, new_token
 from ..utils.passwords import hash_password
+
+
+def _norm_shift(v: str | None) -> str | None:
+    """None/blank -> None (inherit team/default); otherwise validate + normalize to 'HH:MM'."""
+    if v in (None, ""):
+        return None
+    try:
+        return normalize_hhmm(str(v))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 router = APIRouter(prefix="/api/people", tags=["people"])
 
@@ -161,7 +171,8 @@ def create_person(payload: PersonCreateIn, actor: User = Depends(get_current_use
     u = User(
         name=payload.name, email=email, role=payload.role, team_id=payload.team_id,
         phone=payload.phone, hired_date=payload.hired_date,
-        shift_start=payload.shift_start, shift_end=payload.shift_end,
+        shift_template_id=payload.shift_template_id,
+        shift_start=_norm_shift(payload.shift_start), shift_end=_norm_shift(payload.shift_end),
     )
     if payload.password:
         u.password_hash = hash_password(payload.password)
@@ -184,6 +195,9 @@ def update_person(user_id: int, payload: PersonUpdateIn, actor: User = Depends(r
     data = payload.model_dump(exclude_unset=True)
     if "role" in data and data["role"] not in ALL_ROLES:
         raise HTTPException(status_code=400, detail="Invalid role")
+    for k in ("shift_start", "shift_end"):  # validate/normalize times; blank clears the override
+        if k in data:
+            data[k] = _norm_shift(data[k])
     # Password is set separately (hashed), and never echoed in the audit log.
     new_password = data.pop("password", None)
     if new_password:

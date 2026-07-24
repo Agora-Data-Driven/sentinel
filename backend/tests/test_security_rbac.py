@@ -49,19 +49,28 @@ def test_attendance_summary_allowed_for_team_lead_and_up(client, make_user, auth
     assert client.get("/api/attendance/summary").status_code == 200
 
 
-# --- The headline rule: only the Account Manager may change task priority --
-@pytest.mark.parametrize("role", [C.ROLE_INTERN, C.ROLE_EMPLOYEE, C.ROLE_TEAM_LEAD, C.ROLE_ADMIN, C.ROLE_SUPER_ADMIN])
-def test_priority_change_forbidden_for_non_account_manager(client, make_user, auth, role):
+# --- Priority is a management decision: team lead (own team) + AM/admin/super. Staff cannot. ------
+def _a_task(db):
+    from app.models import Task
+    t = Task(title="P")
+    db.add(t)
+    db.commit()
+    db.refresh(t)
+    return t
+
+
+@pytest.mark.parametrize("role", [C.ROLE_INTERN, C.ROLE_EMPLOYEE])
+def test_priority_change_forbidden_for_staff(client, db, make_user, auth, role):
+    t = _a_task(db)
     auth(make_user(role))
-    r = client.patch("/api/tasks/1/priority", json={"priority": C.PRIORITY_URGENT})
-    assert r.status_code == 403, f"{role} must not set priority"
+    assert client.patch(f"/api/tasks/{t.id}/priority", json={"priority": C.PRIORITY_URGENT}).status_code == 403
 
 
-def test_priority_change_passes_role_gate_for_account_manager(client, make_user, auth):
-    # AM clears the role gate; the task doesn't exist, so we expect 404 (not 403).
-    auth(make_user(C.ROLE_ACCOUNT_MANAGER))
-    r = client.patch("/api/tasks/1/priority", json={"priority": C.PRIORITY_URGENT})
-    assert r.status_code == 404
+@pytest.mark.parametrize("role", [C.ROLE_ACCOUNT_MANAGER, C.ROLE_ADMIN, C.ROLE_SUPER_ADMIN])
+def test_priority_change_allowed_for_managers(client, db, make_user, auth, role):
+    t = _a_task(db)
+    auth(make_user(role))
+    assert client.patch(f"/api/tasks/{t.id}/priority", json={"priority": C.PRIORITY_URGENT}).status_code == 200
 
 
 def test_inactive_user_cannot_authenticate(client, make_user, auth):

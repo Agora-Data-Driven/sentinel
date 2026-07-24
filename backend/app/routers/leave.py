@@ -10,8 +10,18 @@ from ..constants import (
     LEAVE_PENDING,
     LEAVE_REJECTED,
     NOTIF_APPROVAL,
+    ROLE_SUPER_ADMIN,
     ROLE_TEAM_LEAD,
 )
+
+
+def _remaining(db: Session, user_id: int, lt: LeaveType, year: int) -> float:
+    """Days left for a balance-limited leave type this year (unlimited types return infinity)."""
+    if lt.annual_balance < 0:
+        return float("inf")
+    leave_svc.ensure_balances(db, user_id, year, commit=False)
+    bal = leave_svc.get_balance(db, user_id, lt.id, year)
+    return bal.remaining if bal else lt.annual_balance
 from ..database import get_db
 from ..models import LeaveBalance, LeaveRequest, LeaveType, User
 from ..schemas import LeaveDecisionIn, LeaveRequestIn
@@ -57,18 +67,43 @@ def create_request(payload: LeaveRequestIn, user: User = Depends(get_current_use
     if payload.end_date < payload.start_date:
         raise HTTPException(status_code=400, detail="End date is before start date")
     days = leave_svc.count_days(payload.start_date, payload.end_date)
+
+    # L3 — no overlapping leave: reject if a pending/approved request already covers any of these days.
+    clash = db.execute(
+        select(LeaveRequest).where(
+            LeaveRequest.user_id == user.id,
+            LeaveRequest.status.in_([LEAVE_PENDING, LEAVE_APPROVED]),
+            LeaveRequest.start_date <= payload.end_date,
+            LeaveRequest.end_date >= payload.start_date,
+        )
+    ).scalars().first()
+    if clash:
+        raise HTTPException(
+            status_code=409,
+            detail=f"You already have a {clash.status.lower()} leave from {clash.start_date} to {clash.end_date} that overlaps these dates.",
+        )
+
+    # L2 — balance check: don't let someone request more of a limited type than they have left.
+    remaining = _remaining(db, user.id, lt, payload.start_date.year)
+    if days > remaining:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Not enough {lt.name}: {remaining:g} day(s) remaining, but {days} requested.",
+        )
+
     req = LeaveRequest(
         user_id=user.id, leave_type_id=lt.id, start_date=payload.start_date,
         end_date=payload.end_date, total_days=days, reason=payload.reason, status=LEAVE_PENDING,
     )
     db.add(req)
-    db.commit()
+    db.flush()  # assign req.id without committing — one atomic commit at the end
     notif.notify_managers(
         db, type=NOTIF_APPROVAL, title=f"{lt.name} request from {user.name} ({days}d)",
-        body=payload.reason, link="/leave", team_id=user.team_id,
+        body=payload.reason, link="/leave", team_id=user.team_id, commit=False,
     )
     audit.record(db, actor_id=user.id, table_name="leave_requests", record_id=req.id, action="create",
-                 new={"type": lt.name, "days": days})
+                 new={"type": lt.name, "days": days}, commit=False)
+    db.commit()
     return leave_request_dict(req, db)
 
 
@@ -94,18 +129,34 @@ def decide(req_id: int, payload: LeaveDecisionIn, reviewer: User = Depends(requi
         raise HTTPException(status_code=404, detail="Request not found")
     if payload.status not in (LEAVE_APPROVED, LEAVE_REJECTED):
         raise HTTPException(status_code=400, detail="Status must be Approved or Rejected")
+    # L4 — no self-approval: a reviewer can't decide their own request (Super Admin is the top
+    # authority and exempt, so a solo owner isn't deadlocked).
+    if reviewer.id == req.user_id and reviewer.role != ROLE_SUPER_ADMIN:
+        raise HTTPException(status_code=403, detail="You can't review your own leave request — ask another approver.")
     old = req.status
+    # L2 — don't approve beyond the remaining balance for a limited type.
+    if payload.status == LEAVE_APPROVED and old != LEAVE_APPROVED:
+        lt = db.get(LeaveType, req.leave_type_id)
+        remaining = _remaining(db, req.user_id, lt, req.start_date.year) if lt else 0
+        if req.total_days > remaining:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Can't approve: only {remaining:g} {lt.name if lt else ''} day(s) remain, {req.total_days} requested.",
+            )
     req.status = payload.status
     req.reviewed_by_id = reviewer.id
     req.reviewed_at = utcnow()
     if payload.status == LEAVE_APPROVED and old != LEAVE_APPROVED:
         leave_svc.apply_approval(db, req.user_id, req.leave_type_id, req.total_days, req.start_date.year)
-    db.commit()
+    elif old == LEAVE_APPROVED and payload.status != LEAVE_APPROVED:
+        # Reversing an approval must give the days back — otherwise the balance leaks permanently.
+        leave_svc.revert_approval(db, req.user_id, req.leave_type_id, req.total_days, req.start_date.year)
     notif.notify(
         db, user_id=req.user_id, type=NOTIF_APPROVAL,
         title=f"Your leave request was {payload.status.lower()}",
-        body=f"{req.total_days} day(s) from {req.start_date}", link="/leave",
+        body=f"{req.total_days} day(s) from {req.start_date}", link="/leave", commit=False,
     )
     audit.record(db, actor_id=reviewer.id, table_name="leave_requests", record_id=req.id, action="decide",
-                 old={"status": old}, new={"status": payload.status})
+                 old={"status": old}, new={"status": payload.status}, commit=False)
+    db.commit()  # status change + balance + notification + audit all commit together
     return leave_request_dict(req, db)

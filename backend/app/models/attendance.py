@@ -9,10 +9,12 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -25,6 +27,18 @@ class AttendanceEvent(Base):
     """A single raw punch (clock in/out, break start/end). Immutable log; the summary is derived."""
 
     __tablename__ = "attendance_events"
+    # DB-level guard against a duplicate-punch race: at most one clock-in and one clock-out per
+    # person per day (breaks are exempt). Partial unique indexes — Postgres + SQLite (>=3.8).
+    __table_args__ = (
+        Index("uq_att_one_clockin_per_day", "user_id", "date", unique=True,
+              sqlite_where=text("action = 'clock_in'"), postgresql_where=text("action = 'clock_in'")),
+        Index("uq_att_one_clockout_per_day", "user_id", "date", unique=True,
+              sqlite_where=text("action = 'clock_out'"), postgresql_where=text("action = 'clock_out'")),
+        # Idempotency: an offline punch carries a stable client_uid so re-syncing the same punch
+        # (e.g. after a lost response) can't record it twice. NULLs are distinct, so online punches
+        # without a uid are unaffected.
+        Index("uq_att_client_uid", "client_uid", unique=True),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
@@ -32,6 +46,7 @@ class AttendanceEvent(Base):
     time: Mapped[datetime] = mapped_column(DateTime, nullable=False)  # UTC instant of the punch
     action: Mapped[str] = mapped_column(String(20), nullable=False)
     device: Mapped[str] = mapped_column(String(40), default="kiosk")  # kiosk | admin-phone | offline
+    client_uid: Mapped[str | None] = mapped_column(String(64), nullable=True)  # offline dedupe key
     late_status: Mapped[str | None] = mapped_column(String(16), nullable=True)  # OnTime|Late
     late_minutes: Mapped[int] = mapped_column(Integer, default=0)
     late_reason: Mapped[str | None] = mapped_column(String(200), nullable=True)

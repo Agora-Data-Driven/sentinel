@@ -91,10 +91,86 @@ async def _canonical_host_redirect(request, call_next):
     return await call_next(request)
 
 
+def _ensure_columns() -> None:
+    """Add columns create_all() won't add to an already-existing table (zero-setup SQLite dev DBs).
+
+    create_all only creates MISSING tables, never alters existing ones, so a new model column would
+    be invisible on a DB seeded before it existed. This adds any such column idempotently. Prod uses
+    Alembic; this is a safety net so a local demo DB never 500s on `no such column`.
+    """
+    from sqlalchemy import inspect, text
+
+    from .database import engine
+    added = [
+        ("tasks", "maintasks_json", "TEXT DEFAULT '[]'"),
+        # Service-template defaults auto-filled onto new tasks (added after the table shipped).
+        ("service_templates", "default_priority", "VARCHAR(16)"),
+        ("service_templates", "default_labels_json", "TEXT DEFAULT '[]'"),
+        ("service_templates", "default_description", "TEXT"),
+        # Shift templates: reusable schedules assignable to a team or an employee.
+        ("teams", "shift_template_id", "INTEGER"),
+        ("users", "shift_template_id", "INTEGER"),
+        # Offline-punch idempotency key.
+        ("attendance_events", "client_uid", "VARCHAR(64)"),
+    ]
+    try:
+        insp = inspect(engine)
+        for table, column, decl in added:
+            if table not in insp.get_table_names():
+                continue
+            if column not in {c["name"] for c in insp.get_columns(table)}:
+                with engine.begin() as conn:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {decl}"))
+                print(f"[sentinel] migrated: added {table}.{column}")
+    except Exception as exc:  # never let a migration attempt crash startup
+        print(f"[sentinel] column ensure skipped: {exc}")
+
+
+def _seed_config() -> None:
+    """One-time: populate the editable config tables from the code defaults so a fresh (or
+    pre-feature) DB keeps today's statuses/labels/priorities + service recipes, now editable in the
+    Manage page. Idempotent — only seeds a table that is empty."""
+    from sqlalchemy import func, select
+
+    from .database import SessionLocal
+    from .models import ServiceTemplate, ShiftTemplate, TaskVocabItem
+    from .services import task_config, task_templates
+
+    db = SessionLocal()
+    try:
+        if not db.execute(select(func.count(ShiftTemplate.id))).scalar():
+            # Starter shift templates — fully editable in Manage afterwards.
+            for name, start, end, brk in [
+                ("Day (8AM–5PM)", "08:00", "17:00", 60),
+                ("Afternoon (1PM–10PM)", "13:00", "22:00", 60),
+                ("Part-time PM (6PM–10PM)", "18:00", "22:00", 0),
+            ]:
+                db.add(ShiftTemplate(name=name, start=start, end=end, break_min=brk))
+            db.commit()
+            print("[sentinel] seeded shift templates")
+        if not db.execute(select(func.count(TaskVocabItem.id))).scalar():
+            for kind, items in task_config.SEED.items():
+                for i, (name, color) in enumerate(items):
+                    db.add(TaskVocabItem(kind=kind, name=name, color=color, sort_order=i))
+            db.commit()
+            print("[sentinel] seeded task vocab (statuses/labels/priorities)")
+        if not db.execute(select(func.count(ServiceTemplate.id))).scalar():
+            for row in task_templates.seed_rows():
+                db.add(ServiceTemplate(**row))
+            db.commit()
+            print("[sentinel] seeded service templates")
+    except Exception as exc:  # never let seeding crash startup
+        print(f"[sentinel] config seed skipped: {exc}")
+    finally:
+        db.close()
+
+
 @app.on_event("startup")
 def _startup() -> None:
     # Create tables if missing (SQLite zero-setup). Prod uses Alembic migrations.
     create_all()
+    _ensure_columns()
+    _seed_config()
     _startup_safeguards()
 
 
