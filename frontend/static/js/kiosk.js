@@ -39,18 +39,30 @@ window.pageInit = async (S) => {
   }
   async function enqueue(p) { const d = await db(); return new Promise((res, rej) => { const tx = d.transaction("queue", "readwrite"); tx.objectStore("queue").add(p); tx.oncomplete = res; tx.onerror = () => rej(tx.error); }); }
   async function queued() { const d = await db(); return new Promise((res) => { const tx = d.transaction("queue", "readonly"); const q = tx.objectStore("queue").getAll(); q.onsuccess = () => res(q.result || []); }); }
-  async function clearQueue() { const d = await db(); return new Promise((res) => { const tx = d.transaction("queue", "readwrite"); tx.objectStore("queue").clear(); tx.oncomplete = res; }); }
+  async function deleteByIds(ids) { if (!ids || !ids.length) return; const d = await db(); return new Promise((res) => { const tx = d.transaction("queue", "readwrite"); const st = tx.objectStore("queue"); ids.forEach((id) => st.delete(id)); tx.oncomplete = res; }); }
   async function queueCount() { return (await queued()).length; }
+  // Stable per-punch id so a punch is synced exactly once and a lost/partial response can't double- or drop-record it.
+  const newUid = () => (self.crypto && crypto.randomUUID) ? crypto.randomUUID() : Date.now() + "-" + Math.random().toString(16).slice(2);
 
   async function syncQueue() {
     if (!navigator.onLine) return;
     const items = await queued();
     if (!items.length) return;
     try {
-      const punches = items.map((i) => ({ token: i.token, action: i.action, client_time: i.client_time, late_reason: i.late_reason, handover_note: i.handover_note }));
-      await S.api("/api/attendance/offline-sync", { method: "POST", body: { punches } });
-      await clearQueue();
-      S.toast(`Synced ${punches.length} offline punch(es)`, "ok");
+      const punches = items.map((i) => ({ uid: i.uid, token: i.token, action: i.action, client_time: i.client_time, late_reason: i.late_reason, handover_note: i.handover_note }));
+      const res = await S.api("/api/attendance/offline-sync", { method: "POST", body: { punches } });
+      // Delete ONLY punches the server acknowledged — recorded (ok) or permanently rejected
+      // (e.g. duplicate). Anything it didn't ack (a truncated/failed response) stays queued for the
+      // next attempt, so a punch is never silently dropped.
+      const results = res.results || [];
+      const acked = new Set(results.filter((r) => r.uid && (r.ok || r.permanent)).map((r) => r.uid));
+      const removeIds = items.filter((i) => i.uid && acked.has(i.uid)).map((i) => i.id);
+      // Legacy punches queued before uids existed: clear only if the whole batch resolved.
+      const legacy = items.filter((i) => !i.uid).map((i) => i.id);
+      if (legacy.length && results.length && results.every((r) => r.ok || r.permanent)) removeIds.push(...legacy);
+      await deleteByIds(removeIds);
+      const synced = results.filter((r) => r.ok).length;
+      if (synced) S.toast(`Synced ${synced} offline punch(es)`, "ok");
       if (PERSIST) updateQueueBadge(); else if (!scanning) idle();
     } catch (e) { /* stay queued; retry next tick */ }
   }
@@ -243,20 +255,24 @@ window.pageInit = async (S) => {
   function onAction(token, info, action) {
     clearTimeout(resetTimer);
     const extra = S.qs("#extra");
+    // Confirm screens must NEVER be dead-ends: keep an auto-reset running so an abandoned punch
+    // returns the station to idle (and resumes the scanner) instead of freezing it for everyone.
     if (action === "clock_in" && isLate(info.shift)) {
       let reason = "";
-      extra.innerHTML = `<div class="section-label">You're late — pick a reason</div>
+      extra.innerHTML = `<div class="section-label">You're late — pick a reason (optional)</div>
         <div class="chips" id="chips">${LATE_REASONS.map((r) => `<span class="chip-sel" data-r="${S.esc(r)}">${S.esc(r)}</span>`).join("")}</div>
         <button class="btn success block" id="do" style="margin-top:14px">Confirm Clock In</button>`;
       S.qsa("#chips .chip-sel").forEach((c) => c.onclick = () => { S.qsa("#chips .chip-sel").forEach((x) => x.classList.remove("active")); c.classList.add("active"); reason = c.dataset.r; });
-      S.qs("#do").onclick = () => submit(token, action, { late_reason: reason });
+      S.qs("#do").onclick = () => { clearTimeout(resetTimer); submit(token, action, { late_reason: reason }); };
+      resetTimer = setTimeout(idle, 25000);
       return;
     }
     if (action === "clock_out") {
       extra.innerHTML = `<div class="section-label">Handover note (optional)</div>
         <textarea id="handover" placeholder="What should the next shift know?" style="margin-top:6px"></textarea>
         <button class="btn danger block" id="do" style="margin-top:12px">Confirm Clock Out</button>`;
-      S.qs("#do").onclick = () => submit(token, action, { handover_note: S.qs("#handover").value });
+      S.qs("#do").onclick = () => { clearTimeout(resetTimer); submit(token, action, { handover_note: S.qs("#handover").value }); };
+      resetTimer = setTimeout(idle, 25000);
       return;
     }
     submit(token, action, {});
@@ -270,9 +286,14 @@ window.pageInit = async (S) => {
       const late = res.late_status === "Late" ? ` · ${res.late_minutes}m late` : "";
       showTransient(confirmCard("ok", label + "!", S.fmtTime(res.summary.clock_in || res.summary.clock_out) + late));
     } catch (e) {
-      if (e.status === undefined) {
-        await enqueue({ token, action, client_time: new Date().toISOString(), late_reason: payload.late_reason, handover_note: payload.handover_note });
-        showTransient(confirmCard("warn", "Saved offline", "Will sync automatically when back online."));
+      // Queue anything that might succeed on retry: offline (no status), server errors (5xx),
+      // auth/kiosk-key hiccups (401) or rate-limit (429). Only definitive rejections (409 "already
+      // clocked in", 400 bad data) are shown as errors and not retried — retrying can't fix them.
+      const transient = e.status === undefined || e.status >= 500 || e.status === 401 || e.status === 429;
+      if (transient) {
+        await enqueue({ uid: newUid(), token, action, client_time: new Date().toISOString(), late_reason: payload.late_reason, handover_note: payload.handover_note });
+        if (PERSIST) updateQueueBadge();
+        showTransient(confirmCard("warn", e.status === undefined ? "Saved offline" : "Saved — will retry", "It'll sync automatically."));
       } else {
         showTransient(confirmCard("err", "Couldn't punch", e.detail || "Try again."));
       }

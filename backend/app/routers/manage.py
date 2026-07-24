@@ -22,15 +22,39 @@ from ..models import (
     LeaveRequest,
     LeaveType,
     ServiceTemplate,
+    ShiftTemplate,
     Task,
     TaskVocabItem,
     Team,
     User,
 )
 from ..security import get_current_user, require_roles
-from ..serializers import client_dict, leave_type_dict, team_dict
+from ..serializers import client_dict, leave_type_dict, shift_template_dict, team_dict
 from ..services import audit
 from ..services import task_config
+from ..utils.time import normalize_hhmm
+
+
+def _shift_time(payload: dict, key: str, default: str | None) -> str | None:
+    """Validate + normalize a shift time from a payload; raise 400 on a bad value."""
+    if key not in payload:
+        return default
+    raw = payload.get(key)
+    if raw in (None, ""):
+        return default
+    try:
+        return normalize_hhmm(str(raw))
+    except ValueError as exc:
+        raise HTTPException(400, f"{key}: {exc}") from exc
+
+
+def _opt_int(payload: dict, key: str, default: int | None) -> int | None:
+    if key not in payload or payload.get(key) in (None, ""):
+        return default
+    try:
+        return int(payload[key])
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(400, f"{key} must be a whole number") from exc
 
 router = APIRouter(
     prefix="/api/manage",
@@ -169,9 +193,11 @@ def create_team(payload: dict, actor: User = Depends(get_current_user), db: Sess
     if db.execute(select(Team).where(Team.name == name)).scalar_one_or_none():
         raise HTTPException(409, "A department with that name already exists")
     t = Team(
-        name=name, shift_start=payload.get("shift_start") or "08:00",
-        shift_end=payload.get("shift_end") or "17:00",
-        break_duration_min=int(payload.get("break_duration_min") or 60),
+        name=name,
+        shift_template_id=_opt_int(payload, "shift_template_id", None),
+        shift_start=_shift_time(payload, "shift_start", "08:00"),
+        shift_end=_shift_time(payload, "shift_end", "17:00"),
+        break_duration_min=_opt_int(payload, "break_duration_min", 60),
     )
     db.add(t)
     db.commit()
@@ -186,15 +212,81 @@ def update_team(item_id: int, payload: dict, actor: User = Depends(get_current_u
         raise HTTPException(404, "Department not found")
     if "name" in payload and payload["name"]:
         t.name = payload["name"].strip()
+    if "shift_template_id" in payload:  # may be null to clear the template and use raw times
+        t.shift_template_id = _opt_int(payload, "shift_template_id", None)
     if "shift_start" in payload and payload["shift_start"]:
-        t.shift_start = payload["shift_start"]
+        t.shift_start = _shift_time(payload, "shift_start", t.shift_start)
     if "shift_end" in payload and payload["shift_end"]:
-        t.shift_end = payload["shift_end"]
+        t.shift_end = _shift_time(payload, "shift_end", t.shift_end)
     if "break_duration_min" in payload and payload["break_duration_min"] not in (None, ""):
-        t.break_duration_min = int(payload["break_duration_min"])
+        t.break_duration_min = _opt_int(payload, "break_duration_min", t.break_duration_min)
     db.commit()
     audit.record(db, actor_id=actor.id, table_name="teams", record_id=t.id, action="update", new={"name": t.name})
     return team_dict(t)
+
+
+# ---------------- Shift templates ----------------
+@router.get("/shift-templates")
+def list_shift_templates(db: Session = Depends(get_db)):
+    return [shift_template_dict(s) for s in db.execute(select(ShiftTemplate).order_by(ShiftTemplate.name)).scalars()]
+
+
+@router.post("/shift-templates")
+def create_shift_template(payload: dict, actor: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    name = (payload.get("name") or "").strip()
+    if not name:
+        raise HTTPException(400, "Name is required")
+    if db.execute(select(ShiftTemplate).where(ShiftTemplate.name == name)).scalar_one_or_none():
+        raise HTTPException(409, "A shift template with that name already exists")
+    s = ShiftTemplate(
+        name=name,
+        start=_shift_time(payload, "start", "08:00"),
+        end=_shift_time(payload, "end", "17:00"),
+        break_min=_opt_int(payload, "break_min", 60),
+        grace_min=_opt_int(payload, "grace_min", None),
+        active=bool(payload.get("active", True)),
+    )
+    db.add(s)
+    db.commit()
+    audit.record(db, actor_id=actor.id, table_name="shift_templates", record_id=s.id, action="create", new={"name": name})
+    return shift_template_dict(s)
+
+
+@router.patch("/shift-templates/{item_id}")
+def update_shift_template(item_id: int, payload: dict, actor: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    s = db.get(ShiftTemplate, item_id)
+    if not s:
+        raise HTTPException(404, "Shift template not found")
+    if "name" in payload and payload["name"]:
+        s.name = payload["name"].strip()
+    if "start" in payload and payload["start"]:
+        s.start = _shift_time(payload, "start", s.start)
+    if "end" in payload and payload["end"]:
+        s.end = _shift_time(payload, "end", s.end)
+    if "break_min" in payload:
+        s.break_min = _opt_int(payload, "break_min", s.break_min)
+    if "grace_min" in payload:
+        s.grace_min = _opt_int(payload, "grace_min", None)
+    if "active" in payload:
+        s.active = bool(payload["active"])
+    db.commit()
+    audit.record(db, actor_id=actor.id, table_name="shift_templates", record_id=s.id, action="update", new={"name": s.name})
+    return shift_template_dict(s)
+
+
+@router.delete("/shift-templates/{item_id}")
+def delete_shift_template(item_id: int, actor: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    s = db.get(ShiftTemplate, item_id)
+    if not s:
+        raise HTTPException(404, "Shift template not found")
+    name = s.name
+    # Detach from anyone using it so their shift cleanly falls back to team/default.
+    db.query(Team).filter(Team.shift_template_id == item_id).update({Team.shift_template_id: None}, synchronize_session=False)
+    db.query(User).filter(User.shift_template_id == item_id).update({User.shift_template_id: None}, synchronize_session=False)
+    db.delete(s)
+    db.commit()
+    audit.record(db, actor_id=actor.id, table_name="shift_templates", record_id=item_id, action="delete", old={"name": name})
+    return {"ok": True}
 
 
 @router.delete("/teams/{item_id}")

@@ -10,12 +10,37 @@ from ..database import Base
 from ..utils.time import utcnow
 
 
+class ShiftTemplate(Base):
+    """A named, reusable schedule (start/end/break/grace) assignable to a team or an employee.
+
+    This is what makes shifts data-driven: new shift types (part-time, night, split) are created and
+    edited in the Manage UI — no code changes. ``break_min`` is per-shift, so a 4-hour part-time
+    shift can carry a 0-minute break instead of the standard unpaid lunch. ``grace_min`` NULL falls
+    back to the system-wide grace. Times are "HH:MM" 24h, applied in PH time; an ``end`` <= ``start``
+    is treated as crossing midnight (overnight shift).
+    """
+
+    __tablename__ = "shift_templates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(60), unique=True, nullable=False)
+    start: Mapped[str] = mapped_column("start_time", String(5), nullable=False, default="08:00")
+    end: Mapped[str] = mapped_column("end_time", String(5), nullable=False, default="17:00")
+    break_min: Mapped[int] = mapped_column(Integer, default=60)
+    grace_min: Mapped[int | None] = mapped_column(Integer, nullable=True)  # NULL => system default grace
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class Team(Base):
     __tablename__ = "teams"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(80), unique=True, nullable=False)
-    # Configurable shift window (from Zoho). "HH:MM" 24h strings, applied in PH time.
+    # Preferred: a reusable shift template. The raw shift_* fields below stay as a legacy fallback
+    # for teams created before templates existed (effective_shift honours whichever is set).
+    shift_template_id: Mapped[int | None] = mapped_column(ForeignKey("shift_templates.id"), nullable=True)
+    # Legacy configurable shift window. "HH:MM" 24h strings, applied in PH time.
     shift_start: Mapped[str] = mapped_column(String(5), default="08:00")
     shift_end: Mapped[str] = mapped_column(String(5), default="17:00")
     break_duration_min: Mapped[int] = mapped_column(Integer, default=60)
@@ -38,7 +63,8 @@ class User(Base):
     # Password login (PBKDF2). Null = no password set yet (must use Google, or admin sets one).
     password_hash: Mapped[str | None] = mapped_column(String(200), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    # Optional per-employee shift override; falls back to the team's shift when null.
+    # Per-employee shift override. Prefer a template; the raw shift_* fields remain a legacy fallback.
+    shift_template_id: Mapped[int | None] = mapped_column(ForeignKey("shift_templates.id"), nullable=True)
     shift_start: Mapped[str | None] = mapped_column(String(5), nullable=True)
     shift_end: Mapped[str | None] = mapped_column(String(5), nullable=True)
     hired_date: Mapped[date | None] = mapped_column(Date, nullable=True)

@@ -56,6 +56,74 @@ def test_unlimited_type_tracks_usage_but_not_remaining(db, make_user, make_leave
     assert bal.used == 4  # remaining stays at the sentinel -1 (unlimited), usage still tracked
 
 
+def test_revert_approval_restores_balance(db, make_user, make_leave_type):
+    # Approve then reverse: the days must come back (the bug left the balance permanently reduced).
+    user = make_user()
+    lt = make_leave_type(name="Vacation", annual_balance=10)
+    leave_svc.ensure_balances(db, user.id, year=2026)
+    leave_svc.apply_approval(db, user.id, lt.id, days=3, year=2026)
+    leave_svc.revert_approval(db, user.id, lt.id, days=3, year=2026)
+    db.commit()
+    bal = leave_svc.get_balance(db, user.id, lt.id, 2026)
+    assert bal.used == 0 and bal.remaining == 10
+
+
+def test_revert_never_inflates_past_annual(db, make_user, make_leave_type):
+    # A stray reversal must not push remaining above the annual grant.
+    user = make_user()
+    lt = make_leave_type(name="Vacation", annual_balance=10)
+    leave_svc.ensure_balances(db, user.id, year=2026)
+    leave_svc.revert_approval(db, user.id, lt.id, days=4, year=2026)
+    db.commit()
+    bal = leave_svc.get_balance(db, user.id, lt.id, 2026)
+    assert bal.remaining == 10 and bal.used == 0
+
+
+def test_unlimited_revert_reduces_usage_only(db, make_user, make_leave_type):
+    user = make_user()
+    lt = make_leave_type(name="Unpaid", annual_balance=-1)
+    leave_svc.ensure_balances(db, user.id, year=2026)
+    leave_svc.apply_approval(db, user.id, lt.id, days=4, year=2026)
+    leave_svc.revert_approval(db, user.id, lt.id, days=4, year=2026)
+    db.commit()
+    bal = leave_svc.get_balance(db, user.id, lt.id, 2026)
+    assert bal.used == 0
+
+
+def test_cannot_request_overlapping_leave(db, client, auth, make_user, make_leave_type):
+    lt = make_leave_type(name="Vacation", annual_balance=10)
+    emp = make_user()
+    auth(emp)
+    ok = client.post("/api/leave/request", json={
+        "leave_type_id": lt.id, "start_date": "2026-08-03", "end_date": "2026-08-05", "reason": "trip"})
+    assert ok.status_code == 200
+    clash = client.post("/api/leave/request", json={
+        "leave_type_id": lt.id, "start_date": "2026-08-04", "end_date": "2026-08-06", "reason": "again"})
+    assert clash.status_code == 409
+
+
+def test_cannot_request_more_than_balance(db, client, auth, make_user, make_leave_type):
+    lt = make_leave_type(name="Vacation", annual_balance=2)
+    emp = make_user()
+    auth(emp)
+    r = client.post("/api/leave/request", json={
+        "leave_type_id": lt.id, "start_date": "2026-08-10", "end_date": "2026-08-14", "reason": "5 days"})
+    assert r.status_code == 400  # 5 requested, only 2 remain
+
+
+def test_cannot_self_approve_leave(db, client, auth, make_user, make_leave_type):
+    from app import constants as C
+    lt = make_leave_type(name="Vacation", annual_balance=10)
+    lead = make_user(role=C.ROLE_TEAM_LEAD)
+    auth(lead)
+    r = client.post("/api/leave/request", json={
+        "leave_type_id": lt.id, "start_date": "2026-08-20", "end_date": "2026-08-20", "reason": "day"})
+    assert r.status_code == 200
+    req_id = r.json()["id"]
+    denied = client.patch(f"/api/leave/request/{req_id}", json={"status": "Approved"})
+    assert denied.status_code == 403  # can't review your own request
+
+
 def _all_balances(db, user_id):
     from app.models import LeaveBalance
     from sqlalchemy import select

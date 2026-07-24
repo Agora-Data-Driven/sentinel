@@ -9,11 +9,14 @@ window.pageInit = async (S) => {
   }
 
   // Dynamic option sources for select fields.
-  const [teams, vocab] = await Promise.all([S.api("/api/teams"), S.api("/api/vocab")]);
+  const [teams, vocab, shiftTemplates] = await Promise.all([
+    S.api("/api/teams"), S.api("/api/vocab"), S.api("/api/manage/shift-templates").catch(() => []),
+  ]);
   const OPTS = {
     roles: vocab.roles,
     teams: teams.map((t) => ({ value: t.id, label: t.name })),
     teamNames: teams.map((t) => ({ value: t.name, label: t.name })),  // service dept is stored by name
+    shiftTemplates: shiftTemplates.map((t) => ({ value: t.id, label: `${t.name} (${t.start}–${t.end})` })),
   };
 
   const ENTITIES = {
@@ -31,6 +34,7 @@ window.pageInit = async (S) => {
         { k: "email", label: "Email", type: "text", req: true },
         { k: "role", label: "Role", type: "select", optsKey: "roles" },
         { k: "team_id", label: "Department", type: "select", optsKey: "teams", allowEmpty: true, coerce: "intOrNull" },
+        { k: "shift_template_id", label: "Shift (override — blank = use department's)", type: "select", optsKey: "shiftTemplates", allowEmpty: true, coerce: "intOrNull" },
         { k: "phone", label: "Phone", type: "text" },
         { k: "hired_date", label: "Hired date", type: "date" },
         { k: "password", label: "Password (blank = leave unchanged; they can also use Google)", type: "password", omitIfBlank: true },
@@ -79,11 +83,31 @@ window.pageInit = async (S) => {
       ],
       fields: [
         { k: "name", label: "Name", type: "text", req: true },
-        { k: "shift_start", label: "Shift start", type: "time" },
-        { k: "shift_end", label: "Shift end", type: "time" },
+        { k: "shift_template_id", label: "Shift template (recommended — overrides the times below)", type: "select", optsKey: "shiftTemplates", allowEmpty: true, coerce: "intOrNull" },
+        { k: "shift_start", label: "Shift start (used only if no template)", type: "time" },
+        { k: "shift_end", label: "Shift end (used only if no template)", type: "time" },
         { k: "break_duration_min", label: "Break duration (minutes)", type: "number" },
       ],
-      help: "Departments (teams) drive the Task Board department filter, People, and each team's shift/late rules.",
+      help: "Departments (teams) drive the Task Board department filter, People, and each team's shift/late rules. Assign a Shift Template (edit them in the Shift Templates tab) so shift changes never need code.",
+    },
+    "Shift Templates": {
+      api: "/api/manage/shift-templates", singular: "shift template",
+      cols: [
+        { k: "name", label: "Name" },
+        { k: "start", label: "Start" },
+        { k: "end", label: "End" },
+        { k: "break_min", label: "Break (min)" },
+        { k: "grace_min", label: "Grace (min)", fmt: (v) => (v == null ? "system default" : v) },
+        { k: "paid_hours", label: "Paid hours", fmt: (v) => `${v}h` },
+      ],
+      fields: [
+        { k: "name", label: "Name", type: "text", req: true },
+        { k: "start", label: "Start (24-hour, e.g. 13:00)", type: "time" },
+        { k: "end", label: "End (24-hour, e.g. 22:00)", type: "time" },
+        { k: "break_min", label: "Unpaid break minutes (set 0 for short/part-time shifts)", type: "number" },
+        { k: "grace_min", label: "Late grace minutes (blank = system default)", type: "number" },
+      ],
+      help: "Reusable shift schedules — assign them to a department or an individual employee. Editing a template updates everyone on it, with no code changes. Set break to 0 on a short shift (e.g. 6PM–10PM) so a 4-hour day isn't docked a lunch.",
     },
     "Leave Types": {
       api: "/api/manage/leave-types", singular: "leave type",

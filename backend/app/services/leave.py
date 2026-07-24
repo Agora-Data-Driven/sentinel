@@ -67,3 +67,17 @@ def apply_approval(db: Session, user_id: int, leave_type_id: int, days: float, y
         return
     bal.used = (bal.used or 0) + days
     bal.remaining = max(0.0, (bal.remaining or 0) - days)
+
+
+def revert_approval(db: Session, user_id: int, leave_type_id: int, days: float, year: int) -> None:
+    """Credit days back when a previously-approved leave is rejected/cancelled (mirror of apply_approval)."""
+    bal = get_balance(db, user_id, leave_type_id, year)
+    if not bal:
+        return
+    bal.used = max(0.0, (bal.used or 0) - days)
+    lt = db.get(LeaveType, leave_type_id)
+    if lt and lt.annual_balance < 0:  # unlimited — only usage was tracked, no remaining to restore
+        return
+    restored = (bal.remaining or 0) + days
+    # Don't let a restore inflate the balance past the annual grant.
+    bal.remaining = min(lt.annual_balance, restored) if lt else restored

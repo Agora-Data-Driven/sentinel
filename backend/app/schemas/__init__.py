@@ -42,6 +42,7 @@ class OfflinePunch(BaseModel):
     token: str
     action: str
     client_time: str  # ISO instant captured on the device while offline
+    uid: str | None = None  # client-generated id: lets the kiosk sync each punch exactly once
     late_reason: str | None = None
     handover_note: str | None = None
 
@@ -317,6 +318,7 @@ class PersonCreateIn(BaseModel):
     team_id: int | None = None
     phone: str | None = None
     hired_date: date | None = None
+    shift_template_id: int | None = None
     shift_start: str | None = None
     shift_end: str | None = None
     password: str | None = None  # optional initial password
@@ -329,6 +331,7 @@ class PersonUpdateIn(BaseModel):
     team_id: int | None = None
     phone: str | None = None
     hired_date: date | None = None
+    shift_template_id: int | None = None
     shift_start: str | None = None
     shift_end: str | None = None
     is_active: bool | None = None

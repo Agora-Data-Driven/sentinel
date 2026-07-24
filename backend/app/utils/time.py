@@ -38,5 +38,24 @@ def parse_hhmm(value: str) -> time:
     return time(int(hh), int(mm or 0))
 
 
+def normalize_hhmm(value: str) -> str:
+    """Validate + normalize a shift time to 'HH:MM' 24-hour ('9:0' -> '09:00').
+
+    Raises ValueError on anything that isn't a real 24-hour time (e.g. '1pm', '25:00', blank), so a
+    typo can never silently break the attendance engine's late/hours math.
+    """
+    s = (value or "").strip()
+    if not s or ":" not in s:
+        raise ValueError("Time must be HH:MM in 24-hour format, e.g. 13:00")
+    hh, _, mm = s.partition(":")
+    try:
+        h, m = int(hh), int(mm)
+    except ValueError as exc:
+        raise ValueError("Time must be HH:MM in 24-hour format, e.g. 13:00") from exc
+    if not (0 <= h <= 23 and 0 <= m <= 59):
+        raise ValueError("Time out of range (00:00–23:59)")
+    return f"{h:02d}:{m:02d}"
+
+
 def minutes_between(start: datetime, end: datetime) -> int:
     return int((end - start).total_seconds() // 60)

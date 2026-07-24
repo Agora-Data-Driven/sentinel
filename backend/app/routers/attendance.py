@@ -1,10 +1,11 @@
 """Attendance: kiosk scan/punch, offline sync, regularization + overtime requests, summaries."""
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..config import settings
@@ -45,9 +46,19 @@ router = APIRouter(prefix="/api/attendance", tags=["attendance"])
 
 # --- Kiosk trust ----------------------------------------------------------
 def kiosk_guard(request: Request):
-    """If KIOSK_KEY is set, require it (header or query). Unset => open (trusted LAN device)."""
+    """Gate the unauthenticated punch endpoints with the kiosk key.
+
+    Secure-by-default: in PRODUCTION a key is REQUIRED — if it's unset the endpoints are closed
+    (so a missing config can't silently leave attendance open to anyone with a token). In dev the
+    endpoints stay open when no key is set, for zero-setup local testing.
+    """
     if not settings.kiosk_key:
-        return
+        if settings.is_production:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Attendance kiosk is not configured (KIOSK_KEY unset). Set it to enable punching.",
+            )
+        return  # dev convenience: open on an unset key
     supplied = request.headers.get("X-Kiosk-Key") or request.query_params.get("kiosk_key")
     if supplied != settings.kiosk_key:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid kiosk key")
@@ -98,6 +109,7 @@ def _record_event(
     instant: datetime,
     late_reason: str | None,
     handover_note: str | None,
+    client_uid: str | None = None,
 ) -> dict:
     day = to_ph(instant).date()
     events = att._events_for(db, user.id, day)
@@ -117,7 +129,7 @@ def _record_event(
 
     ev = AttendanceEvent(
         user_id=user.id, date=day, time=instant, action=action, device=device,
-        late_reason=late_reason, handover_note=handover_note,
+        late_reason=late_reason, handover_note=handover_note, client_uid=client_uid,
     )
     if action == ACTION_CLOCK_IN:
         shift = att.effective_shift(db, user)
@@ -125,7 +137,13 @@ def _record_event(
         ev.late_status = late_status
         ev.late_minutes = late_minutes
     db.add(ev)
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError:
+        # Lost a race with a concurrent punch that inserted the same clock-in/out first.
+        db.rollback()
+        dup = "Already clocked in today" if action == ACTION_CLOCK_IN else "Already clocked out today"
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=dup) from None
 
     summary = att.recompute_summary(db, user, day, commit=False)
     db.commit()
@@ -154,14 +172,30 @@ def event(payload: EventIn, db: Session = Depends(get_db)):
 def offline_sync(payload: OfflineSyncIn, db: Session = Depends(get_db)):
     """Bulk upload of punches queued in IndexedDB while the kiosk was offline."""
     results = []
+    now = utcnow()
     for p in sorted(payload.punches, key=lambda x: x.client_time):
         try:
             user = _resolve_token(db, p.token)
+            # Idempotency: if this exact punch (by client_uid) was already recorded, treat it as a
+            # success without inserting a duplicate — so a re-sync after a lost response is safe.
+            if p.uid and db.execute(
+                select(AttendanceEvent.id).where(AttendanceEvent.client_uid == p.uid)
+            ).first():
+                results.append({"uid": p.uid, "token": p.token, "action": p.action, "ok": True, "duplicate": True})
+                continue
             instant = _parse_instant(p.client_time)
-            res = _record_event(db, user, p.action, "offline", instant, p.late_reason, p.handover_note)
-            results.append({"token": p.token, "action": p.action, "ok": True})
+            # Anti-tamper: offline punches carry a device timestamp. Reject anything in the future
+            # (beyond small skew) or absurdly old, so a wrong/rigged device clock can't backdate a
+            # late arrival or postdate a punch.
+            if instant > now + timedelta(minutes=10) or instant < now - timedelta(days=14):
+                raise HTTPException(status_code=422, detail="Punch time is outside the acceptable window (device clock error).")
+            _record_event(db, user, p.action, "offline", instant, p.late_reason, p.handover_note, client_uid=p.uid)
+            results.append({"uid": p.uid, "token": p.token, "action": p.action, "ok": True})
         except HTTPException as e:
-            results.append({"token": p.token, "action": p.action, "ok": False, "error": e.detail})
+            # Business rejections (duplicate punch, unknown/inactive badge) won't succeed on retry,
+            # so mark them permanent — the kiosk drops them from its queue instead of looping forever.
+            results.append({"uid": p.uid, "token": p.token, "action": p.action,
+                            "ok": False, "permanent": True, "error": e.detail})
     return {"synced": sum(1 for r in results if r["ok"]), "results": results}
 
 
@@ -192,7 +226,7 @@ def create_request(
         status=REQ_PENDING,
     )
     db.add(req)
-    db.commit()
+    db.flush()  # assign req.id; single atomic commit below
     notif.notify_managers(
         db,
         type=NOTIF_APPROVAL,
@@ -200,9 +234,11 @@ def create_request(
         body=payload.reason,
         link="/attendance",
         team_id=user.team_id,
+        commit=False,
     )
     audit.record(db, actor_id=user.id, table_name="attendance_requests", record_id=req.id,
-                 action="create", new={"type": payload.request_type, "date": str(payload.date)})
+                 action="create", new={"type": payload.request_type, "date": str(payload.date)}, commit=False)
+    db.commit()
     return attendance_request_dict(req, db)
 
 
@@ -229,19 +265,22 @@ def decide_request(
     req = db.get(AttendanceRequest, req_id)
     if not req:
         raise HTTPException(status_code=404, detail="Request not found")
+    # No self-approval: a reviewer can't decide their own request (Super Admin exempt).
+    if reviewer.id == req.user_id and reviewer.role != ROLE_SUPER_ADMIN:
+        raise HTTPException(status_code=403, detail="You can't review your own request — ask another approver.")
     old_status = req.status
     req.status = payload.status
     req.reviewed_by_id = reviewer.id
     req.reviewed_at = utcnow()
 
-    db.commit()
     notif.notify(
         db, user_id=req.user_id, type=NOTIF_APPROVAL,
         title=f"Your {req.request_type} request was {payload.status.lower()}",
-        body=req.reason, link="/attendance",
+        body=req.reason, link="/attendance", commit=False,
     )
     audit.record(db, actor_id=reviewer.id, table_name="attendance_requests", record_id=req.id,
-                 action="decide", old={"status": old_status}, new={"status": payload.status})
+                 action="decide", old={"status": old_status}, new={"status": payload.status}, commit=False)
+    db.commit()  # decision + notification + audit commit atomically
     return attendance_request_dict(req, db)
 
 
@@ -290,23 +329,36 @@ def edit_summary(
     s = db.get(DailyAttendanceSummary, summary_id)
     if not s:
         raise HTTPException(status_code=404, detail="Attendance record not found")
+    user = db.get(User, s.user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="Employee not found")
     old = {"clock_in": to_ph(s.clock_in).strftime("%H:%M") if s.clock_in else None,
            "clock_out": to_ph(s.clock_out).strftime("%H:%M") if s.clock_out else None,
            "status": s.status}
-    if payload.clock_in is not None:
-        s.clock_in = _ph_to_utc(s.date, payload.clock_in) if payload.clock_in.strip() else None
-    if payload.clock_out is not None:
-        s.clock_out = _ph_to_utc(s.date, payload.clock_out) if payload.clock_out.strip() else None
+    if payload.clock_out is not None and payload.clock_out.strip() and payload.clock_in is not None \
+            and payload.clock_in.strip() and payload.clock_out.strip() <= payload.clock_in.strip():
+        raise HTTPException(status_code=400, detail="Clock-out must be after clock-in")
 
-    user = db.get(User, s.user_id)
-    shift = att.effective_shift(db, user)
-    if s.clock_in and s.clock_out:
-        s.total_work_hours = round(max(0, minutes_between(s.clock_in, s.clock_out) - shift.break_min) / 60.0, 2)
-        s.break_duration_min = shift.break_min
-    else:
-        s.total_work_hours = 0.0
-        s.break_duration_min = 0
-    s.overtime_minutes = 0
+    # A manual correction must rewrite the day's clock-in/out EVENTS, not just the summary row — the
+    # summary is a pure projection of events, so editing only the row would be wiped by the nightly
+    # recompute or the employee's next scan. We replace the clock-in/out events, then re-derive.
+    if payload.clock_in is not None or payload.clock_out is not None:
+        day = s.date
+        for e in att._events_for(db, user.id, day):
+            if payload.clock_in is not None and e.action == ACTION_CLOCK_IN:
+                db.delete(e)
+            elif payload.clock_out is not None and e.action == ACTION_CLOCK_OUT:
+                db.delete(e)
+        if payload.clock_in is not None and payload.clock_in.strip():
+            db.add(AttendanceEvent(user_id=user.id, date=day, time=_ph_to_utc(day, payload.clock_in),
+                                   action=ACTION_CLOCK_IN, device="manual", late_reason="Manual correction"))
+        if payload.clock_out is not None and payload.clock_out.strip():
+            db.add(AttendanceEvent(user_id=user.id, date=day, time=_ph_to_utc(day, payload.clock_out),
+                                   action=ACTION_CLOCK_OUT, device="manual"))
+        db.flush()
+        s = att.recompute_summary(db, user, day, commit=False)
+
+    # An explicit status override (e.g. mark OnLeave) still wins when provided.
     if payload.status:
         s.status = payload.status
     audit.record(db, actor_id=admin.id, table_name="daily_attendance_summary", record_id=s.id,

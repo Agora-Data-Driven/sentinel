@@ -107,6 +107,11 @@ def _ensure_columns() -> None:
         ("service_templates", "default_priority", "VARCHAR(16)"),
         ("service_templates", "default_labels_json", "TEXT DEFAULT '[]'"),
         ("service_templates", "default_description", "TEXT"),
+        # Shift templates: reusable schedules assignable to a team or an employee.
+        ("teams", "shift_template_id", "INTEGER"),
+        ("users", "shift_template_id", "INTEGER"),
+        # Offline-punch idempotency key.
+        ("attendance_events", "client_uid", "VARCHAR(64)"),
     ]
     try:
         insp = inspect(engine)
@@ -128,11 +133,21 @@ def _seed_config() -> None:
     from sqlalchemy import func, select
 
     from .database import SessionLocal
-    from .models import ServiceTemplate, TaskVocabItem
+    from .models import ServiceTemplate, ShiftTemplate, TaskVocabItem
     from .services import task_config, task_templates
 
     db = SessionLocal()
     try:
+        if not db.execute(select(func.count(ShiftTemplate.id))).scalar():
+            # Starter shift templates — fully editable in Manage afterwards.
+            for name, start, end, brk in [
+                ("Day (8AM–5PM)", "08:00", "17:00", 60),
+                ("Afternoon (1PM–10PM)", "13:00", "22:00", 60),
+                ("Part-time PM (6PM–10PM)", "18:00", "22:00", 0),
+            ]:
+                db.add(ShiftTemplate(name=name, start=start, end=end, break_min=brk))
+            db.commit()
+            print("[sentinel] seeded shift templates")
         if not db.execute(select(func.count(TaskVocabItem.id))).scalar():
             for kind, items in task_config.SEED.items():
                 for i, (name, color) in enumerate(items):

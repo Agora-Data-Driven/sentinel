@@ -75,6 +75,7 @@ def user_full(u: User, team: Team | None = None) -> dict:
             "phone": u.phone,
             "is_active": u.is_active,
             "hired_date": _d(u.hired_date),
+            "shift_template_id": u.shift_template_id,
             "shift_start": u.shift_start,
             "shift_end": u.shift_end,
             "team_name": team.name if team else None,
@@ -87,9 +88,31 @@ def team_dict(t: Team) -> dict:
     return {
         "id": t.id,
         "name": t.name,
+        "shift_template_id": t.shift_template_id,
         "shift_start": t.shift_start,
         "shift_end": t.shift_end,
         "break_duration_min": t.break_duration_min,
+    }
+
+
+def shift_template_dict(t) -> dict:
+    st, en = t.start, t.end
+    # Paid hours = span (overnight-aware) minus break, for a legible "8.0h" hint in the UI.
+    sh, sm = (int(x) for x in (st.split(":") + ["0"])[:2])
+    eh, em = (int(x) for x in (en.split(":") + ["0"])[:2])
+    span = (eh * 60 + em) - (sh * 60 + sm)
+    if span <= 0:
+        span += 24 * 60
+    paid = max(0, span - min(t.break_min or 0, span))
+    return {
+        "id": t.id,
+        "name": t.name,
+        "start": st,
+        "end": en,
+        "break_min": t.break_min,
+        "grace_min": t.grace_min,
+        "active": t.active,
+        "paid_hours": round(paid / 60.0, 2),
     }
 
 
