@@ -202,7 +202,53 @@
   }
 
   const initials = (name) => (String(name || "?").split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("") || "?").toUpperCase();
-  const avatar = (u, cls = "") => `<div class="avatar ${cls}">${esc(u ? initials(u.name) : "?")}</div>`;
+  // A photo when the user has one (all serialized users carry profile_pic_url), else the initials
+  // chip. This single helper feeds every avatar on every page, so a photo shows everywhere at once.
+  const avatar = (u, cls = "") => {
+    if (u && u.profile_pic_url) {
+      return `<div class="avatar ${cls} has-photo"><img src="${esc(u.profile_pic_url)}" alt="" loading="lazy" decoding="async"></div>`;
+    }
+    return `<div class="avatar ${cls}">${esc(u ? initials(u.name) : "?")}</div>`;
+  };
+
+  // ---- Profile photo upload (shared) ----
+  // Resize + square-crop client-side to a small JPEG so uploads are tiny (~30 KB) and the server needs
+  // no image library. Returns a Blob. Then uploadAvatar POSTs it and returns the new profile_pic_url.
+  function resizeImageToBlob(file, size = 256) {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        const side = Math.min(img.width, img.height);          // cover-crop to a centered square
+        const sx = (img.width - side) / 2, sy = (img.height - side) / 2;
+        const c = document.createElement("canvas");
+        c.width = c.height = size;
+        const ctx = c.getContext("2d");
+        ctx.drawImage(img, sx, sy, side, side, 0, 0, size, size);
+        c.toBlob((b) => (b ? resolve(b) : reject(new Error("Couldn't process that image"))), "image/jpeg", 0.85);
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("That file isn't a readable image")); };
+      img.src = url;
+    });
+  }
+  async function uploadAvatar(userId, file) {
+    if (!/^image\//.test(file.type)) throw new Error("Please choose an image file");
+    const blob = await resizeImageToBlob(file);
+    const fd = new FormData();
+    fd.append("file", blob, "avatar.jpg");
+    const res = await api(`/api/people/${userId}/avatar`, { method: "POST", form: fd });
+    // Keep the signed-in user's cached object + topbar avatar in sync when they change their own.
+    if (USER && USER.id === userId) { USER.profile_pic_url = res.profile_pic_url; refreshUserCard(); }
+    return res.profile_pic_url;
+  }
+  async function removeAvatar(userId) {
+    await api(`/api/people/${userId}/avatar`, { method: "DELETE" });
+    if (USER && USER.id === userId) { USER.profile_pic_url = null; refreshUserCard(); }
+  }
+  function refreshUserCard() {
+    const card = qs("#user-card"); if (card) { const a = card.querySelector(".avatar"); if (a) a.outerHTML = avatar(USER); }
+  }
 
   const PH = "Asia/Manila";
   function fmtTime(iso) { if (!iso) return "—"; return new Date(iso).toLocaleTimeString("en-PH", { timeZone: PH, hour: "2-digit", minute: "2-digit", hour12: true }); }
@@ -276,7 +322,7 @@
         </div>
         <nav class="nav">${navItems}</nav>
         <div class="side-foot">
-          <div class="user-card" id="user-card" title="Change password" style="cursor:pointer">
+          <div class="user-card" id="user-card" title="Edit your profile" style="cursor:pointer">
             ${avatar(USER)}
             <div class="who"><div class="n">${esc(USER.name)}</div><div class="r">${esc(USER.role_label || USER.role)}</div></div>
           </div>
@@ -525,12 +571,42 @@
   // ---------------- Change password ----------------
   function openChangePassword() {
     const m = modal({
-      title: "Change password",
-      body: `<label class="field"><span>Current password</span><input type="password" id="cp-cur" autocomplete="current-password" placeholder="Leave blank if none set"></label>
+      title: "Your profile",
+      body: `<div class="profile-photo-row">
+          <div id="cp-avatar">${avatar(USER, "lg")}</div>
+          <div>
+            <div class="section-label">Profile photo</div>
+            <div class="sub" style="font-size:12px;margin:2px 0 8px">Shown across Sentinel so people recognise you.</div>
+            <div class="row" style="gap:6px">
+              <button class="btn sm ghost" id="cp-photo-btn">${ICON.plus}${USER.profile_pic_url ? "Change" : "Add photo"}</button>
+              <button class="btn sm ghost" id="cp-photo-del"${USER.profile_pic_url ? "" : " hidden"}>Remove</button>
+              <input type="file" id="cp-photo-file" accept="image/*" hidden>
+            </div>
+          </div>
+        </div>
+        <div class="section-label" style="margin:18px 0 6px">Change password</div>
+        <label class="field"><span>Current password</span><input type="password" id="cp-cur" autocomplete="current-password" placeholder="Leave blank if none set"></label>
         <label class="field"><span>New password</span><input type="password" id="cp-new" autocomplete="new-password" placeholder="At least 6 characters"></label>
         <label class="field"><span>Confirm new password</span><input type="password" id="cp-cnf" autocomplete="new-password"></label>`,
-      footer: `<button class="btn ghost" id="cp-cancel">Cancel</button><button class="btn primary" id="cp-save">Update password</button>`,
+      footer: `<button class="btn ghost" id="cp-cancel">Close</button><button class="btn primary" id="cp-save">Update password</button>`,
     });
+
+    // Photo upload/remove (own account). Re-render the modal avatar + topbar in place.
+    const repaint = () => { const b = qs("#cp-avatar"); if (b) b.innerHTML = avatar(USER, "lg"); const del = qs("#cp-photo-del"); if (del) del.hidden = !USER.profile_pic_url; const bt = qs("#cp-photo-btn"); if (bt) bt.lastChild.textContent = USER.profile_pic_url ? "Change" : "Add photo"; };
+    const fileInput = qs("#cp-photo-file");
+    qs("#cp-photo-btn").onclick = () => fileInput.click();
+    fileInput.onchange = async () => {
+      const f = fileInput.files && fileInput.files[0];
+      if (!f) return;
+      try { await uploadAvatar(USER.id, f); repaint(); toast("Photo updated", "ok"); }
+      catch (e) { toast(e.detail || e.message || "Couldn't upload photo", "err"); }
+      finally { fileInput.value = ""; }
+    };
+    qs("#cp-photo-del").onclick = async () => {
+      try { await removeAvatar(USER.id); repaint(); toast("Photo removed", "ok"); }
+      catch (e) { toast(e.detail || "Couldn't remove photo", "err"); }
+    };
+
     qs("#cp-cancel").onclick = m.close;
     qs("#cp-save").onclick = async () => {
       const nw = qs("#cp-new").value, cnf = qs("#cp-cnf").value;
@@ -775,7 +851,7 @@
   }
 
   const Sentinel = {
-    api, toast, skeleton, modal, esc, qs, qsa, ICON, avatar, initials,
+    api, toast, skeleton, modal, esc, qs, qsa, ICON, avatar, initials, uploadAvatar, removeAvatar,
     fmtTime, fmtDate, fmtDateFull, timeAgo, priorityDot, labelPills, statusPill,
     roleRank: ROLE_RANK,
     get user() { return USER; }, set user(u) { USER = u; },

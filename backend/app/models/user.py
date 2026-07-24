@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, String
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, LargeBinary, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..database import Base
@@ -58,6 +58,11 @@ class User(Base):
     google_sub: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     phone: Mapped[str | None] = mapped_column(String(40), nullable=True)
     profile_pic_url: Mapped[str | None] = mapped_column(String(400), nullable=True)
+    # Uploaded profile photo stored in-DB (small, client-resized ~256px JPEG). Cloud Run's disk is
+    # ephemeral and there's no object store wired, so the bytes live here and are served by
+    # GET /api/people/{id}/avatar. profile_pic_url points at that endpoint (with a ?v= cache-buster).
+    profile_pic_data: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    profile_pic_type: Mapped[str | None] = mapped_column(String(60), nullable=True)
     # Password login (PBKDF2). Null = no password set yet (must use Google, or admin sets one).
     password_hash: Mapped[str | None] = mapped_column(String(200), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)

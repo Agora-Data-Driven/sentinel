@@ -1,9 +1,10 @@
 """People (employee directory + profiles), QR badge generation."""
 from __future__ import annotations
 
+import hashlib
 from datetime import timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -199,6 +200,73 @@ def update_person(user_id: int, payload: PersonUpdateIn, actor: User = Depends(r
                  old=before, new={**data, **({"password": "***"} if new_password else {})})
     team = db.get(Team, u.team_id) if u.team_id else None
     return user_full(u, team)
+
+
+# ---- Profile photo -----------------------------------------------------------------------------
+# Stored in-DB (see models/user.py) and served from here, because there's no object store wired and
+# Cloud Run's disk is ephemeral. Anyone can set their OWN photo; admins can set anyone's. Images are
+# resized client-side to ~256px before upload, so bytes are tiny; we still cap here as a backstop.
+AVATAR_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+AVATAR_MAX_BYTES = 2 * 1024 * 1024  # 2 MB — generous; client sends ~30 KB
+
+
+def _can_edit_avatar(actor: User, target_id: int) -> bool:
+    return actor.id == target_id or is_admin(actor)
+
+
+@router.post("/{user_id}/avatar")
+async def upload_avatar(user_id: int, file: UploadFile = File(...),
+                        actor: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Upload/replace a profile photo. Self-serve for everyone; admins can set anyone's."""
+    if not _can_edit_avatar(actor, user_id):
+        raise HTTPException(status_code=403, detail="You can only change your own photo")
+    u = db.get(User, user_id)
+    if not u:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    ctype = (file.content_type or "").lower()
+    if ctype not in AVATAR_TYPES:
+        raise HTTPException(status_code=400, detail="Please upload a JPEG, PNG, WEBP or GIF image")
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="The image was empty")
+    if len(data) > AVATAR_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="Image is too large (max 2 MB)")
+    u.profile_pic_data = data
+    u.profile_pic_type = ctype
+    # ?v= is a short content hash so the browser/PWA fetches the new photo, not a stale cached one.
+    u.profile_pic_url = f"/api/people/{u.id}/avatar?v={hashlib.sha1(data).hexdigest()[:10]}"
+    db.commit()
+    return {"profile_pic_url": u.profile_pic_url}
+
+
+@router.delete("/{user_id}/avatar")
+def delete_avatar(user_id: int, actor: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Remove a profile photo (falls back to initials). Self-serve; admins can clear anyone's."""
+    if not _can_edit_avatar(actor, user_id):
+        raise HTTPException(status_code=403, detail="You can only change your own photo")
+    u = db.get(User, user_id)
+    if not u:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    u.profile_pic_data = None
+    u.profile_pic_type = None
+    u.profile_pic_url = None
+    db.commit()
+    return {"ok": True}
+
+
+@router.get("/{user_id}/avatar")
+def get_avatar(user_id: int, actor: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Serve the stored photo bytes. Any signed-in user may view (the shared cookie carries it into
+    <img> tags across every page). 404 falls the frontend back to initials."""
+    u = db.get(User, user_id)
+    if not u or not u.profile_pic_data:
+        raise HTTPException(status_code=404, detail="No photo")
+    return Response(
+        content=u.profile_pic_data,
+        media_type=u.profile_pic_type or "image/jpeg",
+        # Immutable: the URL changes (new ?v=) whenever the photo changes, so this copy never goes stale.
+        headers={"Cache-Control": "private, max-age=31536000, immutable"},
+    )
 
 
 @router.get("/{user_id}/qr")
