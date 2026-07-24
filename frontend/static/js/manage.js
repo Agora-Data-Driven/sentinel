@@ -77,18 +77,13 @@ window.pageInit = async (S) => {
       api: "/api/manage/teams", singular: "department",
       cols: [
         { k: "name", label: "Name" },
-        { k: "shift_start", label: "Shift start" },
-        { k: "shift_end", label: "Shift end" },
-        { k: "break_duration_min", label: "Break (min)" },
+        { k: "shift_template_id", label: "Shift", fmt: (v) => _tplName(v) },
       ],
       fields: [
         { k: "name", label: "Name", type: "text", req: true },
-        { k: "shift_template_id", label: "Shift template (recommended — overrides the times below)", type: "select", optsKey: "shiftTemplates", allowEmpty: true, coerce: "intOrNull" },
-        { k: "shift_start", label: "Shift start (used only if no template)", type: "time" },
-        { k: "shift_end", label: "Shift end (used only if no template)", type: "time" },
-        { k: "break_duration_min", label: "Break duration (minutes)", type: "number" },
+        { k: "shift_template_id", label: "Shift template (blank = company default from Settings)", type: "select", optsKey: "shiftTemplates", allowEmpty: true, coerce: "intOrNull" },
       ],
-      help: "Departments (teams) drive the Task Board department filter, People, and each team's shift/late rules. Assign a Shift Template (edit them in the Shift Templates tab) so shift changes never need code.",
+      help: "Departments drive the Task Board filter, People, and each team's shift/late rules. A department's hours come entirely from its Shift Template — edit the times once in the Shift Templates tab and everyone on it updates. Leave blank to use the company default shift (Settings).",
     },
     "Shift Templates": {
       api: "/api/manage/shift-templates", singular: "shift template",
@@ -164,6 +159,13 @@ window.pageInit = async (S) => {
   const _swatch = (hex) => hex
     ? `<span class="dot" style="background:${S.esc(hex)};vertical-align:middle"></span> <span class="muted">${S.esc(hex)}</span>`
     : "—";
+
+  // Resolve a department's shift_template_id to a readable name (blank = the company default in Settings).
+  const _tplName = (id) => {
+    if (!id) return `<span class="muted">Company default</span>`;
+    const t = shiftTemplates.find((x) => x.id === id);
+    return t ? S.esc(`${t.name} (${t.start}–${t.end})`) : "—";
+  };
 
   // Compact summary of a service's auto-fill defaults for the Services table.
   const _svcDefaults = (r) => {

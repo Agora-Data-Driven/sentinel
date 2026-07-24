@@ -94,7 +94,8 @@ def _scan_payload(db: Session, user: User) -> dict:
         "user": user_public(user),
         "team_name": team.name if team else None,
         "role_label": ROLE_LABELS.get(user.role, user.role),
-        "shift": {"start": shift.start, "end": shift.end, "grace": shift.grace_min},
+        "shift": {"start": shift.start, "end": shift.end, "grace": shift.grace_min,
+                  "break": shift.break_min, "name": shift.name},
         "state": att.current_state(events),
         "valid_actions": att.valid_actions(events),
         "punches_today": [
