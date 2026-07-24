@@ -17,10 +17,10 @@ DEFAULTS: dict[str, str] = {
 }
 
 DESCRIPTIONS: dict[str, str] = {
-    "work_start": "Default shift start time (HH:MM, PH time)",
-    "work_end": "Default shift end time (HH:MM, PH time)",
-    "late_grace": "Grace period in minutes before a clock-in counts as late",
-    "break_duration": "Standard break allowance in minutes",
+    "work_start": "Company default start (HH:MM, PH time) — used only when a department has no Shift Template",
+    "work_end": "Company default end (HH:MM, PH time) — used only when a department has no Shift Template",
+    "late_grace": "Grace period in minutes before a clock-in counts as late (applies to all shifts)",
+    "break_duration": "Company default unpaid break (minutes) — used only when a department has no Shift Template",
     "work_days": "Working days of the week",
     "timezone": "Display + rules timezone",
     "gym_required_hours": "Minimum gym session hours to count as compliant",

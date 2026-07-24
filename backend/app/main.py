@@ -165,12 +165,65 @@ def _seed_config() -> None:
         db.close()
 
 
+def _migrate_team_shifts() -> None:
+    """Adopt the single shift model: every department onto a Shift Template.
+
+    Idempotent, behavior-preserving one-time data fix. A department that still uses the legacy inline
+    shift fields (``shift_start``/``end``/``break``, no template) is moved onto a ShiftTemplate with
+    the SAME start/end/break — reusing an existing template when one matches, else creating it. Because
+    ``effective_shift`` already prefers a template over the legacy fields, and the template carries the
+    identical times (grace stays NULL → the same system-default grace), the resolved shift is unchanged;
+    this only makes the template the single, editable source of truth. Legacy columns are left in place
+    (they're non-null and now simply ignored). Runs on every boot; a no-op once all teams are migrated.
+
+    (Prod adopted its schema via ``alembic stamp head``, so a data migration can't live in Alembic — it
+    lives here alongside _seed_config, which runs on every boot.)
+    """
+    from sqlalchemy import select
+
+    from .database import SessionLocal
+    from .models import ShiftTemplate, Team
+
+    db = SessionLocal()
+    try:
+        legacy = db.execute(
+            select(Team).where(Team.shift_template_id.is_(None), Team.shift_start.isnot(None))
+        ).scalars().all()
+        if not legacy:
+            return
+        templates = db.execute(select(ShiftTemplate)).scalars().all()
+
+        def find_or_make(start: str, end: str, brk: int) -> ShiftTemplate:
+            for t in templates:
+                if t.start == start and t.end == end and (t.break_min or 0) == (brk or 0):
+                    return t
+            # Name after the window; keep unique in case two windows share start–end but differ on break.
+            base = f"{start}–{end}"
+            name = base if not any(t.name == base for t in templates) else f"{base} ({brk}m break)"
+            t = ShiftTemplate(name=name, start=start, end=end, break_min=brk or 0, grace_min=None)
+            db.add(t)
+            db.flush()
+            templates.append(t)
+            return t
+
+        for team in legacy:
+            tpl = find_or_make(team.shift_start, team.shift_end or "17:00", team.break_duration_min or 0)
+            team.shift_template_id = tpl.id
+        db.commit()
+        print(f"[sentinel] migrated {len(legacy)} department(s) onto shift templates")
+    except Exception as exc:  # never let a data migration crash startup
+        print(f"[sentinel] team shift migration skipped: {exc}")
+    finally:
+        db.close()
+
+
 @app.on_event("startup")
 def _startup() -> None:
     # Create tables if missing (SQLite zero-setup). Prod uses Alembic migrations.
     create_all()
     _ensure_columns()
     _seed_config()
+    _migrate_team_shifts()
     _startup_safeguards()
 
 

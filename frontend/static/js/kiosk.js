@@ -74,7 +74,20 @@ window.pageInit = async (S) => {
     return `<div class="k-clock" id="kclock">${now.toLocaleTimeString("en-PH", { timeZone: "Asia/Manila", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true })}</div>
       <div class="k-date">${now.toLocaleDateString("en-PH", { timeZone: "Asia/Manila", weekday: "long", month: "long", day: "numeric" })}</div>`;
   }
-  setInterval(() => { const c = S.qs("#kclock"); if (c) c.textContent = new Date().toLocaleTimeString("en-PH", { timeZone: "Asia/Manila", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true }); }, 1000);
+  const nowPH = () => new Date().toLocaleTimeString("en-PH", { timeZone: "Asia/Manila", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true });
+  setInterval(() => {
+    const c = S.qs("#kclock"); if (c) c.textContent = nowPH();
+    const n = S.qs("#k-now"); if (n) n.textContent = nowPH();  // live time on the scanned card
+  }, 1000);
+
+  // Format a "HH:MM" 24h shift time as "8:00 AM"; blank-safe.
+  function fmt12(hhmm) {
+    if (!hhmm) return "—";
+    const [h, m] = hhmm.split(":").map(Number);
+    const ap = h < 12 ? "AM" : "PM";
+    const h12 = h % 12 === 0 ? 12 : h % 12;
+    return `${h12}:${String(m ?? 0).padStart(2, "0")} ${ap}`;
+  }
 
   // --- Camera lifecycle ----------------------------------------------------
   async function startScanner() {
@@ -225,22 +238,53 @@ window.pageInit = async (S) => {
     renderScanned(token, info);
   }
 
-  function isLate(shift) {
+  // How late a clock-in *right now* would be, in PH time (start + grace). Drives both the late-reason
+  // prompt and the status badge on the scanned card.
+  function lateInfo(shift) {
     const now = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Manila" }));
     const [h, m] = (shift.start || "08:00").split(":").map(Number);
     const thr = new Date(now); thr.setHours(h, m + (shift.grace || 0), 0, 0);
-    return now > thr;
+    const late = now > thr;
+    return { late, minutes: late ? Math.round((now - thr) / 60000) : 0 };
   }
+  const isLate = (shift) => lateInfo(shift).late;
 
   function renderScanned(token, info) {
     const va = info.valid_actions;
+    const shift = info.shift || {};
     const btn = (action, cls, icon, label, enabled) =>
       `<button class="k-btn ${cls}" data-action="${action}" ${enabled ? "" : "disabled"}>${S.ICON[icon]}${label}</button>`;
     const stateLabel = { none: "Not clocked in", in: "Clocked in", on_break: "On break", out: "Clocked out" }[info.state];
+
+    // Shift line: "Day · 8:00 AM – 5:00 PM" (name is optional; falls back to just the times).
+    const shiftName = shift.name || "Default shift";
+    const shiftTimes = `${fmt12(shift.start)} – ${fmt12(shift.end)}`;
+
+    // Status badge + what they should do next, driven by today's state and the shift clock.
+    let statusPill, nextHint;
+    if (info.state === "none") {
+      const li = lateInfo(shift);
+      statusPill = li.late
+        ? `<span class="pill red">${li.minutes}m late</span>`
+        : `<span class="pill green">On time</span>`;
+      nextHint = "Ready to Clock In";
+    } else if (info.state === "in" || info.state === "on_break") {
+      statusPill = `<span class="pill green">Clocked in</span>`;
+      nextHint = "Tap Clock Out when you leave";
+    } else {
+      statusPill = `<span class="pill grey">Done for today</span>`;
+      nextHint = "Already clocked out";
+    }
+
     showTransient(`
       ${S.avatar(info.user, "lg")}
       <div class="k-name" style="margin-top:12px">${S.esc(info.user.name)}</div>
       <div class="k-sub">${S.esc(info.team_name || info.role_label)} · <span class="pill grey">${stateLabel}</span></div>
+      <div class="k-shift">
+        <div class="k-shift-row">${S.ICON.clock}<span><b>${S.esc(shiftName)}</b> · ${shiftTimes}</span></div>
+        <div class="k-shift-row">${statusPill}<span class="k-now-wrap">Now <b id="k-now">${nowPH()}</b></span></div>
+        <div class="k-next">${S.esc(nextHint)}</div>
+      </div>
       <div class="k-actions">
         ${btn("clock_in", "in", "check", "Clock In", va.includes("clock_in"))}
         ${btn("clock_out", "out", "logout", "Clock Out", va.includes("clock_out"))}

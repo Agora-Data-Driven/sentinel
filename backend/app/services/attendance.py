@@ -33,6 +33,7 @@ class Shift:
     end: str
     grace_min: int
     break_min: int
+    name: str | None = None  # human label shown on the scanner (template name, else None)
 
 
 def _apply_template(t: ShiftTemplate | None, cur: Shift) -> Shift:
@@ -41,7 +42,7 @@ def _apply_template(t: ShiftTemplate | None, cur: Shift) -> Shift:
         return cur
     return Shift(start=t.start, end=t.end,
                  grace_min=t.grace_min if t.grace_min is not None else cur.grace_min,
-                 break_min=t.break_min)
+                 break_min=t.break_min, name=t.name)
 
 
 def effective_shift(db: Session, user: User, day: date | None = None) -> Shift:
@@ -67,16 +68,19 @@ def effective_shift(db: Session, user: User, day: date | None = None) -> Shift:
                 shift = _apply_template(db.get(ShiftTemplate, team.shift_template_id), shift)
             elif team.shift_start:
                 shift = Shift(start=team.shift_start, end=team.shift_end,
-                              grace_min=shift.grace_min, break_min=team.break_duration_min)
+                              grace_min=shift.grace_min, break_min=team.break_duration_min,
+                              name=team.name)
 
     # Employee override beats the team: template first, else legacy per-employee times.
     if user.shift_template_id:
         shift = _apply_template(db.get(ShiftTemplate, user.shift_template_id), shift)
     else:
         if user.shift_start:
-            shift = Shift(start=user.shift_start, end=shift.end, grace_min=shift.grace_min, break_min=shift.break_min)
+            shift = Shift(start=user.shift_start, end=shift.end, grace_min=shift.grace_min,
+                          break_min=shift.break_min, name="Custom")
         if user.shift_end:
-            shift = Shift(start=shift.start, end=user.shift_end, grace_min=shift.grace_min, break_min=shift.break_min)
+            shift = Shift(start=shift.start, end=user.shift_end, grace_min=shift.grace_min,
+                          break_min=shift.break_min, name=shift.name or "Custom")
 
     # Null/blank-safe: a missing value must never collapse the shift to midnight.
     return Shift(
@@ -84,6 +88,7 @@ def effective_shift(db: Session, user: User, day: date | None = None) -> Shift:
         end=shift.end or smap.get("work_end", "17:00"),
         grace_min=shift.grace_min if shift.grace_min is not None else 15,
         break_min=shift.break_min or 0,
+        name=shift.name,
     )
 
 

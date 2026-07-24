@@ -12,7 +12,9 @@ window.pageInit = async (S) => {
 
   view.innerHTML = `<div class="pagehead"><div><h2>Settings</h2><div class="lead">System configuration. Every change is written to the audit log.</div></div></div>
     <div class="grid" style="grid-template-columns:1fr;gap:18px">
-      <div class="card"><div class="card-head"><h3>Work & attendance rules</h3><button class="btn primary sm" id="save">Save changes</button></div>
+      <div class="card"><div class="card-head"><div><h3>Work & attendance rules</h3>
+          <div class="sub" style="font-size:12px;margin-top:2px">Company defaults. Each department's actual hours come from its Shift Template (Manage → Departments); these apply only where no template is set. Late grace &amp; work days apply everywhere.</div></div>
+          <button class="btn primary sm" id="save">Save changes</button></div>
         <div class="card-body"><div class="grid" style="grid-template-columns:1fr 1fr;gap:14px">
           ${FIELDS.map(([k, t]) => `<label class="field"><span title="${S.esc(desc[k] || "")}">${nice(k)}</span>
             ${t === "bool"
