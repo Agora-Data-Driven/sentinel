@@ -12,6 +12,11 @@
 #     .\scripts\push-branch.ps1                       # -> alex/work
 #     .\scripts\push-branch.ps1 -Desc sso-fix         # -> alex/sso-fix
 #     .\scripts\push-branch.ps1 -Message "WIP sso"    # custom commit message
+#     .\scripts\push-branch.ps1 -Force                # push even if behind main (skip the sync)
+#
+# STAYS CURRENT WITH MAIN: it commits your work first, fetches, then MERGES origin/main into your
+# branch (your commits are preserved) so you never publish a stale branch that would revert newer
+# work. A genuine conflict stops the push with clear guidance -- your work is always safe.
 #
 # Then integrate + deploy with:  .\scripts\merge-branches.ps1
 # =============================================================================
@@ -19,7 +24,8 @@
 param(
     [string]$Dev = "",
     [string]$Desc = "",
-    [string]$Message = ""
+    [string]$Message = "",
+    [switch]$Force   # override the "behind origin/main" staleness guard (use only when intentional)
 )
 
 # git writes progress to stderr, which "Stop" would treat as fatal even on success.
@@ -76,6 +82,38 @@ if (-not [string]::IsNullOrWhiteSpace((git status --porcelain))) {
 # 6. Prune stale remote-tracking refs (a merged+deleted branch leaves a ghost
 #    origin/<branch> that makes --force-with-lease reject with "stale info").
 git -c http.version=HTTP/1.1 fetch --prune origin 2>$null
+
+# 6b. SYNC WITH MAIN (safe reconcile) -- never publish a branch built on STALE main; integrating one
+#     later can silently REVERT newer work that already landed. Your work is already COMMITTED above,
+#     so this is non-destructive: we MERGE origin/main INTO your branch (your commits are kept, your
+#     files are never overwritten). A real conflict STOPS the push with guidance -- nothing is lost.
+git rev-parse -q --verify origin/main *>$null
+if ($LASTEXITCODE -eq 0) {
+    git merge-base --is-ancestor origin/main HEAD 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        $behind = "$(git rev-list --count HEAD..origin/main 2>$null)".Trim()
+        if ($Force) {
+            Write-Host "[push-branch] WARNING: -Force -- publishing '$branch' $behind commit(s) behind origin/main WITHOUT merging. It may revert newer work when integrated." -ForegroundColor Yellow
+        } else {
+            Write-Host "[push-branch] '$branch' is $behind commit(s) behind origin/main -- merging main in first (your committed work is preserved)..." -ForegroundColor Cyan
+            git merge --no-edit origin/main
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "[push-branch] merged origin/main into '$branch' cleanly (+$behind). Your work is intact; pushing the reconciled branch." -ForegroundColor Green
+            } else {
+                $conf = @(git diff --name-only --diff-filter=U | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+                Write-Host ""
+                Write-Host "[push-branch] STOP: your branch is OUTDATED and merging the latest main hit conflicts." -ForegroundColor Red
+                Write-Host "   Your work is SAFE -- it's already committed on '$branch'; only these files overlap main's newer changes:" -ForegroundColor Yellow
+                $conf | ForEach-Object { Write-Host "      $_" -ForegroundColor Yellow }
+                Write-Host "   Fix each file (keep BOTH your change AND main's), then re-run to push:" -ForegroundColor Yellow
+                Write-Host "      git add -A; git commit --no-edit" -ForegroundColor Yellow
+                Write-Host "      .\scripts\push-branch.ps1" -ForegroundColor Yellow
+                Write-Host "   Not ready? Back out the merge (keeps all your work) and do it later:  git merge --abort" -ForegroundColor DarkGray
+                exit 1
+            }
+        }
+    }
+}
 
 # 7. Push over HTTP/1.1 (pushes to these repos HANG over HTTP/2 -- documented gotcha).
 #    --force-with-lease so re-running updates YOUR branch safely, never clobbering others.
