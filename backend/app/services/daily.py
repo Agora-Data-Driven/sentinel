@@ -97,7 +97,7 @@ def send_reminders(db: Session) -> dict:
         notif.notify(db, user_id=uid, type="task_overdue",
                      title=f"{n} task{'s' if n != 1 else ''} overdue",
                      body="You have work past its due date. Update or reschedule it.",
-                     link="/tasks", commit=False)
+                     link="/dashboard", commit=False)
         result["overdue_notified"] += 1
 
     # Pending approvals -> managers.

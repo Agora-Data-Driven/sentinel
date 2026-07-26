@@ -87,6 +87,7 @@ Sentinel deploys the same way as Atrium — a container on Cloud Run built by Cl
 - **Task Board** — Trello-style Kanban with drag-and-drop across 7 columns, filters (Client /
   Department / Priority / Assignee), colored label pills, a detail panel with checklist + comments +
   activity log, and **Send to Atrium**. Priority is **AM-only** (server returns 403 otherwise).
+  Lives **embedded in the Dashboard** (no tab of its own; `/tasks` redirects to `/dashboard`).
 - **People** — searchable directory with filters, rich profile cards (attendance, gym, tasks, leave),
   and downloadable QR badges.
 - **Leave** — 5 leave types with balances, request → approval → balance-update flow.

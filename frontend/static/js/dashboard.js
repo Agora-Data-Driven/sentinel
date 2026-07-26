@@ -87,13 +87,8 @@ window.pageInit = async (S) => {
       </div>
     </div>`;
 
-  html += `<div class="card" style="margin-top:18px"><div class="card-head"><h3>My open tasks</h3><a class="btn sm ghost" href="/tasks">View board →</a></div>
-    <div class="card-body">${me.open_tasks.length ? me.open_tasks.map((t) => `
-      <div class="row between" style="padding:9px 0;border-bottom:1px solid var(--line)">
-        <div><div class="labels" style="margin-bottom:3px">${S.labelPills(t.labels)}</div><strong>${S.esc(t.title)}</strong>
-          <div class="sub" style="font-size:12px">${S.esc(t.client_name || "Internal")}</div></div>
-        <div class="row">${S.priorityDot(t.priority)} <span class="pill grey">${S.esc(t.status)}</span></div>
-      </div>`).join("") : '<div class="empty">No open tasks assigned to you.</div>'}</div></div>`;
+  // The full Task Board (its own page until 2026-07-26) now lives here — see taskboard.js.
+  html += `<div id="dash-taskboard"></div>`;
 
   view.innerHTML = html;
 
@@ -104,6 +99,13 @@ window.pageInit = async (S) => {
       SentinelCharts.attendanceTrend(S.qs("#chart-attendance"), ins.attendance_trend);
       SentinelCharts.tasksByStatus(S.qs("#chart-tasks"), ins.tasks_by_status);
     } catch (e) { /* charts are non-critical */ }
+  }
+
+  // Mount the embedded Task Board (filters, views, drag-and-drop, detail drawer, SSE) after the
+  // dashboard paints, so the greeting/KPIs never wait on the board's data.
+  if (window.TaskBoard) {
+    TaskBoard.mount(S, S.qs("#dash-taskboard"))
+      .catch((e) => S.toast(e.detail || "Couldn't load the task board", "err"));
   }
 
   const rb = S.qs("#run-daily");

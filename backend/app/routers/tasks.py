@@ -212,7 +212,7 @@ def create_task(payload: TaskCreateIn, user: User = Depends(get_current_user), d
                  new={"title": task.title, "status": task.status})
     if task.assigned_to_id:
         notif.notify(db, user_id=task.assigned_to_id, type=NOTIF_TASK_ASSIGNED,
-                     title=f"New task assigned: {task.title}", link=f"/tasks?open={task.id}")
+                     title=f"New task assigned: {task.title}", link=f"/dashboard?open={task.id}")
     _broadcast("created", task, user.id)
     return task_detail(task, db)
 
@@ -255,7 +255,7 @@ def update_task(task_id: int, payload: TaskUpdateIn, user: User = Depends(get_cu
     db.commit()
     if task.assigned_to_id and task.assigned_to_id != prev_assignee:
         notif.notify(db, user_id=task.assigned_to_id, type=NOTIF_TASK_ASSIGNED,
-                     title=f"Task assigned to you: {task.title}", link=f"/tasks?open={task.id}")
+                     title=f"Task assigned to you: {task.title}", link=f"/dashboard?open={task.id}")
     _broadcast("updated", task, user.id)
     return task_detail(task, db)
 
@@ -299,7 +299,7 @@ def move_status(task_id: int, payload: TaskStatusIn, user: User = Depends(get_cu
     # Moving into review pings the AM / admins.
     if payload.status == TASK_FOR_REVIEW and task.account_manager_id:
         notif.notify(db, user_id=task.account_manager_id, type=NOTIF_TASK_REVIEW,
-                     title=f"Task ready for review: {task.title}", link=f"/tasks?open={task.id}")
+                     title=f"Task ready for review: {task.title}", link=f"/dashboard?open={task.id}")
     _broadcast("moved", task, user.id)
     return task_detail(task, db)
 
