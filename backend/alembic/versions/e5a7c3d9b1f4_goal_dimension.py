@@ -4,7 +4,7 @@ The Growth hub now organizes goals into four dimensions — spiritual | professi
 physical. Existing rows were all career goals, so they backfill to 'professional'.
 
 Revision ID: e5a7c3d9b1f4
-Revises: c9f2a4b7d1e8
+Revises: d8f4b2c6a9e3
 Create Date: 2026-07-26 10:00:00.000000
 """
 from alembic import op
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 revision = 'e5a7c3d9b1f4'
-down_revision = 'c9f2a4b7d1e8'
+down_revision = 'd8f4b2c6a9e3'
 branch_labels = None
 depends_on = None
 
