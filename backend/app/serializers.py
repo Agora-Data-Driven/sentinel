@@ -378,11 +378,14 @@ def achievement_dict(a: CareerAchievement) -> dict:
 def goal_dict(g: ProfessionalGoal) -> dict:
     return {
         "id": g.id,
+        "dimension": g.dimension or "professional",
         "title": g.title,
         "description": g.description,
         "target_date": _d(g.target_date),
         "status": g.status,
         "progress_pct": g.progress_pct,
+        # created_at lets the hub compute expected-by-today pace against target_date.
+        "created_at": _iso(g.created_at),
     }
 
 

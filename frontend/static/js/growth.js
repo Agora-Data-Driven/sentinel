@@ -1,6 +1,14 @@
-// Development Overview — the holistic hub. Four pillars (Physical / Learning / Career / Reading)
-// plus a growth journal, all editable in place. A manager opens ?user=<id> for a read-only view of
-// a report's profile. The same data feeds the AI coach (the floating "Coach" widget).
+// Development Overview — the holistic hub, organized around FOUR GROWTH DIMENSIONS:
+// Spiritual · Professional · Mental · Physical. Layout, top to bottom:
+//   1. The compass — four progress rings (goal progress per dimension). Each ring carries a
+//      small tick at the "expected by today" position, derived from the goal's created→target
+//      window, so ahead/behind is visible at a glance.
+//   2. The pace band — the same actual-vs-expected, laid on a date track per dimension.
+//   3. Four equal dimension boxes (click to expand). Goals + objectives first, then that
+//      dimension's records as collapsible sub-sections. NOTHING from the old hub was dropped:
+//      Physical → body stats + PRs · Professional → resume, achievements, skills ·
+//      Mental → Academy learning + the book/essay canon · Spiritual → journal + philosophy canon.
+// A manager opens ?user=<id> for a read-only view. The same data feeds the AI coach.
 window.pageInit = async (S) => {
   const view = S.view();
   const esc = S.esc;
@@ -12,7 +20,10 @@ window.pageInit = async (S) => {
   let data = null;
   let courses = null;
 
-  const V = "#3A9A2F";               // green-dark — growth is green; violet stays the Coach's colour
+  // UI state that must survive the full re-render load() does after every save.
+  const openDims = new Set();      // expanded dimension boxes
+  const openSubs = new Set();      // expanded <details> — "dim:sub" and "goal:<id>" keys
+
   const SKILL_LEVELS = ["Beginner", "Intermediate", "Advanced"];
   const SKILL_SOURCES = [
     { v: "project", t: "Project experience" },
@@ -23,45 +34,117 @@ window.pageInit = async (S) => {
   ];
   const srcLabel = (v) => (SKILL_SOURCES.find((s) => s.v === v) || {}).t || v;
 
-  // A tiny dependency-free progress ring.
-  function ring(pct, color) {
-    pct = Math.max(0, Math.min(100, Math.round(pct || 0)));
-    const r = 26, c = 2 * Math.PI * r, off = c * (1 - pct / 100);
-    return `<svg width="68" height="68" viewBox="0 0 68 68" style="flex:none">
-      <circle cx="34" cy="34" r="${r}" fill="none" stroke="var(--line)" stroke-width="7"/>
-      <circle cx="34" cy="34" r="${r}" fill="none" stroke="${color}" stroke-width="7" stroke-linecap="round"
-        stroke-dasharray="${c.toFixed(1)}" stroke-dashoffset="${off.toFixed(1)}" transform="rotate(-90 34 34)"/>
-      <text x="34" y="38" text-anchor="middle" font-size="15" font-weight="800" fill="var(--text)">${pct}%</text></svg>`;
+  // The four dimensions. Hues live in styles.css as --dim-<key> so dark mode can retune them.
+  const DIMS = [
+    { key: "spiritual", name: "Spiritual", icon: "flame", blurb: "Character & inner life" },
+    { key: "professional", name: "Professional", icon: "target", blurb: "Craft & career" },
+    { key: "mental", name: "Mental", icon: "cap", blurb: "Learning & mind" },
+    { key: "physical", name: "Physical", icon: "heart", blurb: "Body & training" },
+  ];
+  const DIM_KEYS = DIMS.map((d) => d.key);
+  // Legacy rows predate `dimension` — anything unknown reads as professional (the old scope).
+  const dimOf = (g) => (DIM_KEYS.includes(g.dimension) ? g.dimension : "professional");
+  const goalsFor = (key) => (data.career.goals || []).filter((g) => dimOf(g) === key);
+  const dimName = (key) => (DIMS.find((d) => d.key === key) || {}).name || key;
+
+  // --- progress + pace math ---------------------------------------------------
+  // Actual = avg progress of the dimension's ACTIVE goals; all-done ⇒ 100; no goals ⇒ null.
+  function dimActual(key) {
+    const gs = goalsFor(key);
+    const act = gs.filter((g) => g.status === "active");
+    if (act.length) return act.reduce((a, g) => a + (g.progress_pct || 0), 0) / act.length;
+    if (gs.length && gs.some((g) => g.status === "done")) return 100;
+    return null;
   }
 
-  // One facet of the pillars instrument: a mono label, a big Inter value, and (for progress facets)
-  // a thin green meter along the base. Four of these in one card read as a single measure.
-  function facet(icon, label, val, sub, meterPct, href) {
-    const meter = meterPct != null
-      ? `<div class="f-meter"><i style="width:${Math.max(0, Math.min(100, Math.round(meterPct)))}%"></i></div>` : "";
-    const tag = href ? "a" : "div";
-    return `<${tag} ${href ? `href="${href}"` : ""} class="dev-facet">
-      <div class="f-label">${icon}${label}</div>
-      <div class="f-val">${val}</div>
-      <div class="f-sub">${sub}</div>${meter}</${tag}>`;
+  // Expected-by-today for one goal: linear from created_at → target_date. Null when undated.
+  function goalExpected(g) {
+    if (!g.target_date || !g.created_at || g.status !== "active") return null;
+    const start = new Date(g.created_at).getTime();
+    const end = new Date(g.target_date + "T23:59:59").getTime();
+    if (!(end > start)) return 100;
+    return Math.max(0, Math.min(100, ((Date.now() - start) / (end - start)) * 100));
   }
 
-  function courseCount() {
-    if (!courses) return 0;
-    const list = courses.programs || courses.courses || [];
-    return Array.isArray(list) ? list.length : 0;
+  function dimExpected(key) {
+    const es = goalsFor(key).map(goalExpected).filter((e) => e != null);
+    if (!es.length) return null;
+    return es.reduce((a, b) => a + b, 0) / es.length;
   }
 
-  function goalAvg() {
-    const gs = (data.career.goals || []).filter((g) => g.status === "active");
-    if (!gs.length) return 0;
-    return gs.reduce((a, g) => a + (g.progress_pct || 0), 0) / gs.length;
+  // The shared ahead/behind verdict: within ±2 points reads as "on pace".
+  function paceChip(actual, expected) {
+    if (actual == null || expected == null) return "";
+    const d = Math.round(actual - expected);
+    if (Math.abs(d) <= 2) return `<span class="pace-chip on">on pace</span>`;
+    return d > 0
+      ? `<span class="pace-chip ahead">▲ ${d} ahead</span>`
+      : `<span class="pace-chip behind">▼ ${Math.abs(d)} behind</span>`;
   }
 
-  function readingPct() {
-    const r = data.reading || [];
-    if (!r.length) return 0;
-    return (r.filter((x) => x.progress.status === "done").length / r.length) * 100;
+  // Date window a dimension is pacing against: earliest active-goal start → latest target.
+  function dimWindow(key) {
+    const gs = goalsFor(key).filter((g) => g.status === "active" && g.target_date && g.created_at);
+    if (!gs.length) return null;
+    const start = gs.map((g) => g.created_at.slice(0, 10)).sort()[0];
+    const end = gs.map((g) => g.target_date).sort().slice(-1)[0];
+    return { start, end };
+  }
+
+  // --- the compass ring: actual arc + expected-today tick ----------------------
+  function ringSvg(actual, expected) {
+    const size = 92, r = 37, c = 2 * Math.PI * r, cx = size / 2;
+    if (actual == null) {
+      return `<svg class="dc-ring" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" aria-hidden="true">
+        <circle cx="${cx}" cy="${cx}" r="${r}" fill="none" stroke="var(--line)" stroke-width="7" stroke-dasharray="2 5"/>
+        <text x="${cx}" y="${cx + 6}" text-anchor="middle" font-size="19" font-weight="800" fill="var(--muted)">—</text></svg>`;
+    }
+    const pct = Math.max(0, Math.min(100, Math.round(actual)));
+    const off = c * (1 - pct / 100);
+    const tick = expected == null ? "" :
+      `<line x1="${cx}" y1="${cx - r - 6}" x2="${cx}" y2="${cx - r + 7}" stroke="var(--ink)" stroke-width="2"
+        stroke-linecap="round" transform="rotate(${(expected * 3.6).toFixed(1)} ${cx} ${cx})" opacity=".85"/>`;
+    return `<svg class="dc-ring" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" aria-hidden="true">
+      <circle cx="${cx}" cy="${cx}" r="${r}" fill="none" stroke="var(--line)" stroke-width="7"/>
+      <circle cx="${cx}" cy="${cx}" r="${r}" fill="none" stroke="var(--hue)" stroke-width="7" stroke-linecap="round"
+        stroke-dasharray="${c.toFixed(1)}" stroke-dashoffset="${off.toFixed(1)}" transform="rotate(-90 ${cx} ${cx})"/>
+      ${tick}
+      <text x="${cx}" y="${cx + 6}" text-anchor="middle" font-size="19" font-weight="800" fill="var(--text)">${pct}%</text></svg>`;
+  }
+
+  function ringCell(d) {
+    const actual = dimActual(d.key), expected = dimExpected(d.key);
+    const active = goalsFor(d.key).filter((g) => g.status === "active").length;
+    const sub = actual == null
+      ? "no goal set"
+      : `${active} active goal${active === 1 ? "" : "s"}`;
+    return `<button class="dim-cell" data-goto-dim="${d.key}" style="--hue:var(--dim-${d.key})" title="Open ${esc(d.name)}">
+      <span class="dc-label">${S.ICON[d.icon]}${esc(d.name)}</span>
+      ${ringSvg(actual, expected)}
+      <span class="dc-sub">${esc(sub)}</span>
+      <span class="dc-chip">${paceChip(actual, expected) || (actual == null && !readOnly ? '<span class="pace-chip none">+ set one</span>' : "")}</span>
+    </button>`;
+  }
+
+  // --- the pace band: actual vs where-the-calendar-says per dimension ----------
+  function paceRow(d) {
+    const actual = dimActual(d.key), expected = dimExpected(d.key);
+    const win = dimWindow(d.key);
+    const fill = actual == null ? 0 : Math.max(0, Math.min(100, actual));
+    const tick = expected == null ? "" : `<b class="pr-tick" style="left:${expected.toFixed(1)}%" title="Where you should be today"></b>`;
+    const right = actual == null
+      ? `<span class="pr-note">no active goals</span>`
+      : expected == null
+        ? `<span class="pr-note">no target date</span>`
+        : paceChip(actual, expected);
+    const dates = win
+      ? `<div class="pr-dates"><span>${esc(win.start)}</span><span>target ${esc(win.end)}</span></div>`
+      : "";
+    return `<div class="pace-row" style="--hue:var(--dim-${d.key})">
+      <span class="pr-name">${S.ICON[d.icon]}${esc(d.name)}</span>
+      <div class="pr-lane"><div class="pr-track"><i style="width:${fill.toFixed(1)}%"></i>${tick}</div>${dates}</div>
+      <span class="pr-delta">${right}</span>
+    </div>`;
   }
 
   // --- generic form modal ---------------------------------------------------
@@ -90,129 +173,207 @@ window.pageInit = async (S) => {
 
   const num = (v) => (v === "" || v == null ? null : Number(v));
 
-  // --- pillar renderers -----------------------------------------------------
-  function physicalCard() {
+  // --- goals ------------------------------------------------------------------
+  // A goal's description doubles as its OBJECTIVES: lines starting with "-", "•" or "*" render
+  // as a checklist; anything else stays prose. That keeps objectives free-form and durable.
+  function objectivesHtml(desc) {
+    if (!desc) return "";
+    const lines = String(desc).split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    const items = [], prose = [];
+    lines.forEach((l) => {
+      const m = l.match(/^[-•*]\s+(.*)$/);
+      if (m) items.push(m[1]); else prose.push(l);
+    });
+    return (prose.length ? `<div class="goal-desc">${prose.map(esc).join("<br>")}</div>` : "")
+      + (items.length ? `<div class="section-label" style="margin:8px 0 4px">Objectives</div>
+         <ul class="goal-objectives">${items.map((o) => `<li>${esc(o)}</li>`).join("")}</ul>` : "");
+  }
+
+  function goalItem(g) {
+    const expected = goalExpected(g);
+    const pct = Math.max(0, Math.min(100, g.progress_pct || 0));
+    const key = `goal:${g.id}`;
+    const tick = expected == null ? "" : `<b class="pr-tick" style="left:${expected.toFixed(1)}%"></b>`;
+    return `<details class="goal-item" data-ui="${key}" ${openSubs.has(key) ? "open" : ""}>
+      <summary>
+        <span class="gi-title">${esc(g.title)}</span>
+        <span class="pill ${g.status === "done" ? "green" : g.status === "paused" ? "amber" : ""}">${esc(g.status)}</span>
+        <span class="gi-pct">${pct}%</span>
+        ${S.ICON.chev}
+      </summary>
+      <div class="gi-body">
+        <div class="pr-track gi-bar"><i style="width:${pct}%"></i>${tick}</div>
+        <div class="gi-meta">
+          ${g.target_date ? `Target ${esc(g.target_date)}` : "No target date"}
+          ${expected != null ? ` · by today you should be at <strong>${Math.round(expected)}%</strong> ` + paceChip(g.progress_pct || 0, expected) : ""}
+        </div>
+        ${objectivesHtml(g.description)}
+        ${readOnly ? "" : `<div class="row" style="gap:10px;margin-top:8px"><a href="#" class="linky" data-edit-goal="${g.id}">edit</a><a href="#" class="linky danger" data-del-goal="${g.id}">delete</a></div>`}
+      </div>
+    </details>`;
+  }
+
+  function goalsBlock(dimKey) {
+    const gs = goalsFor(dimKey);
+    return `<div class="section-label" style="margin-bottom:6px">Goals ${readOnly ? "" : `<a href="#" class="linky" data-add-goal="${dimKey}">+ add</a>`}</div>
+      ${gs.length ? gs.map(goalItem).join("")
+        : `<div class="empty">No ${esc(dimName(dimKey).toLowerCase())} goals yet.${readOnly ? "" : " Add one to start the ring."}</div>`}`;
+  }
+
+  // --- collapsible record sub-sections (everything the old hub showed) ---------
+  function sub(dimKey, id, label, inner, headExtra) {
+    const key = `${dimKey}:${id}`;
+    return `<details class="dim-sub" data-ui="${key}" ${openSubs.has(key) ? "open" : ""}>
+      <summary><span>${esc(label)}</span><span class="ds-right">${headExtra || ""}${S.ICON.chev}</span></summary>
+      <div class="ds-body">${inner}</div>
+    </details>`;
+  }
+
+  function physicalSubs() {
     const p = data.physical;
     const latest = p.latest;
     const prs = p.prs || [];
     const bf = latest && latest.body_fat_pct != null ? `${latest.body_fat_pct}%` : "—";
     const wt = latest && latest.weight_kg != null ? `${latest.weight_kg} kg` : "—";
-    const controls = readOnly ? "" : `<button class="btn sm ghost" id="add-metric">${S.ICON.plus}Log body stats</button>`;
-    return `<div class="card">
-      <div class="card-head"><h3>${S.ICON.heart}Physical</h3>${controls}</div>
-      <div class="card-body">
-        <div class="spread" style="margin-bottom:14px">
-          <div class="stat"><div class="section-label">Body fat</div><strong style="font-size:22px">${bf}</strong></div>
-          <div class="stat"><div class="section-label">Weight</div><strong style="font-size:22px">${wt}</strong></div>
-          <div class="stat"><div class="section-label">As of</div><strong style="font-size:15px">${latest ? esc(latest.date) : "—"}</strong></div>
-        </div>
-        <div class="section-label" style="margin-bottom:8px">Personal records ${readOnly ? "" : `<a href="#" id="add-pr" class="linky">+ add</a>`}</div>
-        ${prs.length ? `<div class="pr-list">${prs.map((r) => `
-          <div class="row between pr-row" style="padding:7px 0;border-top:1px solid var(--line)">
-            <div><strong>${esc(r.exercise_name)}</strong> <span class="muted">${esc(r.display || "")}</span></div>
-            ${readOnly ? "" : `<div class="row"><a href="#" class="linky" data-edit-pr="${r.id}">edit</a><a href="#" class="linky danger" data-del-pr="${r.id}">delete</a></div>`}
-          </div>`).join("")}</div>` : '<div class="empty">No PRs logged yet.</div>'}
-      </div></div>`;
+    const stats = `<div class="spread" style="margin-bottom:10px">
+        <div class="stat"><div class="section-label">Body fat</div><strong style="font-size:22px">${bf}</strong></div>
+        <div class="stat"><div class="section-label">Weight</div><strong style="font-size:22px">${wt}</strong></div>
+        <div class="stat"><div class="section-label">As of</div><strong style="font-size:15px">${latest ? esc(latest.date) : "—"}</strong></div>
+      </div>
+      ${readOnly ? "" : `<button class="btn sm ghost" id="add-metric">${S.ICON.plus}Log body stats</button>`}`;
+    const prList = prs.length ? `<div class="pr-list">${prs.map((r) => `
+        <div class="row between pr-row" style="padding:7px 0;border-top:1px solid var(--line)">
+          <div><strong>${esc(r.exercise_name)}</strong> <span class="muted">${esc(r.display || "")}</span></div>
+          ${readOnly ? "" : `<div class="row"><a href="#" class="linky" data-edit-pr="${r.id}">edit</a><a href="#" class="linky danger" data-del-pr="${r.id}">delete</a></div>`}
+        </div>`).join("")}</div>` : '<div class="empty">No PRs logged yet.</div>';
+    return sub("physical", "stats", "Body stats", stats, `<span class="ds-hint">${bf} · ${wt}</span>`)
+      + sub("physical", "prs", "Personal records", `${readOnly ? "" : `<div style="margin-bottom:6px"><a href="#" id="add-pr" class="linky">+ add</a></div>`}${prList}`,
+          `<span class="ds-hint">${prs.length}</span>`);
   }
 
-  function careerCard() {
+  function professionalSubs() {
     const c = data.career;
     const prof = c.profile || {};
     const ach = c.achievements || [];
-    const goals = c.goals || [];
+    const skills = data.skills || [];
     const resumeBlock = readOnly
       ? `<div class="section-label">Headline</div><div style="margin-bottom:8px">${esc(prof.headline || "—")}</div>
          <div class="section-label">Resume</div><div class="prewrap muted">${esc(prof.resume_text || "—")}</div>`
       : `<label class="field"><span>Headline</span><input id="hl" value="${esc(prof.headline || "")}" placeholder="e.g. Aspiring backend engineer"></label>
          <label class="field"><span>Resume / bio</span><textarea id="rz" rows="5" placeholder="Paste your resume or a career summary…">${esc(prof.resume_text || "")}</textarea></label>
          <div class="row" style="justify-content:flex-end"><button class="btn sm primary" id="save-resume">Save resume</button></div>`;
-    return `<div class="card">
-      <div class="card-head"><h3>${S.ICON.target}Career</h3></div>
-      <div class="card-body">
-        ${resumeBlock}
-        <div class="section-label" style="margin:14px 0 8px">Goals ${readOnly ? "" : `<a href="#" id="add-goal" class="linky">+ add</a>`}</div>
-        ${goals.length ? goals.map((g) => `
-          <div class="goal" style="border-top:1px solid var(--line);padding:9px 0">
-            <div class="row between"><div><strong>${esc(g.title)}</strong> <span class="pill ${g.status === "done" ? "green" : g.status === "paused" ? "amber" : ""}">${esc(g.status)}</span></div>
-              ${readOnly ? "" : `<div class="row"><a href="#" class="linky" data-edit-goal="${g.id}">edit</a><a href="#" class="linky danger" data-del-goal="${g.id}">delete</a></div>`}</div>
-            <div class="bar" style="height:7px;background:var(--line);border-radius:99px;margin-top:6px;overflow:hidden"><span style="display:block;height:100%;width:${g.progress_pct || 0}%;background:${V}"></span></div>
-            ${g.target_date ? `<div class="sub" style="margin-top:4px">Target ${esc(g.target_date)}</div>` : ""}
-          </div>`).join("") : '<div class="empty">No goals yet.</div>'}
-        <div class="section-label" style="margin:14px 0 8px">Achievements ${readOnly ? "" : `<a href="#" id="add-ach" class="linky">+ add</a>`}</div>
-        ${ach.length ? `<ul class="tickitems">${ach.map((a) => `<li style="padding:6px 0;display:block">
-          <div class="row between"><span>${S.ICON.check}${esc(a.title)}${a.achieved_on ? ` <span class="muted">· ${esc(a.achieved_on)}</span>` : ""}</span>${readOnly ? "" : `<a href="#" class="linky danger" data-del-ach="${a.id}">delete</a>`}</div>
-          ${a.description ? `<div class="sub" style="margin-left:23px">${esc(a.description)}</div>` : ""}</li>`).join("")}</ul>` : '<div class="empty">No achievements yet.</div>'}
-      </div></div>`;
-  }
-
-  function skillsCard() {
-    const skills = data.skills || [];
-    // Group by source so "project experience" reads distinctly from engine-practised.
+    const achList = ach.length ? `<ul class="tickitems">${ach.map((a) => `<li style="padding:6px 0;display:block">
+        <div class="row between"><span>${S.ICON.check}${esc(a.title)}${a.achieved_on ? ` <span class="muted">· ${esc(a.achieved_on)}</span>` : ""}</span>${readOnly ? "" : `<a href="#" class="linky danger" data-del-ach="${a.id}">delete</a>`}</div>
+        ${a.description ? `<div class="sub" style="margin-left:23px">${esc(a.description)}</div>` : ""}</li>`).join("")}</ul>` : '<div class="empty">No achievements yet.</div>';
+    // Group skills by source so "project experience" reads distinctly from engine-practised.
     const groups = {};
     skills.forEach((s) => { (groups[s.source] = groups[s.source] || []).push(s); });
     const order = SKILL_SOURCES.map((s) => s.v).filter((v) => groups[v]);
-    return `<div class="card">
-      <div class="card-head"><h3>${S.ICON.target}Skills</h3>${readOnly ? "" : `<button class="btn sm ghost" id="add-skill">${S.ICON.plus}Add skill</button>`}</div>
-      <div class="card-body">
-        <div class="sub" style="margin-bottom:8px">What you can already do, including skills you proved on real projects, not just in the Academy. Your coach uses these.</div>
-        ${skills.length ? order.map((src) => `
-          <div style="margin-bottom:10px">
-            <div class="section-label" style="margin-bottom:6px">${esc(srcLabel(src))}</div>
-            <div class="row wrap" style="gap:6px">${groups[src].map((s) => `
-              <span class="chip" style="cursor:${readOnly ? "default" : "pointer"}" ${readOnly ? "" : `data-edit-skill="${s.id}"`} title="${esc(s.level)}${s.note ? " · " + esc(s.note) : ""}">
-                ${esc(s.name)} <span class="muted" style="font-size:11px">${esc(s.level)}</span>
-                ${readOnly ? "" : `<a href="#" class="linky danger" data-del-skill="${s.id}" style="margin-left:4px">✕</a>`}</span>`).join("")}</div>
-          </div>`).join("") : '<div class="empty">No skills listed yet.</div>'}
-      </div></div>`;
+    const skillsInner = `<div class="sub" style="margin-bottom:8px">What you can already do, including skills you proved on real projects, not just in the Academy. Your coach uses these.</div>
+      ${readOnly ? "" : `<div style="margin-bottom:8px"><a href="#" id="add-skill" class="linky">+ add skill</a></div>`}
+      ${skills.length ? order.map((src) => `
+        <div style="margin-bottom:10px">
+          <div class="section-label" style="margin-bottom:6px">${esc(srcLabel(src))}</div>
+          <div class="row wrap" style="gap:6px">${groups[src].map((s) => `
+            <span class="chip" style="cursor:${readOnly ? "default" : "pointer"}" ${readOnly ? "" : `data-edit-skill="${s.id}"`} title="${esc(s.level)}${s.note ? " · " + esc(s.note) : ""}">
+              ${esc(s.name)} <span class="muted" style="font-size:11px">${esc(s.level)}</span>
+              ${readOnly ? "" : `<a href="#" class="linky danger" data-del-skill="${s.id}" style="margin-left:4px">✕</a>`}</span>`).join("")}</div>
+        </div>`).join("") : '<div class="empty">No skills listed yet.</div>'}`;
+    return sub("professional", "profile", "Career profile", resumeBlock,
+        prof.headline ? `<span class="ds-hint">${esc(prof.headline)}</span>` : "")
+      + sub("professional", "achievements", "Achievements", `${readOnly ? "" : `<div style="margin-bottom:6px"><a href="#" id="add-ach" class="linky">+ add</a></div>`}${achList}`,
+          `<span class="ds-hint">${ach.length}</span>`)
+      + sub("professional", "skills", "Skills", skillsInner, `<span class="ds-hint">${skills.length}</span>`);
   }
 
-  function readingCard() {
-    const r = data.reading || [];
-    const now = r.filter((x) => x.progress.status === "reading");
-    const done = r.filter((x) => x.progress.status === "done");
-    return `<div class="card">
-      <div class="card-head"><h3>${S.ICON.book}Reading &amp; Philosophy</h3><a href="/reading" class="btn sm ghost">Open</a></div>
-      <div class="card-body">
-        <div class="sub" style="margin-bottom:8px">${done.length}/${r.length} of the canon complete${now.length ? ` · reading ${now.length}` : ""}.</div>
-        ${now.length ? `<div class="section-label">Reading now</div><ul class="tickitems">${now.map((x) => `<li>${S.ICON.book}${esc(x.title)}</li>`).join("")}</ul>` : '<div class="empty">Nothing in progress. Open the canon to start.</div>'}
-      </div></div>`;
+  function mentalSubs() {
+    // Books + essays live here; philosophy items belong to the Spiritual dimension below.
+    const canon = (data.reading || []).filter((x) => x.kind !== "philosophy");
+    const now = canon.filter((x) => x.progress.status === "reading");
+    const done = canon.filter((x) => x.progress.status === "done");
+    const readingInner = `<div class="sub" style="margin-bottom:8px">${done.length}/${canon.length} of the canon complete${now.length ? ` · reading ${now.length}` : ""}. <a class="linky" href="/reading">Open the canon</a></div>
+      ${now.length ? `<div class="section-label">Reading now</div><ul class="tickitems">${now.map((x) => `<li>${S.ICON.book}${esc(x.title)}${x.author ? ` <span class="muted">· ${esc(x.author)}</span>` : ""}</li>`).join("")}</ul>`
+        : '<div class="empty">Nothing in progress. Open the canon to start.</div>'}`;
+    let out = "";
+    if (!readOnly) {  // enrollment progress is the viewer's, not the target's
+      const list = courses ? (courses.programs || courses.courses || []) : [];
+      const n = Array.isArray(list) ? list.length : 0;
+      out += sub("mental", "learning", "Learning · Academy",
+        `<div class="sub">${n ? `You're enrolled in ${n} course${n === 1 ? "" : "s"}. Keep your streak going in the Academy.` : "Your Academy courses and today's assignment live in the Academy tab."} <a class="linky" href="/academy">Open Academy</a></div>`,
+        n ? `<span class="ds-hint">${n} course${n === 1 ? "" : "s"}</span>` : "");
+    }
+    out += sub("mental", "reading", "Reading — books & essays", readingInner,
+      `<span class="ds-hint">${done.length}/${canon.length}</span>`);
+    return out;
   }
 
-  function learningCard() {
-    if (readOnly) return "";  // enrollment progress is the viewer's, not the target's
-    const n = courseCount();
-    return `<div class="card">
-      <div class="card-head"><h3>${S.ICON.cap}Learning</h3><a href="/academy" class="btn sm ghost">Open Academy</a></div>
-      <div class="card-body"><div class="sub">${n ? `You're enrolled in ${n} course${n === 1 ? "" : "s"}. Keep your streak going in the Academy.` : "Your Academy courses and today's assignment live in the Academy tab."}</div></div></div>`;
-  }
-
-  function journalCard() {
+  function spiritualSubs() {
     const items = data.growth || [];
-    return `<div class="card">
-      <div class="card-head"><h3>${S.ICON.sparkle}Growth journal</h3>${readOnly ? "" : `<button class="btn sm ghost" id="add-growth">${S.ICON.plus}Add</button>`}</div>
-      <div class="card-body">
-        <div class="sub" style="margin-bottom:8px">Obstacles you're working through and reflections. Your coach reads these to help.</div>
-        ${items.length ? items.map((g) => `
-          <div class="row between" style="border-top:1px solid var(--line);padding:8px 0">
-            <div><span class="pill ${g.kind === "obstacle" ? "amber" : ""}">${esc(g.kind)}</span> <strong>${esc(g.title)}</strong>${g.detail ? `<div class="sub">${esc(g.detail)}</div>` : ""}</div>
-            ${readOnly ? "" : `<a href="#" class="linky danger" data-del-growth="${g.id}">delete</a>`}
-          </div>`).join("") : '<div class="empty">Nothing yet.</div>'}
-      </div></div>`;
+    const journalInner = `<div class="sub" style="margin-bottom:8px">Obstacles you're working through and reflections. Your coach reads these to help.</div>
+      ${readOnly ? "" : `<div style="margin-bottom:6px"><a href="#" id="add-growth" class="linky">+ add</a></div>`}
+      ${items.length ? items.map((g) => `
+        <div class="row between" style="border-top:1px solid var(--line);padding:8px 0">
+          <div><span class="pill ${g.kind === "obstacle" ? "amber" : ""}">${esc(g.kind)}</span> <strong>${esc(g.title)}</strong>${g.detail ? `<div class="sub">${esc(g.detail)}</div>` : ""}</div>
+          ${readOnly ? "" : `<a href="#" class="linky danger" data-del-growth="${g.id}">delete</a>`}
+        </div>`).join("") : '<div class="empty">Nothing yet.</div>'}`;
+    const phil = (data.reading || []).filter((x) => x.kind === "philosophy");
+    const philDone = phil.filter((x) => x.progress.status === "done");
+    const philInner = phil.length ? `<ul class="tickitems">${phil.map((x) => `
+        <li style="display:block;padding:5px 0"><div class="row between">
+          <span>${S.ICON.book}${esc(x.title)}${x.author ? ` <span class="muted">· ${esc(x.author)}</span>` : ""}</span>
+          <span class="pill ${x.progress.status === "done" ? "green" : x.progress.status === "reading" ? "amber" : ""}">${esc(x.progress.status.replace("_", " "))}</span>
+        </div></li>`).join("")}</ul>
+        <div class="sub" style="margin-top:6px"><a class="linky" href="/reading">Open the canon</a></div>`
+      : '<div class="empty">No philosophies in the canon yet.</div>';
+    let out = sub("spiritual", "journal", "Growth journal", journalInner,
+      `<span class="ds-hint">${items.length}</span>`);
+    if (phil.length || !readOnly)
+      out += sub("spiritual", "philosophy", "Philosophy", philInner,
+        phil.length ? `<span class="ds-hint">${philDone.length}/${phil.length}</span>` : "");
+    return out;
   }
 
+  const SUBS = { spiritual: spiritualSubs, professional: professionalSubs, mental: mentalSubs, physical: physicalSubs };
+
+  // --- one dimension box --------------------------------------------------------
+  function dimBox(d) {
+    const gs = goalsFor(d.key);
+    const active = gs.filter((g) => g.status === "active");
+    const top = active[0] || gs[0];
+    const open = openDims.has(d.key);
+    const peek = top
+      ? `<div class="dp-goal">${esc(top.title)}</div>
+         <div class="pr-track dp-bar"><i style="width:${Math.max(0, Math.min(100, top.progress_pct || 0))}%"></i></div>`
+      : `<div class="dp-goal muted">${readOnly ? "No goals yet." : "No goals yet — set one to start the ring."}</div>`;
+    return `<section class="dim-box ${open ? "open" : ""}" id="dim-${d.key}" style="--hue:var(--dim-${d.key});--hue-bg:var(--dim-${d.key}-bg)">
+      <button class="dim-head" data-toggle-dim="${d.key}" aria-expanded="${open}">
+        <span class="dim-glyph">${S.ICON[d.icon]}</span>
+        <span class="dim-title"><strong>${esc(d.name)}</strong><small>${esc(d.blurb)}</small></span>
+        <span class="dim-head-right">
+          <span class="dim-count">${active.length ? `${active.length} active` : gs.length ? `${gs.length} goal${gs.length === 1 ? "" : "s"}` : ""}</span>
+          ${S.ICON.chev}
+        </span>
+      </button>
+      <div class="dim-peek">${peek}</div>
+      <div class="dim-body">
+        ${goalsBlock(d.key)}
+        <div class="dim-records">${SUBS[d.key]()}</div>
+      </div>
+    </section>`;
+  }
+
+  // --- page render ----------------------------------------------------------------
   function render() {
     const who = readOnly && data.user ? esc(data.user.name.split(" ")[0]) + "’s growth" : "Your growth";
     const eyebrow = readOnly && data.user ? "Development · " + esc(data.user.name) : "Development · Overview";
-    const bf = data.physical.latest && data.physical.latest.body_fat_pct != null;
     const asOf = data.physical.latest ? esc(data.physical.latest.date) : new Date().toISOString().slice(0, 10);
-    const goal = Math.round(goalAvg()), read = Math.round(readingPct());
 
     view.innerHTML = `<div class="dev">
       <div class="dev-mast">
         <div>
           <div class="dev-eyebrow">${eyebrow}</div>
           <h1>${who}</h1>
-          <div class="lede">Everything you're becoming, in one place: body, mind, craft, and character.</div>
+          <div class="lede">Four dimensions of everything you're becoming: spirit, craft, mind, and body.</div>
         </div>
         <div class="dev-mast-right">
           ${readOnly ? "" : `<button class="btn primary dev-coach" id="ask-coach">${S.ICON.sparkle}Ask your coach</button>`}
@@ -220,26 +381,45 @@ window.pageInit = async (S) => {
         </div>
       </div>
 
-      <div class="dev-pillars">
-        ${facet(S.ICON.heart, "Physical", bf ? `${data.physical.latest.body_fat_pct}<span style="font-size:16px">%</span>` : "—",
-          "body fat" + (data.physical.latest && data.physical.latest.weight_kg != null ? ` · ${data.physical.latest.weight_kg} kg` : ""), null)}
-        ${readOnly ? "" : facet(S.ICON.cap, "Learning", `${courseCount()}`, "courses enrolled", null, "/academy")}
-        ${facet(S.ICON.target, "Career", `${goal}<span style="font-size:16px">%</span>`, "avg goal progress", goal)}
-        ${facet(S.ICON.book, "Reading", `${read}<span style="font-size:16px">%</span>`, "of the canon", read, "/reading")}
+      <div class="dim-rings">${DIMS.map(ringCell).join("")}</div>
+
+      <div class="dim-pace">
+        <div class="dim-pace-head">Pace — where you are vs where the calendar says <span class="pace-key"><b class="pr-tick demo"></b> = expected today</span></div>
+        ${DIMS.map(paceRow).join("")}
       </div>
 
-      <div class="dev-cols" style="display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start">
-        <div style="display:flex;flex-direction:column;gap:16px">${physicalCard()}${readingCard()}${learningCard()}</div>
-        <div style="display:flex;flex-direction:column;gap:16px">${careerCard()}${skillsCard()}${journalCard()}</div>
-      </div>
+      <div class="dim-grid">${DIMS.map(dimBox).join("")}</div>
     </div>`;
 
-    if (window.matchMedia("(max-width:900px)").matches) S.qs(".dev-cols").style.gridTemplateColumns = "1fr";
     wire();
   }
 
   // --- wiring ---------------------------------------------------------------
+  function toggleDim(key, forceOpen) {
+    const box = S.qs(`#dim-${key}`);
+    if (!box) return;
+    const willOpen = forceOpen != null ? forceOpen : !openDims.has(key);
+    if (willOpen) openDims.add(key); else openDims.delete(key);
+    box.classList.toggle("open", willOpen);
+    const head = box.querySelector(".dim-head");
+    if (head) head.setAttribute("aria-expanded", String(willOpen));
+  }
+
   function wire() {
+    // Expand/collapse works in both modes; edits only when it's your own profile.
+    S.qsa("[data-toggle-dim]").forEach((b) => b.onclick = () => toggleDim(b.dataset.toggleDim));
+    S.qsa("[data-goto-dim]").forEach((b) => b.onclick = () => {
+      const key = b.dataset.gotoDim;
+      toggleDim(key, true);
+      const box = S.qs(`#dim-${key}`);
+      const smooth = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      if (box) box.scrollIntoView({ behavior: smooth ? "smooth" : "auto", block: "start" });
+    });
+    // Remember which record sub-sections / goal cards are open across re-renders.
+    S.qsa("details[data-ui]").forEach((dt) => dt.addEventListener("toggle", () => {
+      if (dt.open) openSubs.add(dt.dataset.ui); else openSubs.delete(dt.dataset.ui);
+    }));
+
     if (readOnly) return;
     const ac = S.qs("#ask-coach"); if (ac) ac.onclick = () => (window.SentinelOpenCoach ? window.SentinelOpenCoach() : S.toast("Coach isn't configured", "err"));
 
@@ -258,7 +438,7 @@ window.pageInit = async (S) => {
       catch (e) { S.toast(e.detail || "Couldn't save", "err"); }
     };
 
-    const ag = S.qs("#add-goal"); if (ag) ag.onclick = (e) => { e.preventDefault(); goalForm(); };
+    S.qsa("[data-add-goal]").forEach((a) => a.onclick = (e) => { e.preventDefault(); goalForm(null, a.dataset.addGoal); });
     S.qsa("[data-edit-goal]").forEach((a) => a.onclick = (e) => { e.preventDefault(); goalForm(data.career.goals.find((g) => g.id == a.dataset.editGoal)); });
     S.qsa("[data-del-goal]").forEach((a) => a.onclick = (e) => { e.preventDefault(); del(`/api/development/goals/${a.dataset.delGoal}`); });
 
@@ -269,18 +449,18 @@ window.pageInit = async (S) => {
     ], (o) => api("/api/development/achievements", { method: "POST", body: { title: o.title, description: o.description || null, achieved_on: o.achieved_on || null } })); };
     S.qsa("[data-del-ach]").forEach((a) => a.onclick = (e) => { e.preventDefault(); del(`/api/development/achievements/${a.dataset.delAch}`); });
 
-    const ask = S.qs("#add-skill"); if (ask) ask.onclick = () => skillForm();
+    const ask = S.qs("#add-skill"); if (ask) ask.onclick = (e) => { e.preventDefault(); skillForm(); };
     S.qsa("[data-edit-skill]").forEach((el) => el.onclick = (e) => {
       if (e.target.closest("[data-del-skill]")) return;  // let the ✕ handle its own click
       e.preventDefault(); skillForm((data.skills || []).find((s) => s.id == el.dataset.editSkill));
     });
     S.qsa("[data-del-skill]").forEach((a) => a.onclick = (e) => { e.preventDefault(); e.stopPropagation(); del(`/api/development/skills/${a.dataset.delSkill}`); });
 
-    const agr = S.qs("#add-growth"); if (agr) agr.onclick = () => formModal("Add to journal", [
+    const agr = S.qs("#add-growth"); if (agr) agr.onclick = (e) => { e.preventDefault(); formModal("Add to journal", [
       { name: "kind", label: "Kind", type: "select", value: "reflection", options: [{ v: "reflection", t: "Reflection" }, { v: "obstacle", t: "Obstacle" }, { v: "note", t: "Note" }] },
       { name: "title", label: "Title", ph: "What's on your mind?" },
       { name: "detail", label: "Detail", type: "textarea" },
-    ], (o) => api("/api/development/growth", { method: "POST", body: { kind: o.kind, title: o.title, detail: o.detail } }));
+    ], (o) => api("/api/development/growth", { method: "POST", body: { kind: o.kind, title: o.title, detail: o.detail } })); };
     S.qsa("[data-del-growth]").forEach((a) => a.onclick = (e) => { e.preventDefault(); del(`/api/development/growth/${a.dataset.delGrowth}`); });
   }
 
@@ -298,15 +478,16 @@ window.pageInit = async (S) => {
     });
   }
 
-  function goalForm(g) {
-    formModal(g ? "Edit goal" : "Add goal", [
+  function goalForm(g, dimKey) {
+    formModal(g ? "Edit goal" : `Add ${dimName(dimKey || "professional").toLowerCase()} goal`, [
       { name: "title", label: "Goal", value: g && g.title, ph: "e.g. Become Agora backend developer" },
-      { name: "description", label: "Description", type: "textarea", value: g && g.description },
+      { name: "dimension", label: "Dimension", type: "select", value: g ? dimOf(g) : (dimKey || "professional"), options: DIMS.map((d) => ({ v: d.key, t: d.name })) },
+      { name: "description", label: "Objectives (one per line, start with -)", type: "textarea", value: g && g.description, ph: "- Ship the capstone\n- Read 2 papers a month" },
       { name: "status", label: "Status", type: "select", value: (g && g.status) || "active", options: [{ v: "active", t: "Active" }, { v: "paused", t: "Paused" }, { v: "done", t: "Done" }] },
       { name: "progress_pct", label: "Progress %", type: "number", value: (g && g.progress_pct) || 0 },
-      { name: "target_date", label: "Target date", type: "date", value: g && g.target_date },
+      { name: "target_date", label: "Target date (drives the pace tick)", type: "date", value: g && g.target_date },
     ], (o) => {
-      const body = { title: o.title, description: o.description, status: o.status, progress_pct: num(o.progress_pct), target_date: o.target_date || null };
+      const body = { title: o.title, dimension: o.dimension, description: o.description, status: o.status, progress_pct: num(o.progress_pct), target_date: o.target_date || null };
       return g ? api(`/api/development/goals/${g.id}`, { method: "PATCH", body }) : api("/api/development/goals", { method: "POST", body });
     });
   }

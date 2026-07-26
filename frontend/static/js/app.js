@@ -448,7 +448,7 @@
     const GYM = "/api/gym";
     const pick = (o, keys) => { const r = {}; keys.forEach((k) => { if (o && o[k] !== undefined) r[k] = o[k]; }); return r; };
     const PR = ["exercise_name", "weight_value", "weight_unit", "reps", "detail", "achieved_on", "notes"];
-    const GOAL = ["title", "description", "target_date", "status", "progress_pct"];
+    const GOAL = ["title", "dimension", "description", "target_date", "status", "progress_pct"];
     const ACH = ["title", "description", "achieved_on"];
     const GROW = ["kind", "title", "detail", "status"];
     const SKILL = ["name", "level", "source", "note"];
