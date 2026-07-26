@@ -5,9 +5,30 @@
 window.TaskBoard = {
   async mount(S, root) {
   const canCreate = true;                   // all staff can add + edit tasks (internal employee tool)
-  const canManage = S.can("account_manager"); // AM+ only: the Atrium bridge and deleting tasks
+  const canManage = S.can("account_manager"); // AM+ only: the Atrium bridge
   const canMonitor = S.can("team_lead");    // team leads and up get the Monitor / employee overview
   const isAM = canManage;   // priority is settable by AM + admin + super_admin (not team leads/staff)
+  // Mirrors task_perms.can_delete (the server enforces it): AM+ anywhere, team lead in their
+  // team, and the creator for their own tasks. Drives the ✕ on cards + Delete in the drawer.
+  const canDelete = (t) => canManage
+    || (canMonitor && t.assigned_team_id != null && t.assigned_team_id === S.user.team_id)
+    || (t.created_by_id != null && t.created_by_id === S.user.id);
+
+  // Board-only styles (styles.css stays untouched): the hover ✕ on cards. Injected once,
+  // same pattern as the Coach FAB styles in app.js — CSP allows style elements, not inline JS.
+  if (!document.getElementById("tb-style")) {
+    const st = document.createElement("style");
+    st.id = "tb-style";
+    st.textContent = `
+      .tcard{position:relative}
+      .tcard .t-del{position:absolute;top:7px;right:7px;width:24px;height:24px;border:none;border-radius:7px;
+        background:transparent;color:var(--muted);font-size:13px;line-height:1;cursor:pointer;
+        display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .12s ease,background .12s ease,color .12s ease}
+      .tcard:hover .t-del,.tcard .t-del:focus-visible{opacity:1}
+      .tcard .t-del:hover{background:var(--danger);color:#fff}
+      @media (hover: none){.tcard .t-del{opacity:.55}}`;
+    document.head.appendChild(st);
+  }
 
   const [vocab, clients, teams, people, templates] = await Promise.all([
     S.api("/api/vocab"), S.api("/api/clients"), S.api("/api/teams"), S.api("/api/people"),
@@ -117,7 +138,7 @@ window.TaskBoard = {
         ${canCreate ? `<button class="col-add" data-status="${S.esc(st)}">${S.ICON.plus}<span>Add card</span></button>` : ""}
       </div>`).join("");
     wireDnD();
-    wireQuickAdd();
+    wireAddButtons();
     wireCardClicks();
   }
 
@@ -199,6 +220,13 @@ window.TaskBoard = {
 
   function wireCardClicks() {
     S.qsa(".tcard").forEach((c) => c.onclick = () => { if (!c.classList.contains("dragging")) openDetail(c.dataset.id); });
+    // The hover ✕ deletes in place (confirm first — deletion is irreversible). stopPropagation
+    // so the click doesn't also open the detail drawer.
+    S.qsa(".t-del").forEach((b) => b.onclick = (e) => {
+      e.stopPropagation();
+      const t = allTasks.find((x) => String(x.id) === b.dataset.del);
+      if (t) confirmDelete(t);
+    });
   }
 
   // "Today" in Manila as an ISO date (en-CA → YYYY-MM-DD), so due-date colouring matches the
@@ -223,7 +251,8 @@ window.TaskBoard = {
       <div class="t-foot">
         <div class="row">${t.assignee ? S.avatar(t.assignee, "sm") + `<span class="sub" style="font-size:12px">${S.esc(t.assignee.name.split(" ")[0])}</span>` : '<span class="muted" style="font-size:12px">Unassigned</span>'}</div>
         <div class="icons">${t.comment_count ? S.ICON.comment + t.comment_count : ""} ${t.attachment_count ? S.ICON.paperclip + t.attachment_count : ""} ${t.checklist_total ? `<span title="checklist">${t.checklist_done}/${t.checklist_total}</span>` : ""}</div>
-      </div></div>`;
+      </div>
+      ${canDelete(t) ? `<button class="t-del" data-del="${t.id}" title="Delete task" aria-label="Delete task">✕</button>` : ""}</div>`;
   }
 
   function wireDnD(opts = {}) {
@@ -277,32 +306,11 @@ window.TaskBoard = {
     }
   }
 
-  // Inline "add card" at the foot of each column (AM+ only). Enter creates; Esc/empty cancels.
-  function wireQuickAdd() {
-    S.qsa(".col-add").forEach((btn) => btn.onclick = () => {
-      const status = btn.dataset.status;
-      const list = S.qs(`.col-list[data-status="${S.esc(status)}"]`);
-      const existing = list.querySelector(".quick-add input");
-      if (existing) { existing.focus(); return; }
-      const wrap = document.createElement("div");
-      wrap.className = "quick-add tcard";
-      wrap.innerHTML = `<input placeholder="Card title, then Enter…" aria-label="New card title">`;
-      list.appendChild(wrap);
-      const input = wrap.querySelector("input");
-      if (input.scrollIntoView) input.scrollIntoView({ block: "nearest" });
-      input.focus();
-      let saving = false;
-      const cancel = () => { if (!saving) wrap.remove(); };
-      const submit = async () => {
-        const title = input.value.trim();
-        if (!title || saving) { cancel(); return; }
-        saving = true; input.disabled = true;
-        try { await S.api("/api/tasks", { method: "POST", body: { title, status } }); S.toast("Card added", "ok"); load(); }
-        catch (err) { saving = false; input.disabled = false; S.toast(err.detail || "Couldn't add card", "err"); input.focus(); }
-      };
-      input.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); submit(); } else if (e.key === "Escape") cancel(); };
-      input.onblur = submit;
-    });
+  // "Add card" at the foot of each column opens the SAME full form as Edit (not an inline
+  // title box), pre-set to that column's status. Nothing is forced — a blank name saves as
+  // "Untitled task" and can be renamed later.
+  function wireAddButtons() {
+    S.qsa(".col-add").forEach((btn) => btn.onclick = () => taskForm(null, btn.dataset.status));
   }
 
   async function openDetail(id) {
@@ -349,8 +357,8 @@ window.TaskBoard = {
       </div></div>`;
     const footer = `${t.status !== "For Review" ? `<button class="btn ghost" id="d-review">Move to Review</button>` : ""}
       <button class="btn ghost" id="d-edit">Edit</button>
-      ${canManage ? `<button class="btn ghost" id="d-atrium">${t.atrium_visible ? "✓ In Atrium" : "Send to Atrium"}</button>
-      <button class="btn danger" id="d-delete">Delete</button>` : ""}
+      ${canManage ? `<button class="btn ghost" id="d-atrium">${t.atrium_visible ? "✓ In Atrium" : "Send to Atrium"}</button>` : ""}
+      ${canDelete(t) ? `<button class="btn danger" id="d-delete">Delete</button>` : ""}
       <button class="btn primary" id="d-close">Close</button>`;
     const m = S.modal({ title: "Task #" + t.id, body, footer, drawer: true });
     S.qs("#d-close").onclick = m.close;
@@ -482,8 +490,9 @@ window.TaskBoard = {
   const field = (label, val) => `<div><div class="section-label">${label}</div><div style="margin-top:4px">${S.esc(val || "—")}</div></div>`;
   const cmt = (c) => `<div class="cmt">${S.avatar(c.author, "sm")}<div class="body"><strong>${S.esc(c.author ? c.author.name : "?")}</strong><div>${S.esc(c.body)}</div><div class="meta">${S.timeAgo(c.created_at)}</div></div></div>`;
 
-  function taskForm(existing) {
+  function taskForm(existing, presetStatus) {
     const e = existing || {};
+    if (presetStatus && !e.status) e.status = presetStatus;  // column "Add card" pre-picks the status
     const m = S.modal({
       title: existing ? "Edit task" : "New task",
       wide: true,
@@ -494,12 +503,12 @@ window.TaskBoard = {
         ${!existing ? `<label class="field" style="grid-column:1/-1"><span>Service type</span><select id="t-svc"><option value="">Custom (blank)</option></select></label>
         <div class="field" style="grid-column:1/-1"><div class="form-hint">Pick a department, then a service type. The phases, steps, and labels are created for you. Choose Custom (blank) to start empty.</div></div>
         <div class="field" style="grid-column:1/-1" id="t-svc-preview" hidden></div>` : ""}
-        <label class="field" style="grid-column:1/-1"><span>Campaign/Title <span class="req">*</span></span><input id="t-campaign" value="${S.esc(e.campaign || e.title || "")}" placeholder="Unique campaign or service name"></label>
+        <label class="field" style="grid-column:1/-1"><span>Campaign/Title</span><input id="t-campaign" value="${S.esc(e.campaign || e.title || "")}" placeholder="Optional — blank saves as “Untitled task”"></label>
         ${isAM ? `<label class="field"><span>Priority</span><select id="t-priority">${vocab.priorities.map((p) => `<option ${p === (e.priority || "Medium") ? "selected" : ""}>${p}</option>`).join("")}</select></label>` : ""}
         <label class="field"><span>Due date</span><input type="date" id="t-due" value="${e.due_date || ""}"></label>
         <label class="field"><span>Service charge ($)</span><input id="t-charge" inputmode="decimal" value="${S.esc(e.service_charge || "")}" placeholder="0" pattern="[0-9]*[.]?[0-9]*" title="Optional — numbers only (e.g. 4200 or 4200.50)"></label>
         <div class="field" style="grid-column:1/-1">
-          <details class="tk-extra"${existing ? " open" : ""}>
+          <details class="tk-extra" open>
             <summary>Additional details (optional)</summary>
             <div class="grid" style="grid-template-columns:1fr 1fr;gap:16px;margin-top:12px">
               <label class="field"><span>Content type</span><input id="t-ctype" value="${S.esc(e.content_type || "")}"></label>
@@ -547,7 +556,8 @@ window.TaskBoard = {
     S.qs("#t-save").onclick = async () => {
       // The one name field is labelled "Campaign/Title" and drives BOTH — the campaign IS the task's
       // title (mirrors Atrium). Labels aren't sent (the server seeds them from the service template).
-      const name = val("t-campaign");
+      // The name is never forced: blank falls back to "Untitled task" (rename any time).
+      const name = val("t-campaign") || "Untitled task";
       const payload = {
         title: name, campaign: name, client_id: numOrNull("t-client"),
         assigned_team_id: numOrNull("t-team"), assigned_to_id: numOrNull("t-assignee"),
@@ -557,7 +567,6 @@ window.TaskBoard = {
       };
       if (!existing && svcSel) payload.service_key = svcSel.value || null;
       if (isAM) payload.priority = S.qs("#t-priority").value;
-      if (!name) { S.toast("Campaign/Title is required", "err"); return; }
       try {
         if (existing) await S.api("/api/tasks/" + existing.id, { method: "PATCH", body: payload });
         else await S.api("/api/tasks", { method: "POST", body: payload });

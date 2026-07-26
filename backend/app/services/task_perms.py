@@ -8,7 +8,7 @@ The rules (higher roles inherit lower ones):
     | edit fields   | own             | team + own       | all             | all               |
     | reassign      | self only       | team             | all             | all               |
     | priority      | no              | team (scoped)    | all             | all               |
-    | delete        | no              | team (scoped)    | all             | all               |
+    | delete        | own created     | team + created   | all             | all               |
     | move status   | own             | team             | all             | all               |
     | bridge/Atrium | no              | no               | AM              | admin/super       |
 
@@ -75,8 +75,10 @@ def can_prioritize(user: User, task: Task) -> bool:
 
 
 def can_delete(user: User, task: Task) -> bool:
-    """Delete — destructive. Team lead within their team, AM/admin/super anywhere."""
-    return _is_full(user) or _leads_team(user, task)
+    """Delete — destructive. Team lead within their team, AM/admin/super anywhere, and the
+    creator for their own tasks (anyone can quick-add a card, so anyone can clean up their
+    own mistake — but never someone else's work)."""
+    return _is_full(user) or _leads_team(user, task) or _created(user, task)
 
 
 def can_bridge(user: User) -> bool:

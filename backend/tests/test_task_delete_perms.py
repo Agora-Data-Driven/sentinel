@@ -42,6 +42,25 @@ def test_delete_missing_task_404(client, make_user, auth):
     assert client.delete("/api/tasks/999999").status_code == 404
 
 
+def test_creator_can_delete_their_own_task(client, db, make_user, auth):
+    """Anyone can quick-add a card, so anyone can clean up their own mistake."""
+    emp = make_user(C.ROLE_EMPLOYEE)
+    auth(emp)
+    tid = client.post("/api/tasks", json={"title": "oops, junk card"}).json()["id"]
+    assert client.delete(f"/api/tasks/{tid}").status_code == 200
+    db.expire_all()
+    assert db.get(Task, tid) is None
+
+
+def test_creator_delete_does_not_extend_to_others_tasks(client, db, make_user, auth):
+    creator = make_user(C.ROLE_EMPLOYEE)
+    auth(creator)
+    tid = client.post("/api/tasks", json={"title": "mine, hands off"}).json()["id"]
+    auth(make_user(C.ROLE_EMPLOYEE))
+    assert client.delete(f"/api/tasks/{tid}").status_code == 403
+    assert db.get(Task, tid) is not None
+
+
 # --- Create: open to all staff -------------------------------------------
 @pytest.mark.parametrize("role", [C.ROLE_INTERN, C.ROLE_EMPLOYEE, C.ROLE_TEAM_LEAD, C.ROLE_ACCOUNT_MANAGER])
 def test_any_staff_can_create_a_task(client, make_user, auth, role):
