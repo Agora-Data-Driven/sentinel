@@ -184,7 +184,7 @@ No framework, no bundler. `pages/*.html` are ~0.7 kb shells; JS renders the mark
 | `app.js` (44 kb) | Shell: nav, `api()`, `toast()`, `modal()`, `skeleton()`, icons, command palette, Coach FAB |
 | `gym.js` (36 kb) | Calendar, day editor, history |
 | `growth.js` (23 kb) | Development hub |
-| `tasks.js` (19 kb) | Kanban + drag/drop |
+| `taskboard.js` (19 kb) | Kanban + drag/drop — a mountable component embedded in the dashboard (no /tasks page; the URL 302s to /dashboard) |
 | `kiosk.js` (17 kb) | QR scanning + **IndexedDB offline punch queue** (syncs every 30s) |
 | `manage.js`, `reading.js`, `charts.js`, `people.js`, … | One per page |
 | `academy.js` | Hosts the Mastery Engine iframe |

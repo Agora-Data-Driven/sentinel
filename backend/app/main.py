@@ -374,7 +374,6 @@ _PAGES = {
     "/gym": "gym.html",
     "/growth": "growth.html",
     "/reading": "reading.html",
-    "/tasks": "tasks.html",
     "/academy": "academy.html",
     "/people": "people.html",
     "/leave": "leave.html",
@@ -394,3 +393,15 @@ for _route, _file in _PAGES.items():
         methods=["GET"],
         include_in_schema=False,
     )
+
+
+@app.get("/tasks", include_in_schema=False)
+def tasks_redirect(request: Request):
+    """The Task Board is embedded in the dashboard now (2026-07-26), not a page of its own.
+
+    Notification links minted before the move (`/tasks?open=<id>`) live in the database, so this
+    route must keep working forever: forward to /dashboard with the query string intact — the
+    embedded board handles the same ?open= / ?new= / ?view= deep-links there.
+    """
+    q = request.url.query
+    return RedirectResponse(url="/dashboard" + (f"?{q}" if q else ""))

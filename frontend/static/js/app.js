@@ -77,8 +77,9 @@
   // is filtered out is dropped entirely (e.g. Admin disappears for regular staff).
   const NAV = [
     { section: "Workspace" },
+    // The Task Board has no tab of its own — it's embedded in the Dashboard (see taskboard.js);
+    // the old /tasks URL redirects there so saved notification links keep working.
     { href: "/dashboard", label: "Dashboard", icon: "grid" },
-    { href: "/tasks", label: "Task Board", icon: "board" },
     { group: "Growth", icon: "sparkle", children: [
       { href: "/growth", label: "Overview", icon: "sparkle" },
       { href: "/academy", label: "Academy", icon: "cap" },
@@ -364,7 +365,6 @@
     startClock();
     wireBell();
     initCommandPalette();
-    refreshTaskCount();
     mountAssistant();
   }
 
@@ -510,14 +510,6 @@
     tick(); setInterval(tick, 1000);
   }
 
-  async function refreshTaskCount() {
-    try {
-      const d = await api("/api/dashboard");
-      const n = d.me && d.me.open_tasks ? d.me.open_tasks.length : 0;
-      const el = qs("#nav-tasks"); if (el && n) { el.textContent = n; el.style.display = ""; }
-    } catch (e) { /* ignore */ }
-  }
-
   async function wireBell() {
     const bell = qs("#bell"), panel = qs("#notif-panel");
     async function load() {
@@ -635,9 +627,9 @@
     return true;
   }
 
-  // A single sidebar link. The task count badge rides on the Task Board link.
+  // A single sidebar link.
   function navLink(n, path) {
-    return `<a href="${n.href}" class="${path === n.href ? "active" : ""}">${ICON[n.icon]}<span>${n.label}</span>${n.href === "/tasks" ? '<span class="count" id="nav-tasks" style="display:none"></span>' : ""}</a>`;
+    return `<a href="${n.href}" class="${path === n.href ? "active" : ""}">${ICON[n.icon]}<span>${n.label}</span></a>`;
   }
 
   // Renders the flat rail. Leaves and hubs are BOTH single links. A hub links to its primary
@@ -713,7 +705,7 @@
         { group: "Actions", icon: "logout", label: "Log out", hint: "Account", run: doLogout },
       ];
       if ((ROLE_RANK[USER.role] || 0) >= ROLE_RANK.account_manager) {
-        a.unshift({ group: "Actions", icon: "plus", label: "New task", hint: "Task Board", run: () => go("/tasks?new=1") });
+        a.unshift({ group: "Actions", icon: "plus", label: "New task", hint: "Task Board", run: () => go("/dashboard?new=1") });
       }
       return a;
     }
@@ -734,7 +726,7 @@
       return (cache.tasks || []).map((t) => ({
         group: "Tasks", icon: "board", label: t.title,
         hint: [t.status, t.client_name].filter(Boolean).join(" · "),
-        run: () => go("/tasks?open=" + t.id),
+        run: () => go("/dashboard?open=" + t.id),
       }));
     }
     const go = (href) => { close(); location.href = href; };

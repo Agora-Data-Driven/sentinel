@@ -1,5 +1,9 @@
-window.pageInit = async (S) => {
-  const view = S.view();
+/* TaskBoard — the full Kanban (Board / By Employee / Monitor), formerly the /tasks page,
+   now a mountable component embedded in the dashboard: TaskBoard.mount(S, containerEl).
+   Deep links (?open=<id> from notifications, ?new=1 from the command palette, ?view=…) are
+   read from the CURRENT page URL, so they work at /dashboard; the old /tasks URL 302s there. */
+window.TaskBoard = {
+  async mount(S, root) {
   const canCreate = true;                   // all staff can add + edit tasks (internal employee tool)
   const canManage = S.can("account_manager"); // AM+ only: the Atrium bridge and deleting tasks
   const canMonitor = S.can("team_lead");    // team leads and up get the Monitor / employee overview
@@ -26,7 +30,8 @@ window.pageInit = async (S) => {
   if ((mode === "monitor") && !canMonitor) mode = "board";
   if (!["board", "employee", "monitor"].includes(mode)) mode = "board";
 
-  view.innerHTML = `<div class="pagehead"><div><h2>Task Board</h2>
+  // Section-style header (h3) so the board reads as a dashboard section, not a second page title.
+  root.innerHTML = `<div class="pagehead" style="margin:30px 0 14px"><div><h3 style="font-size:18px;letter-spacing:-.01em">Task Board</h3>
       <div class="lead" id="tb-lead"></div></div>
       <div class="row" style="gap:10px;align-items:center">
         <div class="seg" id="view-seg" role="tablist">
@@ -556,7 +561,8 @@ window.pageInit = async (S) => {
   }
 
   await load();
-  // Deep-links: /tasks?open=<id> (notification) and /tasks?new=1 (command palette).
+  // Deep-links: ?open=<id> (notification) and ?new=1 (command palette) — read from the current
+  // URL, which is /dashboard now that the board is embedded there (/tasks 302s here too).
   const params = new URLSearchParams(location.search);
   if (params.get("open")) openDetail(params.get("open"));
   if (params.get("new") && canCreate) taskForm(null);
@@ -575,4 +581,5 @@ window.pageInit = async (S) => {
     });
     window.addEventListener("beforeunload", () => es.close());
   }
+  },
 };

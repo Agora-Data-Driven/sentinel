@@ -561,12 +561,12 @@ def _seed_notifications(db, users) -> None:
     notes = [
         ("Maria Santos", NOTIF_APPROVAL, "Vacation request from Ana Reyes (5d)", "Family trip to Palawan.", "/leave", False),
         ("Maria Santos", NOTIF_APPROVAL, "Regularization request from Ana Reyes", "Forgot to clock out.", "/attendance", False),
-        ("Leo Vasquez", NOTIF_TASK_ASSIGNED, "Task ready for review: Blog 'Attribution 101'", None, "/tasks", False),
-        ("Earl Santos", NOTIF_TASK_ASSIGNED, "New task assigned: TikTok Creative Batch #4", None, "/tasks", True),
+        ("Leo Vasquez", NOTIF_TASK_ASSIGNED, "Task ready for review: Blog 'Attribution 101'", None, "/dashboard", False),
+        ("Earl Santos", NOTIF_TASK_ASSIGNED, "New task assigned: TikTok Creative Batch #4", None, "/dashboard", True),
         ("Carlo Dizon", NOTIF_GYM_MISSING, "No gym session logged today", "Log your session before EOD.", "/gym", False),
-        ("Bong Cruz", NOTIF_APPROVAL, "Google Ads Restructure moved to Revision Needed", None, "/tasks", True),
+        ("Bong Cruz", NOTIF_APPROVAL, "Google Ads Restructure moved to Revision Needed", None, "/dashboard", True),
         ("Grace Navarro", NOTIF_ANNOUNCEMENT, "Welcome to Sentinel 🎉", "Your ops hub is live.", "/dashboard", False),
-        ("Dana Lim", NOTIF_TASK_ASSIGNED, "New task assigned: Landing Page Copy — RV Summer", None, "/tasks", False),
+        ("Dana Lim", NOTIF_TASK_ASSIGNED, "New task assigned: Landing Page Copy — RV Summer", None, "/dashboard", False),
     ]
     for name, ntype, title, body, link, read in notes:
         db.add(Notification(user_id=users[name].id, type=ntype, title=title, body=body,
