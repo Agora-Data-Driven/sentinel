@@ -165,6 +165,7 @@ def task_card(t: Task, db: Session) -> dict:
     attach_count = sum(len(_loads(c.attachments_json, [])) for c in t.comments)
     client = db.get(Client, t.client_id) if t.client_id else None
     assignee = db.get(User, t.assigned_to_id) if t.assigned_to_id else None
+    creator = db.get(User, t.created_by_id) if getattr(t, "created_by_id", None) else None
     # Progress now spans the two-level breakdown (all sub-tasks of all main tasks); a legacy flat
     # checklist is migrated by normalize(), so the count stays correct for old tasks too.
     done, total = MT.sub_stats(MT.normalize(getattr(t, "maintasks_json", "[]"), t.checklist_json))
@@ -180,6 +181,8 @@ def task_card(t: Task, db: Session) -> dict:
         "assigned_to_id": t.assigned_to_id,
         "assignee": user_public(assignee),
         "assigned_team_id": t.assigned_team_id,
+        "created_by_id": getattr(t, "created_by_id", None),
+        "created_by": user_public(creator),  # automatic creator tag (internal; never crosses to Atrium)
         "comment_count": comment_count,
         "attachment_count": attach_count,
         "checklist_total": total,

@@ -441,6 +441,7 @@ def _seed_tasks(db, users, teams, clients) -> None:
             campaign=campaign,
             content_type=ctype,
             account_manager_id=leo.id,
+            created_by_id=leo.id,  # the AM authored the sample board
             assigned_team_id=teams[team].id if team else None,
             assigned_to_id=users[assignee].id if assignee else None,
             priority=priority, status=status, due_date=T + timedelta(days=due_offset),

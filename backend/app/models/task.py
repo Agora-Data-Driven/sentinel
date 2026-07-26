@@ -25,6 +25,10 @@ class Task(Base):
     account_manager_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     assigned_team_id: Mapped[int | None] = mapped_column(ForeignKey("teams.id"), nullable=True, index=True)
     assigned_to_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    # Who created the task — tagged automatically on create (never a form field). Drives the
+    # "own tasks" visibility rule: an employee always keeps sight of tasks they made, even
+    # while unassigned or after a manager reassigns them. Nullable: tasks predating the column.
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     priority: Mapped[str] = mapped_column(String(16), default=PRIORITY_MEDIUM)  # AM-only to change
     status: Mapped[str] = mapped_column(String(32), default=TASK_TODO, index=True)
     due_date: Mapped[date | None] = mapped_column(Date, nullable=True)

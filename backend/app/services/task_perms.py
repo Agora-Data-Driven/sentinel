@@ -12,7 +12,9 @@ The rules (higher roles inherit lower ones):
     | move status   | own             | team             | all             | all               |
     | bridge/Atrium | no              | no               | AM              | admin/super       |
 
-"own" = task.assigned_to_id == user.id (or assigned to one of the user's sub-tasks).
+"own" = task.assigned_to_id == user.id (or assigned to one of the user's sub-tasks), OR
+task.created_by_id == user.id — the creator tag is set automatically on create, so a task an
+employee quick-adds stays on their board even while unassigned or after a manager reassigns it.
 "team" = task.assigned_team_id == user.team_id (a team lead's own team).
 """
 from __future__ import annotations
@@ -44,8 +46,13 @@ def _assigned(user: User, task: Task) -> bool:
     return False
 
 
+def _created(user: User, task: Task) -> bool:
+    """The automatic creator tag — whoever made the task never loses sight of it."""
+    return getattr(task, "created_by_id", None) == user.id
+
+
 def can_view(user: User, task: Task) -> bool:
-    return _is_full(user) or _leads_team(user, task) or _assigned(user, task)
+    return _is_full(user) or _leads_team(user, task) or _assigned(user, task) or _created(user, task)
 
 
 # Editing a task's own fields (title, dates, breakdown, labels, notes) = anyone who can see it.

@@ -161,9 +161,10 @@ def create_task(payload: TaskCreateIn, user: User = Depends(get_current_user), d
         raise HTTPException(status_code=400, detail="Invalid status")
     is_am = user.role == "account_manager"
     may_delegate = user.role in task_perms.FULL or user.role == ROLE_TEAM_LEAD
-    # Employees may only assign a task they create to themselves; delegation is a lead/manager action.
+    # Employees can't delegate: whatever they create is theirs — auto-assigned to them (a quick-added
+    # card lands straight on their own board; picking someone else is a lead/manager action).
     assigned_to_id = payload.assigned_to_id
-    if not may_delegate and assigned_to_id not in (None, user.id):
+    if not may_delegate:
         assigned_to_id = user.id
     # Priority is honored from a manager (AM/admin/super) or a team lead; others default to Medium.
     priority = payload.priority if may_delegate and payload.priority in task_config.priorities(db) else "Medium"
@@ -194,6 +195,8 @@ def create_task(payload: TaskCreateIn, user: User = Depends(get_current_user), d
         account_manager_id=user.id if is_am else None,
         assigned_team_id=payload.assigned_team_id,
         assigned_to_id=assigned_to_id,
+        created_by_id=user.id,  # automatic creator tag — never a form field
+
         priority=priority,
         status=payload.status,
         due_date=payload.due_date,

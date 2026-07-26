@@ -29,16 +29,20 @@ window.TaskBoard = {
   let mode = params0.get("view") || "board";
   if ((mode === "monitor") && !canMonitor) mode = "board";
   if (!["board", "employee", "monitor"].includes(mode)) mode = "board";
+  // Employees/interns see only their own tasks (assigned to them or created by them — the server
+  // enforces this in task_perms.can_view), so the multi-person views and assignee filter are noise:
+  // they get the plain board only.
+  if (!canMonitor) mode = "board";
 
   // Section-style header (h3) so the board reads as a dashboard section, not a second page title.
   root.innerHTML = `<div class="pagehead" style="margin:30px 0 14px"><div><h3 style="font-size:18px;letter-spacing:-.01em">Task Board</h3>
       <div class="lead" id="tb-lead"></div></div>
       <div class="row" style="gap:10px;align-items:center">
-        <div class="seg" id="view-seg" role="tablist">
+        ${canMonitor ? `<div class="seg" id="view-seg" role="tablist">
           <button type="button" data-view="board" role="tab">Board</button>
           <button type="button" data-view="employee" role="tab">By Employee</button>
-          ${canMonitor ? `<button type="button" data-view="monitor" role="tab">Monitor</button>` : ""}
-        </div>
+          <button type="button" data-view="monitor" role="tab">Monitor</button>
+        </div>` : ""}
         ${canCreate ? `<button class="btn primary" id="new-task">${S.ICON.plus}New Task</button>` : ""}
       </div></div>
     <div class="filters">
@@ -46,12 +50,14 @@ window.TaskBoard = {
       <select id="f-client"><option value="">All Clients</option>${clients.map((c) => `<option value="${c.id}">${S.esc(c.name)}</option>`).join("")}</select>
       <select id="f-team"><option value="">All Departments</option>${teams.map((t) => `<option value="${t.id}">${S.esc(t.name)}</option>`).join("")}</select>
       <select id="f-priority"><option value="">All Priority</option>${vocab.priorities.map((p) => `<option>${p}</option>`).join("")}</select>
-      <select id="f-assignee"><option value="">All Assignees</option>${people.map((p) => `<option value="${p.id}">${S.esc(p.name)}</option>`).join("")}</select>
+      ${canMonitor ? `<select id="f-assignee"><option value="">All Assignees</option>${people.map((p) => `<option value="${p.id}">${S.esc(p.name)}</option>`).join("")}</select>` : ""}
     </div>
     <div id="board"></div>`;
 
   const LEADS = {
-    board: "Drag cards across columns. Client-safe fields sync to Atrium; internal fields stay here.",
+    board: canMonitor
+      ? "Drag cards across columns. Client-safe fields sync to Atrium; internal fields stay here."
+      : "Your tasks — assigned to you or created by you. Drag cards across columns to update status.",
     employee: "Every teammate's tasks, grouped by person. Drag a card between columns to change its status.",
     monitor: "Team workload at a glance: open work, what's overdue, and what shipped this week. Click a row to see that person's tasks.",
   };
@@ -60,7 +66,7 @@ window.TaskBoard = {
   S.qs("#f-client").onchange = (e) => { filters.client_id = e.target.value; load(); };
   S.qs("#f-team").onchange = (e) => { filters.team_id = e.target.value; load(); };
   S.qs("#f-priority").onchange = (e) => { filters.priority = e.target.value; load(); };
-  S.qs("#f-assignee").onchange = (e) => { filters.assignee_id = e.target.value; load(); };
+  if (S.qs("#f-assignee")) S.qs("#f-assignee").onchange = (e) => { filters.assignee_id = e.target.value; load(); };
   if (canCreate) S.qs("#new-task").onclick = () => taskForm(null);
 
   S.qsa("#view-seg button").forEach((b) => b.onclick = () => setMode(b.dataset.view));
@@ -91,7 +97,7 @@ window.TaskBoard = {
   function render() {
     S.qs("#tb-lead").textContent = LEADS[mode];
     S.qsa("#view-seg button").forEach((b) => b.classList.toggle("on", b.dataset.view === mode));
-    S.qs("#f-assignee").closest(".filters").style.display = mode === "monitor" ? "none" : "";
+    S.qs("#f-search").closest(".filters").style.display = mode === "monitor" ? "none" : "";
     const board = S.qs("#board");
     board.className = mode === "board" ? "board" : "";
     const tasks = allTasks.filter(matches);
@@ -212,7 +218,8 @@ window.TaskBoard = {
       <div class="t-title">${S.esc(t.title)}</div>
       <div class="t-meta">${S.priorityDot(t.priority)}<span>${S.esc(t.priority)}</span>
         ${t.due_date ? `<span class="due ${dueCls}">· ${S.fmtDate(t.due_date + "T00:00:00+08:00")}</span>` : ""}
-        ${t.client_name ? `<span class="muted">· ${S.esc(t.client_name)}</span>` : ""}</div>
+        ${t.client_name ? `<span class="muted">· ${S.esc(t.client_name)}</span>` : ""}
+        ${t.created_by ? `<span class="muted" title="Created by ${S.esc(t.created_by.name)}">· by ${S.esc(t.created_by.name.split(" ")[0])}</span>` : ""}</div>
       <div class="t-foot">
         <div class="row">${t.assignee ? S.avatar(t.assignee, "sm") + `<span class="sub" style="font-size:12px">${S.esc(t.assignee.name.split(" ")[0])}</span>` : '<span class="muted" style="font-size:12px">Unassigned</span>'}</div>
         <div class="icons">${t.comment_count ? S.ICON.comment + t.comment_count : ""} ${t.attachment_count ? S.ICON.paperclip + t.attachment_count : ""} ${t.checklist_total ? `<span title="checklist">${t.checklist_done}/${t.checklist_total}</span>` : ""}</div>
@@ -319,6 +326,7 @@ window.TaskBoard = {
           <div class="section-label" style="color:var(--sentinel-2)">${S.ICON.lock}Internal, not visible to clients</div>
           <div class="spread" style="margin-top:10px">
             ${field("Account Manager", t.account_manager ? t.account_manager.name : "—")}
+            ${field("Created by", t.created_by ? t.created_by.name : "—")}
             ${field("Assigned team", t.assigned_team_name)}
             ${field("Assigned to", t.assignee ? t.assignee.name : "Unassigned")}
             <div><div class="section-label">Priority</div>

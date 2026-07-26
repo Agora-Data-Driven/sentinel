@@ -104,6 +104,7 @@ def _ensure_columns() -> None:
     added = [
         ("tasks", "maintasks_json", "TEXT DEFAULT '[]'"),
         ("tasks", "service_charge", "VARCHAR(32)"),  # optional internal-only charge
+        ("tasks", "created_by_id", "INTEGER"),  # automatic creator tag (drives own-task visibility)
         # Service-template defaults auto-filled onto new tasks (added after the table shipped).
         ("service_templates", "default_priority", "VARCHAR(16)"),
         ("service_templates", "default_labels_json", "TEXT DEFAULT '[]'"),
