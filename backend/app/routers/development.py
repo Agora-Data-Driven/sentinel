@@ -190,6 +190,7 @@ def delete_achievement(achievement_id: int, user: User = Depends(get_current_use
 def add_goal(payload: GoalIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     g = ProfessionalGoal(
         user_id=user.id,
+        dimension=payload.dimension,
         title=payload.title,
         description=payload.description,
         target_date=payload.target_date,
@@ -204,7 +205,7 @@ def add_goal(payload: GoalIn, user: User = Depends(get_current_user), db: Sessio
 @router.patch("/goals/{goal_id}")
 def update_goal(goal_id: int, payload: GoalUpdateIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     g = _own(db, ProfessionalGoal, goal_id, user)
-    _apply(g, payload, ["title", "description", "target_date", "status", "progress_pct"])
+    _apply(g, payload, ["title", "dimension", "description", "target_date", "status", "progress_pct"])
     db.commit()
     return goal_dict(g)
 

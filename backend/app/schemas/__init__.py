@@ -204,6 +204,7 @@ class AchievementUpdateIn(BaseModel):
 
 class GoalIn(BaseModel):
     title: str
+    dimension: str = "professional"  # spiritual | professional | mental | physical
     description: str | None = None
     target_date: date | None = None
     status: str = "active"  # active | done | paused
@@ -212,6 +213,7 @@ class GoalIn(BaseModel):
 
 class GoalUpdateIn(BaseModel):
     title: str | None = None
+    dimension: str | None = None
     description: str | None = None
     target_date: date | None = None
     status: str | None = None

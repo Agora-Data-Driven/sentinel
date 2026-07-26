@@ -689,20 +689,134 @@ textarea { resize: vertical; min-height: 78px; }
 .dev-mast-right { display:flex; flex-direction:column; align-items:flex-end; gap:10px; }
 .dev-mast-meta { font-family:var(--mono); font-size:11px; color:var(--muted); letter-spacing:.06em; white-space:nowrap; }
 
-/* Pillars instrument (the signature) — ONE card, four hairline-divided facets = one measure */
-.dev-pillars { display:grid; grid-template-columns:repeat(4,1fr); background:var(--card);
-  border:1px solid var(--line); border-radius:var(--radius); overflow:hidden; margin-bottom:28px; box-shadow:var(--shadow); }
-.dev-facet { padding:17px 18px 0; border-left:1px solid var(--line); text-decoration:none; color:inherit;
-  display:flex; flex-direction:column; min-height:106px; position:relative; transition:background .12s; }
-.dev-facet:first-child { border-left:none; }
-a.dev-facet:hover { background:var(--hover); }
-.dev-facet .f-label { font-family:var(--mono); font-size:10px; letter-spacing:.15em; text-transform:uppercase;
-  color:var(--sub); display:flex; align-items:center; gap:7px; }
-.dev-facet .f-label svg { width:13px; height:13px; stroke:var(--green-d); flex:none; }
-.dev-facet .f-val { font-size:30px; font-weight:800; letter-spacing:-.02em; line-height:1; margin-top:auto; color:var(--text); }
-.dev-facet .f-sub { font-family:var(--mono); font-size:10.5px; color:var(--muted); margin:6px 0 15px; letter-spacing:.02em; }
-.dev-facet .f-meter { position:absolute; left:0; right:0; bottom:0; height:3px; background:var(--line); }
-.dev-facet .f-meter > i { display:block; height:100%; background:var(--grad-green); }
+/* ---- The four growth dimensions: Spiritual · Professional · Mental · Physical ----
+   Each dimension owns a hue (retuned for dark below). Components read them through the
+   --hue / --hue-bg custom props their root element sets inline. */
+:root {
+  --dim-spiritual:#6D57D4;    --dim-spiritual-bg:#EFEBFB;
+  --dim-professional:#3A9A2F; --dim-professional-bg:#E9F5E7;
+  --dim-mental:#2E6ED0;       --dim-mental-bg:#E8F0FC;
+  --dim-physical:#DE6A25;     --dim-physical-bg:#FCEEE4;
+}
+:root[data-theme="dark"] {
+  --dim-spiritual:#A99AF7;    --dim-spiritual-bg:rgba(169,154,247,.14);
+  --dim-professional:#6BCB4E; --dim-professional-bg:rgba(107,203,78,.14);
+  --dim-mental:#7AA7F2;       --dim-mental-bg:rgba(122,167,242,.14);
+  --dim-physical:#F09A62;     --dim-physical-bg:rgba(240,154,98,.14);
+}
+
+/* 1 · The compass (the signature) — ONE instrument card, four rings. The arc is actual goal
+   progress; the small radial tick marks where the calendar says you should be today. */
+.dim-rings { display:grid; grid-template-columns:repeat(4,1fr); background:var(--card);
+  border:1px solid var(--line); border-radius:var(--radius); overflow:hidden; margin-bottom:16px; box-shadow:var(--shadow); }
+.dim-cell { appearance:none; background:none; border:none; border-left:1px solid var(--line); cursor:pointer;
+  font:inherit; color:inherit; padding:16px 12px 13px; display:flex; flex-direction:column; align-items:center; gap:7px;
+  transition:background .12s; }
+.dim-cell:first-child { border-left:none; }
+.dim-cell:hover { background:var(--hover); }
+.dim-cell:focus-visible { outline:2px solid var(--hue); outline-offset:-3px; border-radius:8px; }
+.dc-label { font-family:var(--mono); font-size:10px; letter-spacing:.15em; text-transform:uppercase;
+  color:var(--sub); display:flex; align-items:center; gap:7px; font-weight:700; }
+.dc-label svg { width:13px; height:13px; stroke:var(--hue); flex:none; }
+.dc-sub { font-family:var(--mono); font-size:10.5px; color:var(--muted); letter-spacing:.02em; }
+.dc-chip { min-height:16px; }
+
+/* The shared ahead/behind verdict, used by rings, the pace band and goal cards */
+.pace-chip { font-family:var(--mono); font-size:10.5px; font-weight:700; letter-spacing:.04em; white-space:nowrap; }
+.pace-chip.ahead { color:var(--green-strong); }
+.pace-chip.behind { color:var(--warn); }
+.pace-chip.on, .pace-chip.none { color:var(--muted); }
+
+/* 2 · The pace band — per dimension: actual fill vs the expected-today tick on a date track */
+.dim-pace { background:var(--card); border:1px solid var(--line); border-radius:var(--radius);
+  box-shadow:var(--shadow-sm); padding:13px 18px 6px; margin-bottom:28px; }
+.dim-pace-head { font-family:var(--mono); font-size:10px; letter-spacing:.15em; text-transform:uppercase;
+  color:var(--sub); font-weight:700; display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap;
+  padding-bottom:10px; border-bottom:1px solid var(--line-soft); }
+.pace-key { color:var(--muted); font-weight:400; text-transform:none; letter-spacing:.04em;
+  display:flex; align-items:center; gap:6px; }
+.pace-row { display:grid; grid-template-columns:132px 1fr 116px; gap:14px; align-items:center;
+  padding:11px 0; border-top:1px solid var(--line-soft); }
+.dim-pace-head + .pace-row { border-top:none; }
+.pr-name { font-family:var(--mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase;
+  color:var(--sub); font-weight:700; display:flex; align-items:center; gap:7px; }
+.pr-name svg { width:13px; height:13px; stroke:var(--hue); flex:none; }
+.pr-lane { min-width:0; }
+.pr-track { position:relative; height:8px; border-radius:99px; background:var(--sunken); }
+.pr-track > i { position:absolute; left:0; top:0; bottom:0; border-radius:99px; background:var(--hue); }
+.pr-tick { position:absolute; top:-3px; bottom:-3px; width:2px; border-radius:2px; background:var(--ink);
+  transform:translateX(-1px); opacity:.85; }
+.pr-tick.demo { position:relative; display:inline-block; height:10px; top:0; bottom:auto; }
+.pr-dates { display:flex; justify-content:space-between; font-family:var(--mono); font-size:9.5px;
+  color:var(--muted); margin-top:5px; letter-spacing:.03em; }
+.pr-delta { text-align:right; }
+.pr-note { font-family:var(--mono); font-size:10.5px; color:var(--muted); }
+
+/* 3 · Dimension boxes — four equal cards; an open one takes the full row */
+.dim-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; align-items:start; }
+.dim-box { background:var(--card); border:1px solid var(--line); border-top:3px solid var(--hue);
+  border-radius:var(--radius); box-shadow:var(--shadow-sm); overflow:hidden; scroll-margin-top:82px; }
+.dim-box.open { grid-column:1 / -1; box-shadow:var(--shadow); }
+.dim-head { appearance:none; background:none; border:none; font:inherit; color:inherit; cursor:pointer;
+  width:100%; display:flex; align-items:center; gap:12px; padding:14px 16px; text-align:left; transition:background .12s; }
+.dim-head:hover { background:var(--hover); }
+.dim-head:focus-visible { outline:2px solid var(--hue); outline-offset:-3px; border-radius:8px; }
+.dim-glyph { width:34px; height:34px; border-radius:10px; background:var(--hue-bg); flex:none;
+  display:flex; align-items:center; justify-content:center; }
+.dim-glyph svg { width:17px; height:17px; stroke:var(--hue); }
+.dim-title { display:flex; flex-direction:column; gap:2px; min-width:0; }
+.dim-title strong { font-size:15.5px; letter-spacing:-.01em; }
+.dim-title small { font-family:var(--mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); }
+.dim-head-right { margin-left:auto; display:flex; align-items:center; gap:9px; }
+.dim-count { font-family:var(--mono); font-size:10.5px; color:var(--muted); white-space:nowrap; }
+.dim-head-right svg { width:15px; height:15px; stroke:var(--muted); transform:rotate(90deg); transition:transform .16s; }
+.dim-box.open .dim-head-right svg { transform:rotate(-90deg); }
+.dim-peek { padding:0 16px 15px; }
+.dim-box.open .dim-peek { display:none; }
+.dp-goal { font-size:13.5px; font-weight:600; margin-bottom:8px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.dp-goal.muted { color:var(--muted); font-weight:500; }
+.dp-bar { height:6px; }
+.dim-body { display:none; padding:0 16px 16px; border-top:1px solid var(--line-soft); }
+.dim-box.open .dim-body { display:block; padding-top:14px; }
+
+/* Goals inside a box — each expands to its objectives */
+.goal-item { border:1px solid var(--line); border-radius:var(--radius-sm); margin-bottom:8px; }
+.goal-item summary { list-style:none; display:flex; align-items:center; gap:10px; padding:10px 12px;
+  cursor:pointer; border-radius:var(--radius-sm); }
+.goal-item summary::-webkit-details-marker { display:none; }
+.goal-item summary:hover { background:var(--hover); }
+.gi-title { font-weight:600; font-size:13.5px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.gi-pct { margin-left:auto; font-family:var(--mono); font-size:11px; font-weight:700; color:var(--hue); }
+.goal-item summary svg { width:14px; height:14px; stroke:var(--muted); flex:none;
+  transform:rotate(90deg); transition:transform .16s; }
+.goal-item[open] summary svg { transform:rotate(-90deg); }
+.gi-body { padding:2px 12px 12px; }
+.gi-bar { height:7px; margin:4px 0 8px; }
+.gi-meta { font-family:var(--mono); font-size:10.5px; color:var(--muted); margin-bottom:6px; }
+.goal-desc { font-size:13px; color:var(--sub); line-height:1.5; }
+.goal-objectives { margin:0; padding:0; list-style:none; }
+.goal-objectives li { position:relative; padding:4px 0 4px 20px; font-size:13px; border-top:1px dashed var(--line-soft); }
+.goal-objectives li:first-child { border-top:none; }
+.goal-objectives li::before { content:""; position:absolute; left:2px; top:10px; width:8px; height:8px;
+  border-radius:3px; border:2px solid var(--hue); }
+
+/* Record sub-sections — everything the old hub showed, folded in as collapsibles */
+.dim-records { margin-top:14px; }
+.dim-sub { border-top:1px solid var(--line); }
+.dim-sub summary { list-style:none; display:flex; align-items:center; gap:9px; padding:11px 2px; cursor:pointer;
+  font-family:var(--mono); font-size:10.5px; letter-spacing:.13em; text-transform:uppercase; font-weight:700; color:var(--sub); }
+.dim-sub summary::-webkit-details-marker { display:none; }
+.dim-sub summary:hover { color:var(--text); }
+.ds-right { margin-left:auto; display:flex; align-items:center; gap:8px; min-width:0; }
+.ds-right svg { width:14px; height:14px; stroke:var(--muted); flex:none; transform:rotate(90deg); transition:transform .16s; }
+.dim-sub[open] .ds-right svg { transform:rotate(-90deg); }
+.ds-hint { font-weight:400; letter-spacing:.03em; text-transform:none; color:var(--muted);
+  max-width:34ch; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ds-body { padding:2px 2px 14px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .dim-cell, .dim-head, .dim-head-right svg, .goal-item summary svg, .ds-right svg { transition:none; }
+}
 
 /* Cards inside the ledger: quieter, hairline-led, green-forward */
 .dev .card-head { border-bottom:1px solid var(--line); padding-bottom:11px; }
@@ -713,6 +827,10 @@ a.dev-facet:hover { background:var(--hover); }
 .dev .linky.danger { color:var(--danger); }
 .dev .btn.primary.dev-coach { background:linear-gradient(135deg,#9484FB,#5C4BD0); box-shadow:0 8px 22px rgba(92,75,208,.32); }
 
-@media (max-width:820px){ .dev-pillars{ grid-template-columns:repeat(2,1fr); }
-  .dev-facet:nth-child(3){ border-left:none; } .dev-facet:nth-child(n+3){ border-top:1px solid var(--line); } }
+@media (max-width:820px){
+  .dim-rings{ grid-template-columns:repeat(2,1fr); }
+  .dim-cell:nth-child(3){ border-left:none; } .dim-cell:nth-child(n+3){ border-top:1px solid var(--line); }
+  .dim-grid{ grid-template-columns:1fr; }
+  .pace-row{ grid-template-columns:1fr; gap:7px; padding:12px 0; }
+  .pr-delta{ text-align:left; } }
 @media (max-width:560px){ .dev-mast{ flex-direction:column; align-items:flex-start; } .dev-mast-right{ align-items:flex-start; } }

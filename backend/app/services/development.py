@@ -197,7 +197,7 @@ def holistic_digest(db: Session, user: User) -> dict:
     # Items with their ids, for the assistant's edit actions (update/delete need the id).
     editable = {
         "prs": [{"id": p.id, "label": _pr_line(p)} for p in prs],
-        "goals": [{"id": g.id, "label": f"{g.title} ({g.status}, {g.progress_pct}%)"} for g in goals],
+        "goals": [{"id": g.id, "label": f"[{g.dimension or 'professional'}] {g.title} ({g.status}, {g.progress_pct}%)"} for g in goals],
         "achievements": [{"id": a.id, "label": a.title} for a in achievements],
         "skills": [{"id": s.id, "label": f"{s.name} ({s.level}, {s.source})"} for s in skills],
         "growth": [{"id": g.id, "label": f"({g.kind}) {g.title}"} for g in growth[:15]],
@@ -225,6 +225,7 @@ def holistic_digest(db: Session, user: User) -> dict:
             "goals": [
                 {
                     "title": g.title,
+                    "dimension": g.dimension or "professional",
                     "status": g.status,
                     "progress": g.progress_pct,
                     "target": g.target_date.isoformat() if g.target_date else None,

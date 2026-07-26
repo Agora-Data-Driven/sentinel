@@ -96,10 +96,14 @@ class CareerAchievement(Base):
 
 
 class ProfessionalGoal(Base):
+    """A goal in one of the four growth dimensions. Historically career-only (hence the table
+    name); `dimension` widens it to the whole person, and old rows default to 'professional'."""
+
     __tablename__ = "professional_goals"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    dimension: Mapped[str] = mapped_column(String(16), default="professional")  # spiritual|professional|mental|physical
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     target_date: Mapped[date | None] = mapped_column(Date, nullable=True)
