@@ -456,6 +456,7 @@
     const GYM = "/api/gym";
     const pick = (o, keys) => { const r = {}; keys.forEach((k) => { if (o && o[k] !== undefined) r[k] = o[k]; }); return r; };
     const PR = ["exercise_name", "weight_value", "weight_unit", "reps", "detail", "achieved_on", "notes"];
+    const PHYS = ["name", "kind", "target_value", "current_value", "unit", "direction", "notes", "status"];
     const GOAL = ["title", "dimension", "description", "target_date", "status", "progress_pct"];
     const ACH = ["title", "description", "achieved_on"];
     const GROW = ["kind", "title", "detail", "status"];
@@ -472,6 +473,10 @@
         case "add_pr": return api(`${DEV}/prs`, { method: "POST", body: pick(args, PR) });
         case "update_pr": return api(`${DEV}/prs/${id}`, { method: "PATCH", body: pick(args, PR) });
         case "delete_pr": return api(`${DEV}/prs/${id}`, { method: "DELETE" });
+        // Physical TARGET goals (lift/run/skill numbers being chased — drive the Physical ring).
+        case "add_physical_goal": return api(`${DEV}/physical-goals`, { method: "POST", body: pick(args, PHYS) });
+        case "update_physical_goal": return api(`${DEV}/physical-goals/${id}`, { method: "PATCH", body: pick(args, PHYS) });
+        case "delete_physical_goal": return api(`${DEV}/physical-goals/${id}`, { method: "DELETE" });
         case "update_resume": return api(`${DEV}/resume`, { method: "PATCH", body: pick(args, RESUME) });
         case "add_achievement": return api(`${DEV}/achievements`, { method: "POST", body: pick(args, ACH) });
         case "update_achievement": return api(`${DEV}/achievements/${id}`, { method: "PATCH", body: pick(args, ACH) });

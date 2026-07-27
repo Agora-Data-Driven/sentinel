@@ -12,6 +12,7 @@ Tables:
     development_profiles   -> 1:1 with a user; resume + headline
     career_achievements    -> list of wins
     professional_goals     -> list of goals with status + progress
+    physical_goals         -> TARGET PRs being chased (lift/run/skill; drives the Physical ring)
     development_areas      -> per-user settings for one growth dimension (pace deadline, other info)
     growth_items           -> personal journal: obstacles / reflections / notes (bottom-up)
     reading_items          -> admin-curated canon of required books/philosophies (top-down)
@@ -110,6 +111,32 @@ class ProfessionalGoal(Base):
     target_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     status: Mapped[str] = mapped_column(String(16), default="active")  # active|done|paused
     progress_pct: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class PhysicalGoal(Base):
+    """A TARGET PR the worker is chasing — a lift, a run, or a skill (calisthenics, boxing).
+
+    The physical analogue of an engine program: each goal is a number to reach
+    (`target_value`) and where they are now (`current_value`, hand- or coach-updated;
+    `personal_records` stays the log of achieved bests). Progress is the ratio —
+    `direction` 'lower' inverts it for time-based goals (a 55-min 10k). The Physical
+    ring on the Growth Overview is the mean progress across non-paused goals.
+    """
+
+    __tablename__ = "physical_goals"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)  # "Bench Press", "10k run", "Muscle-up"
+    kind: Mapped[str] = mapped_column(String(16), default="lift")  # lift|run|skill
+    target_value: Mapped[float] = mapped_column(Float, nullable=False)
+    current_value: Mapped[float] = mapped_column(Float, default=0)
+    unit: Mapped[str] = mapped_column(String(24), default="")  # kg, lb, min, sec, reps, km…
+    direction: Mapped[str] = mapped_column(String(8), default="higher")  # higher|lower (times: lower wins)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="active")  # active|achieved|paused
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 

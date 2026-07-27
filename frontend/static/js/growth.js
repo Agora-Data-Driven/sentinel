@@ -56,8 +56,15 @@ window.pageInit = async (S) => {
   // Each Growth tab is one engine program; the professional ring rolls up every career
   // program. Physical has no engine program yet, so its ring stays dashed until one exists.
   // (courses is fetched only for your own profile, so a manager's read-only view dashes out.)
-  const DIM_PROGRAMS = { philosophical: ["philosophy"], spiritual: ["spiritual"], physical: ["physical"] };
+  const DIM_PROGRAMS = { philosophical: ["philosophy"], spiritual: ["spiritual"] };
   function dimActual(key) {
+    // Physical has no engine program — its ring is the mean progress across the
+    // TARGET PRs (lifts/runs/skills) being chased, paused ones excluded.
+    if (key === "physical") {
+      const ts = ((data.physical || {}).targets || []).filter((t) => t.status !== "paused");
+      if (!ts.length) return null;
+      return ts.reduce((a, t) => a + (t.progress_pct || 0), 0) / ts.length;
+    }
     const progs = (courses && courses.programs) || [];
     const mine = key === "professional"
       ? progs.filter((p) => (p.category || "career") !== "growth")
@@ -127,8 +134,10 @@ window.pageInit = async (S) => {
     const actual = dimActual(d.key), expected = dimExpected(d.key);
     const active = goalsFor(d.key).filter((g) => g.status === "active").length;
     const sub = actual == null
-      ? "no engine program yet"
-      : `${active} active goal${active === 1 ? "" : "s"}`;
+      ? (d.key === "physical" ? "no target PRs yet" : "no engine program yet")
+      : d.key === "physical"
+        ? `${((data.physical || {}).targets || []).filter((t) => t.status !== "paused").length} target PRs`
+        : `${active} active goal${active === 1 ? "" : "s"}`;
     return `<button class="dim-cell" data-goto-dim="${d.key}" style="--hue:var(--dim-${d.key})" title="Open ${esc(d.name)}">
       <span class="dc-label">${S.ICON[d.icon]}${esc(d.name)}</span>
       ${ringSvg(actual, expected)}
@@ -235,6 +244,34 @@ window.pageInit = async (S) => {
     const p = data.physical;
     const latest = p.latest;
     const prs = p.prs || [];
+
+    // Target PRs — the numbers being chased. Their mean progress IS the Physical ring.
+    const targets = p.targets || [];
+    const kindPill = (k) => `<span class="pill ${k === "run" ? "amber" : k === "skill" ? "green" : ""}">${esc(k)}</span>`;
+    const fmt = (v) => (v == null ? "—" : String(Math.round(v * 100) / 100));
+    const prByName = new Map(prs.map((r) => [String(r.exercise_name || "").toLowerCase(), r]));
+    const tRow = (t) => {
+      const pct = Math.max(0, Math.min(100, t.progress_pct || 0));
+      const pr = prByName.get(String(t.name || "").toLowerCase());
+      return `<div style="padding:8px 0;border-top:1px solid var(--line)">
+        <div class="row between" style="gap:10px">
+          <div style="min-width:0">${kindPill(t.kind)} <strong>${esc(t.name)}</strong>
+            <span class="muted">${fmt(t.current_value)} / ${fmt(t.target_value)}${t.unit ? " " + esc(t.unit) : ""}${t.direction === "lower" ? " · lower wins" : ""}</span>
+            ${pr && pr.display ? `<span class="muted" style="font-size:11px"> · PR on file: ${esc(pr.display)}</span>` : ""}
+          </div>
+          <div class="row" style="gap:8px;flex:none;align-items:center">
+            ${t.status !== "active" ? `<span class="pill ${t.status === "achieved" ? "green" : "amber"}">${esc(t.status)}</span>` : ""}
+            <strong>${pct}%</strong>
+            ${readOnly ? "" : `<a href="#" class="linky" data-edit-ptarget="${t.id}">edit</a><a href="#" class="linky danger" data-del-ptarget="${t.id}">delete</a>`}
+          </div>
+        </div>
+        <div class="pr-track" style="margin-top:6px"><i style="width:${pct}%"></i></div>
+        ${t.notes ? `<div class="sub">${esc(t.notes)}</div>` : ""}
+      </div>`;
+    };
+    const targetsInner = `<div class="sub" style="margin-bottom:8px">The numbers you're chasing — lifts, runs, skills (calisthenics, boxing). Their average is the Physical ring. Update the current value as you progress, or just tell your coach.</div>
+      ${readOnly ? "" : `<div style="margin-bottom:6px"><a href="#" id="add-ptarget" class="linky">+ add target</a></div>`}
+      ${targets.length ? targets.map(tRow).join("") : '<div class="empty">No targets yet — add your first lift, run or skill.</div>'}`;
     const bf = latest && latest.body_fat_pct != null ? `${latest.body_fat_pct}%` : "—";
     const wt = latest && latest.weight_kg != null ? `${latest.weight_kg} kg` : "—";
     const stats = `<div class="spread" style="margin-bottom:10px">
@@ -248,7 +285,8 @@ window.pageInit = async (S) => {
           <div><strong>${esc(r.exercise_name)}</strong> <span class="muted">${esc(r.display || "")}</span></div>
           ${readOnly ? "" : `<div class="row"><a href="#" class="linky" data-edit-pr="${r.id}">edit</a><a href="#" class="linky danger" data-del-pr="${r.id}">delete</a></div>`}
         </div>`).join("")}</div>` : '<div class="empty">No PRs logged yet.</div>';
-    return sub("physical", "stats", "Body stats", stats, `<span class="ds-hint">${bf} · ${wt}</span>`)
+    return sub("physical", "targets", "Target PRs", targetsInner, `<span class="ds-hint">${targets.length}</span>`)
+      + sub("physical", "stats", "Body stats", stats, `<span class="ds-hint">${bf} · ${wt}</span>`)
       + sub("physical", "prs", "Personal records", `${readOnly ? "" : `<div style="margin-bottom:6px"><a href="#" id="add-pr" class="linky">+ add</a></div>`}${prList}`,
           `<span class="ds-hint">${prs.length}</span>`);
   }
@@ -444,6 +482,10 @@ window.pageInit = async (S) => {
     S.qsa("[data-edit-pr]").forEach((a) => a.onclick = (e) => { e.preventDefault(); prForm(data.physical.prs.find((r) => r.id == a.dataset.editPr)); });
     S.qsa("[data-del-pr]").forEach((a) => a.onclick = (e) => { e.preventDefault(); del(`/api/development/prs/${a.dataset.delPr}`); });
 
+    const apt = S.qs("#add-ptarget"); if (apt) apt.onclick = (e) => { e.preventDefault(); ptargetForm(); };
+    S.qsa("[data-edit-ptarget]").forEach((a) => a.onclick = (e) => { e.preventDefault(); ptargetForm((data.physical.targets || []).find((t) => t.id == a.dataset.editPtarget)); });
+    S.qsa("[data-del-ptarget]").forEach((a) => a.onclick = (e) => { e.preventDefault(); del(`/api/development/physical-goals/${a.dataset.delPtarget}`); });
+
     const sr = S.qs("#save-resume"); if (sr) sr.onclick = async () => {
       try { await api("/api/development/resume", { method: "PATCH", body: { headline: S.qs("#hl").value, resume_text: S.qs("#rz").value } }); S.toast("Saved", "ok"); }
       catch (e) { S.toast(e.detail || "Couldn't save", "err"); }
@@ -516,6 +558,24 @@ window.pageInit = async (S) => {
     ], (o) => {
       const body = { title: o.title, dimension: o.dimension, description: o.description, status: o.status, target_date: o.target_date || null };
       return g ? api(`/api/development/goals/${g.id}`, { method: "PATCH", body }) : api("/api/development/goals", { method: "POST", body });
+    });
+  }
+
+  // A target PR: the number chased (target) vs where you are (current) — %, and the ring,
+  // follow. `direction` lower = time-based goals (a 55-min 10k beats a 59-min one).
+  function ptargetForm(t) {
+    formModal(t ? "Edit target" : "Add a physical target", [
+      { name: "name", label: "Lift / run / skill", value: t && t.name, ph: "e.g. Bench Press, 10k run, Muscle-up" },
+      { name: "kind", label: "Kind", type: "select", value: (t && t.kind) || "lift", options: [{ v: "lift", t: "Lift" }, { v: "run", t: "Run" }, { v: "skill", t: "Skill (calisthenics, boxing…)" }] },
+      { name: "target_value", label: "Target number", type: "number", step: "0.1", value: t && t.target_value },
+      { name: "current_value", label: "Current number", type: "number", step: "0.1", value: t ? t.current_value : 0 },
+      { name: "unit", label: "Unit", value: t && t.unit, ph: "kg, lb, min, sec, reps, km…" },
+      { name: "direction", label: "What counts as better", type: "select", value: (t && t.direction) || "higher", options: [{ v: "higher", t: "Higher is better (lifts, reps, holds)" }, { v: "lower", t: "Lower is better (times)" }] },
+      { name: "status", label: "Status", type: "select", value: (t && t.status) || "active", options: [{ v: "active", t: "Active" }, { v: "achieved", t: "Achieved" }, { v: "paused", t: "Paused" }] },
+      { name: "notes", label: "Notes", type: "textarea", rows: 2, value: t && t.notes, ph: "e.g. paused strict form until shoulder heals (optional)" },
+    ], (o) => {
+      const body = { name: o.name, kind: o.kind, target_value: num(o.target_value), current_value: num(o.current_value) || 0, unit: o.unit || "", direction: o.direction, status: o.status, notes: o.notes || null };
+      return t ? api(`/api/development/physical-goals/${t.id}`, { method: "PATCH", body }) : api("/api/development/physical-goals", { method: "POST", body });
     });
   }
 

@@ -24,6 +24,7 @@ from ..models import (
     GrowthItem,
     GymLog,
     PersonalRecord,
+    PhysicalGoal,
     ProfessionalGoal,
     ReadingItem,
     ReadingProgress,
@@ -40,6 +41,7 @@ from ..serializers import (
     goal_dict,
     growth_item_dict,
     personal_record_dict,
+    physical_goal_dict,
     pr_display,
     reading_item_dict,
     skill_dict,
@@ -122,6 +124,14 @@ def _profile(db: Session, user_id: int) -> DevelopmentProfile | None:
     ).scalar_one_or_none()
 
 
+def _physical_goals(db: Session, user_id: int) -> list[PhysicalGoal]:
+    return list(
+        db.execute(
+            select(PhysicalGoal).where(PhysicalGoal.user_id == user_id).order_by(PhysicalGoal.created_at)
+        ).scalars()
+    )
+
+
 def _areas(db: Session, user_id: int) -> dict[str, DevelopmentArea]:
     """This user's per-dimension settings rows, keyed by dimension. Rows are lazy —
     a dimension with no row simply uses the frontend defaults."""
@@ -156,6 +166,9 @@ def full_profile(db: Session, user: User) -> dict:
             "metrics": [body_metric_dict(m) for m in metrics],
             "latest": body_metric_dict(metrics[0]) if metrics else None,
             "prs": [personal_record_dict(p) for p in _prs(db, user.id)],
+            # Target PRs being chased — mean progress across non-paused ones IS the
+            # Physical ring on the Growth Overview.
+            "targets": [physical_goal_dict(g) for g in _physical_goals(db, user.id)],
         },
         "career": {
             "profile": development_profile_dict(_profile(db, user.id)),
@@ -189,6 +202,14 @@ def holistic_digest(db: Session, user: User) -> dict:
 
     resume = (profile.resume_text or "").strip() if profile else ""
     resume_excerpt = (resume[:700] + ("…" if len(resume) > 700 else "")) if resume else None
+
+    # Target PRs (lifts/runs/skills). One compact line each; the coach both reads these and
+    # edits them (update_physical_goal — e.g. "I benched 85 today" bumps current_value).
+    physical_goals = _physical_goals(db, user.id)
+    def _pg_line(g: PhysicalGoal) -> str:
+        d = physical_goal_dict(g)
+        return (f"({g.kind}) {g.name}: {g.current_value:g}/{g.target_value:g}{(' ' + g.unit) if g.unit else ''}"
+                f" = {d['progress_pct']}% ({g.status}{', lower is better' if g.direction == 'lower' else ''})")
 
     # Gym: the recurring weekly split + how consistent they've been lately, so the coach can speak
     # to (and edit) the schedule.
@@ -224,6 +245,7 @@ def holistic_digest(db: Session, user: User) -> dict:
     # Items with their ids, for the assistant's edit actions (update/delete need the id).
     editable = {
         "prs": [{"id": p.id, "label": _pr_line(p)} for p in prs],
+        "physical_goals": [{"id": g.id, "label": _pg_line(g)} for g in physical_goals],
         "goals": [{"id": g.id, "label": f"[{g.dimension or 'professional'}] {g.title} ({g.status}, {g.progress_pct}%)"} for g in goals],
         "achievements": [{"id": a.id, "label": a.title} for a in achievements],
         "skills": [{"id": s.id, "label": f"{s.name} ({s.level}, {s.source})"} for s in skills],
@@ -240,6 +262,8 @@ def holistic_digest(db: Session, user: User) -> dict:
             "weight_kg": latest.weight_kg if latest else None,
             "as_of": latest.date.isoformat() if latest else None,
             "recent_prs": [_pr_line(p) for p in prs[:10]],
+            # Targets being chased — their mean progress is the Physical ring.
+            "targets": [_pg_line(g) for g in physical_goals[:15]],
         },
         "gym": {
             "weekly_split": weekly_split,

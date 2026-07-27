@@ -19,6 +19,7 @@ from ..models import (
     DevelopmentProfile,
     GrowthItem,
     PersonalRecord,
+    PhysicalGoal,
     ProfessionalGoal,
     ReadingItem,
     ReadingProgress,
@@ -36,6 +37,8 @@ from ..schemas import (
     GrowthItemUpdateIn,
     PersonalRecordIn,
     PersonalRecordUpdateIn,
+    PhysicalGoalIn,
+    PhysicalGoalUpdateIn,
     ReadingItemIn,
     ReadingItemUpdateIn,
     ReadingProgressIn,
@@ -52,6 +55,7 @@ from ..serializers import (
     goal_dict,
     growth_item_dict,
     personal_record_dict,
+    physical_goal_dict,
     reading_item_dict,
     skill_dict,
 )
@@ -216,6 +220,49 @@ def update_goal(goal_id: int, payload: GoalUpdateIn, user: User = Depends(get_cu
 @router.delete("/goals/{goal_id}", status_code=204)
 def delete_goal(goal_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     db.delete(_own(db, ProfessionalGoal, goal_id, user))
+    db.commit()
+
+
+# --- Physical goals (target PRs: lifts / runs / skills) ----------------------
+@router.get("/physical-goals")
+def list_physical_goals(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """The owner's target PRs — the Physical tab's goals card fetches just this
+    (the full /me payload would be overkill on the gym page)."""
+    rows = db.execute(
+        select(PhysicalGoal).where(PhysicalGoal.user_id == user.id).order_by(PhysicalGoal.created_at)
+    ).scalars()
+    return {"goals": [physical_goal_dict(g) for g in rows]}
+
+
+@router.post("/physical-goals")
+def add_physical_goal(payload: PhysicalGoalIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    g = PhysicalGoal(
+        user_id=user.id,
+        name=payload.name,
+        kind=payload.kind,
+        target_value=payload.target_value,
+        current_value=payload.current_value,
+        unit=payload.unit,
+        direction=payload.direction,
+        notes=payload.notes,
+        status=payload.status,
+    )
+    db.add(g)
+    db.commit()
+    return physical_goal_dict(g)
+
+
+@router.patch("/physical-goals/{goal_id}")
+def update_physical_goal(goal_id: int, payload: PhysicalGoalUpdateIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    g = _own(db, PhysicalGoal, goal_id, user)
+    _apply(g, payload, ["name", "kind", "target_value", "current_value", "unit", "direction", "notes", "status"])
+    db.commit()
+    return physical_goal_dict(g)
+
+
+@router.delete("/physical-goals/{goal_id}", status_code=204)
+def delete_physical_goal(goal_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    db.delete(_own(db, PhysicalGoal, goal_id, user))
     db.commit()
 
 

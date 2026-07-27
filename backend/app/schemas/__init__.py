@@ -227,6 +227,30 @@ class GoalUpdateIn(BaseModel):
     progress_pct: int | None = Field(default=None, ge=0, le=100)
 
 
+class PhysicalGoalIn(BaseModel):
+    """A target PR to chase: a lift, a run, or a skill (calisthenics/boxing)."""
+
+    name: str
+    kind: str = "lift"  # lift | run | skill
+    target_value: float
+    current_value: float = 0
+    unit: str = ""  # kg, lb, min, sec, reps, km…
+    direction: str = "higher"  # higher | lower (time-based: lower is better)
+    notes: str | None = None
+    status: str = "active"  # active | achieved | paused
+
+
+class PhysicalGoalUpdateIn(BaseModel):
+    name: str | None = None
+    kind: str | None = None
+    target_value: float | None = None
+    current_value: float | None = None
+    unit: str | None = None
+    direction: str | None = None
+    notes: str | None = None
+    status: str | None = None
+
+
 class AreaUpdateIn(BaseModel):
     """Patch one growth dimension's settings. Fields the client OMITS are left alone; an
     explicit null CLEARS (deadline back to the default, other_info emptied) — the router

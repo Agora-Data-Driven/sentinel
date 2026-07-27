@@ -45,7 +45,85 @@ window.pageInit = async (S) => {
   window.SentinelReloadGym = async () => {
     try { state.plan = await S.api("/api/gym/plan"); } catch (e) { /* keep old */ }
     switchTab(state.tab);
+    renderGoals();
   };
+
+  // --- Physical goals (target PRs) --------------------------------------------
+  // The same targets the Growth Overview's Physical ring averages: a number chased
+  // (target) vs where you are (current), per lift / run / skill. Editable here, on
+  // the Overview, and by the Coach (add/update/delete_physical_goal).
+  let pgoals = [];
+  async function renderGoals() {
+    const host = S.qs("#gym-body");
+    if (!host) return;
+    try { pgoals = (await S.api("/api/development/physical-goals")).goals || []; }
+    catch (e) { host.innerHTML = ""; return; }
+    const fmt = (v) => (v == null ? "—" : String(Math.round(v * 100) / 100));
+    const pill = (k) => `<span class="pill ${k === "run" ? "amber" : k === "skill" ? "green" : ""}">${S.esc(k)}</span>`;
+    const row = (t) => {
+      const pct = Math.max(0, Math.min(100, t.progress_pct || 0));
+      return `<div style="padding:8px 0;border-top:1px solid var(--line)">
+        <div class="row between" style="gap:10px">
+          <div style="min-width:0">${pill(t.kind)} <strong>${S.esc(t.name)}</strong>
+            <span class="muted">${fmt(t.current_value)} / ${fmt(t.target_value)}${t.unit ? " " + S.esc(t.unit) : ""}${t.direction === "lower" ? " · lower wins" : ""}</span></div>
+          <div class="row" style="gap:8px;flex:none;align-items:center">
+            ${t.status !== "active" ? `<span class="pill ${t.status === "achieved" ? "green" : "amber"}">${S.esc(t.status)}</span>` : ""}
+            <strong>${pct}%</strong>
+            <a href="#" class="linky" data-pg-edit="${t.id}">edit</a>
+            <a href="#" class="linky danger" data-pg-del="${t.id}">delete</a>
+          </div>
+        </div>
+        <div class="pr-track" style="margin-top:6px;--hue:var(--dim-physical)"><i style="width:${pct}%"></i></div>
+      </div>`;
+    };
+    const live = pgoals.filter((t) => t.status !== "paused");
+    const avg = live.length ? Math.round(live.reduce((a, t) => a + (t.progress_pct || 0), 0) / live.length) : null;
+    host.innerHTML = `<div class="card" style="padding:16px 18px;margin-bottom:16px">
+      <div class="row between" style="align-items:center;margin-bottom:2px">
+        <h3 style="margin:0;font-size:15px">Target PRs ${avg != null ? `<span class="muted" style="font-weight:600">· ${avg}% — your Physical ring</span>` : ""}</h3>
+        <a href="#" class="linky" id="pg-add">+ add target</a>
+      </div>
+      ${pgoals.length ? pgoals.map(row).join("") : '<div class="empty" style="margin-top:8px">The numbers you\'re chasing — lifts, runs, skills. Add your first target; its progress drives the Physical ring on the Overview.</div>'}
+    </div>`;
+    S.qs("#pg-add").onclick = (e) => { e.preventDefault(); goalModal(); };
+    S.qsa("[data-pg-edit]").forEach((a) => a.onclick = (e) => { e.preventDefault(); goalModal(pgoals.find((t) => t.id == a.dataset.pgEdit)); });
+    S.qsa("[data-pg-del]").forEach((a) => a.onclick = (e) => { e.preventDefault(); S.api(`/api/development/physical-goals/${a.dataset.pgDel}`, { method: "DELETE" }).then(renderGoals).catch((x) => S.toast(x.detail || "Couldn't delete", "err")); });
+  }
+
+  function goalModal(t) {
+    const val = (v) => (v == null ? "" : S.esc(String(v)));
+    const sel = (id, cur, opts) => `<select id="${id}">${opts.map(([v, l]) => `<option value="${v}" ${v === cur ? "selected" : ""}>${l}</option>`).join("")}</select>`;
+    const m = S.modal({
+      title: t ? "Edit target" : "Add a physical target",
+      body: `<div class="formgrid">
+        <label class="field"><span>Lift / run / skill</span><input id="pg-name" value="${val(t && t.name)}" placeholder="e.g. Bench Press, 10k run, Muscle-up"></label>
+        <label class="field"><span>Kind</span>${sel("pg-kind", (t && t.kind) || "lift", [["lift", "Lift"], ["run", "Run"], ["skill", "Skill (calisthenics, boxing…)"]])}</label>
+        <label class="field"><span>Target number</span><input id="pg-target" type="number" step="0.1" value="${val(t && t.target_value)}"></label>
+        <label class="field"><span>Current number</span><input id="pg-current" type="number" step="0.1" value="${val(t ? t.current_value : 0)}"></label>
+        <label class="field"><span>Unit</span><input id="pg-unit" value="${val(t && t.unit)}" placeholder="kg, lb, min, sec, reps, km…"></label>
+        <label class="field"><span>What counts as better</span>${sel("pg-dir", (t && t.direction) || "higher", [["higher", "Higher is better (lifts, reps, holds)"], ["lower", "Lower is better (times)"]])}</label>
+        <label class="field"><span>Status</span>${sel("pg-status", (t && t.status) || "active", [["active", "Active"], ["achieved", "Achieved"], ["paused", "Paused"]])}</label>
+        <label class="field"><span>Notes</span><textarea id="pg-notes" rows="2">${val(t && t.notes)}</textarea></label>
+      </div>`,
+      footer: `<button class="btn ghost" id="pg-cancel">Cancel</button><button class="btn primary" id="pg-save">Save</button>`,
+    });
+    S.qs("#pg-cancel").onclick = m.close;
+    S.qs("#pg-save").onclick = async () => {
+      const num = (v) => (v === "" || v == null ? null : Number(v));
+      const body = {
+        name: S.qs("#pg-name").value, kind: S.qs("#pg-kind").value,
+        target_value: num(S.qs("#pg-target").value), current_value: num(S.qs("#pg-current").value) || 0,
+        unit: S.qs("#pg-unit").value || "", direction: S.qs("#pg-dir").value,
+        status: S.qs("#pg-status").value, notes: S.qs("#pg-notes").value || null,
+      };
+      try {
+        await (t ? S.api(`/api/development/physical-goals/${t.id}`, { method: "PATCH", body })
+          : S.api("/api/development/physical-goals", { method: "POST", body }));
+        m.close(); renderGoals();
+      } catch (e) { S.toast(e.detail || "Couldn't save", "err"); }
+    };
+  }
+  renderGoals();
 
   // --- small helpers ----------------------------------------------------------
   const dayNum = (iso) => Number(iso.slice(8, 10));

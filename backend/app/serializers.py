@@ -26,6 +26,7 @@ from .models import (
     DevelopmentArea,
     Notification,
     PersonalRecord,
+    PhysicalGoal,
     ProfessionalGoal,
     ReadingItem,
     ReadingProgress,
@@ -386,6 +387,35 @@ def goal_dict(g: ProfessionalGoal) -> dict:
         "status": g.status,
         "progress_pct": g.progress_pct,
         # created_at lets the hub compute expected-by-today pace against target_date.
+        "created_at": _iso(g.created_at),
+    }
+
+
+def physical_goal_progress(g: PhysicalGoal) -> int:
+    """0–100 progress toward a target PR. 'higher' = current/target; 'lower' (times)
+    = target/current. Achieved pins to 100; degenerate values clamp rather than error."""
+    if g.status == "achieved":
+        return 100
+    cur, tgt = g.current_value or 0, g.target_value or 0
+    if g.direction == "lower":
+        ratio = (tgt / cur) if cur > 0 else 0.0
+    else:
+        ratio = (cur / tgt) if tgt > 0 else 0.0
+    return max(0, min(100, round(ratio * 100)))
+
+
+def physical_goal_dict(g: PhysicalGoal) -> dict:
+    return {
+        "id": g.id,
+        "name": g.name,
+        "kind": g.kind,
+        "target_value": g.target_value,
+        "current_value": g.current_value,
+        "unit": g.unit or "",
+        "direction": g.direction or "higher",
+        "notes": g.notes,
+        "status": g.status,
+        "progress_pct": physical_goal_progress(g),
         "created_at": _iso(g.created_at),
     }
 
