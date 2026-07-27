@@ -63,6 +63,13 @@ window.pageInit = async (S) => {
       ? progs.filter((p) => (p.category || "career") !== "growth")
       : progs.filter((p) => (DIM_PROGRAMS[key] || []).includes(p.id));
     if (!mine.length) return null;
+    // Topic-weighted across programs (Σ progressSum / Σ topics) — the engine's own "Overall
+    // mastery" formula, so this ring and the tab's engine read the same number. Falls back to
+    // a plain mean of pct if the engine predates progressSum.
+    const total = mine.reduce((a, p) => a + (p.topicsTotal || 0), 0);
+    if (total && mine.every((p) => p.progressSum != null)) {
+      return mine.reduce((a, p) => a + (p.progressSum || 0), 0) / total;
+    }
     return mine.reduce((a, p) => a + (p.pct || 0), 0) / mine.length;
   }
 

@@ -90,7 +90,8 @@
       { href: "/philosophical", label: "Philosophical", icon: "cap" },
       { href: "/spiritual", label: "Spiritual", icon: "flame" },
       { href: "/gym", label: "Physical", icon: "dumbbell", hideRoles: ["super_admin"] },
-      { href: "/reading", label: "Reading", icon: "book" },
+      // No Reading tab: the reading canon overlaps the Philosophical/Spiritual engines.
+      // The /reading page itself stays reachable (Overview's "Open the canon" links).
     ] },
     { group: "Time & Leave", icon: "clock", children: [
       { href: "/attendance", label: "Time", icon: "clock" },
