@@ -222,12 +222,31 @@ window.pageInit = async (S) => {
   }
   // Standalone labels the coach uses even without a trailing colon.
   const KNOWN_LABELS = /^(mission|vision|standards?|values?|principles?|why( it matters)?|the why|identity|objectives)$/i;
+
+  // LEGACY TEXT still reads flat: goals written before the markdown convention carry no "**",
+  // so a standard like "Emotional mastery. Meet stress with steadiness…" showed as one grey run.
+  // Auto-emphasise the lead phrase when a line opens with a short label-ish sentence followed by
+  // more text. Deliberately conservative — lines opening with a sentence-starter word ("This",
+  // "Because", "To"…) are ordinary prose, not labels, and must stay untouched.
+  const PROSE_OPENERS = /^(a|an|the|this|that|these|those|it|its|i|my|we|our|you|your|he|she|they|to|for|because|but|and|so|if|when|there|here|no|not|every|each|by|in|on|at|as|with|without|being|becoming)$/i;
+  function autoEmphasis(line) {
+    if (line.includes("*")) return line;                    // author already marked it up
+    const m = line.match(/^([^.!?:]{3,40}[.:])\s+(\S.*)$/);
+    if (!m) return line;                                    // no lead phrase, or nothing after it
+    const lead = m[1].replace(/[.:]$/, "").trim();
+    const words = lead.split(/\s+/);
+    if (words.length > 5 || PROSE_OPENERS.test(words[0])) return line;
+    return `**${m[1]}** ${m[2]}`;
+  }
   function objectivesHtml(desc) {
     if (!desc) return "";
     const out = [];
     let para = [], items = [];
+    // One line = one paragraph. These descriptions are written one-thought-per-line, so
+    // <br>-joining them ran four separate standards together into a single grey block.
     const flushPara = () => {
-      if (para.length) { out.push(`<div class="goal-desc">${para.map(inlineMd).join("<br>")}</div>`); para = []; }
+      para.forEach((l) => out.push(`<div class="goal-desc">${inlineMd(autoEmphasis(l))}</div>`));
+      para = [];
     };
     const flushItems = () => {
       if (!items.length) return;

@@ -30,7 +30,12 @@ param(
   [string]$SsoSecretName    = "platform-sso-key",       # Secret Manager secret (portal ag_sso HMAC key)
   [string]$PortalLoginUrl   = "https://portal.agoradatadriven.com/login",
   [string]$SkillMasteryUrl  = "https://mastery.agoradatadriven.com",
-  [string]$GoogleRedirectUri = "https://sentinel-585951669065.asia-southeast1.run.app/api/auth/google/callback"
+  [string]$GoogleRedirectUri = "https://sentinel-585951669065.asia-southeast1.run.app/api/auth/google/callback",
+  # The portal origin the ATRIUM TASK BRIDGE calls (services/atrium_tasks.py). Atrium owns the
+  # client-facing tasks; the board reads them over HMAC so a card typed into a client's Atrium
+  # shows up here. Omit it and the bridge falls back to PORTAL_LOGIN_URL's origin; if neither
+  # resolves the board simply shows Sentinel's own rows.
+  [string]$AtriumApiUrl     = "https://portal.agoradatadriven.com"
 )
 $ErrorActionPreference = "Stop"
 
@@ -63,7 +68,7 @@ $deployArgs = @(
 # (melo@agora.ph — change the password immediately) or wire Google OAuth (see
 # GOOGLE-SIGNIN-SETUP.md). If you MUST keep the dev-login dropdown temporarily, append
 # ",ALLOW_DEV_LOGIN_IN_PROD=true" below — the app will boot with a loud SECURITY warning.
-$envVars = "ENVIRONMENT=production,SECURE_COOKIES=true,DEV_LOGIN_ENABLED=false,TIMEZONE=Asia/Manila,PORTAL_LOGIN_URL=$PortalLoginUrl,SKILL_MASTERY_URL=$SkillMasteryUrl,GOOGLE_REDIRECT_URI=$GoogleRedirectUri"
+$envVars = "ENVIRONMENT=production,SECURE_COOKIES=true,DEV_LOGIN_ENABLED=false,TIMEZONE=Asia/Manila,PORTAL_LOGIN_URL=$PortalLoginUrl,SKILL_MASTERY_URL=$SkillMasteryUrl,GOOGLE_REDIRECT_URI=$GoogleRedirectUri,ATRIUM_API_URL=$AtriumApiUrl"
 
 if ($DemoSqlite) {
   Write-Host "DEMO mode: ephemeral SQLite, single instance (data resets on restart)." -ForegroundColor Yellow

@@ -61,6 +61,11 @@ class Settings(BaseSettings):
     platform_sso_secret: str = ""
     # Where /login sends people (the portal). Unset = Sentinel keeps its own login form.
     portal_login_url: str = ""
+    # The portal's origin for the ATRIUM TASK BRIDGE (services/atrium_tasks.py). Atrium owns the
+    # client-facing tasks; the internal board reads them over HMAC so a task typed into a client's
+    # Atrium shows up here. Unset = derived from portal_login_url; if neither resolves, the bridge
+    # is simply off and the board shows Sentinel's own rows only.
+    atrium_api_url: str = ""
     # The host Sentinel should be reached on. The shared cookie is scoped to
     # .agoradatadriven.com, so on the raw *.run.app URL (an old bookmark, a stale link) SSO simply
     # cannot work and you get asked to sign in again for no visible reason. Set this and browsers

@@ -23,7 +23,7 @@ from ..constants import (
     TASK_FOR_REVIEW,
 )
 from ..database import get_db
-from ..models import AtriumApproval, Task, TaskComment, TaskHistory, User
+from ..models import AtriumApproval, Client, Task, TaskComment, TaskHistory, User
 from ..schemas import (
     CommentIn,
     TaskCreateIn,
@@ -33,6 +33,8 @@ from ..schemas import (
 )
 from ..security import get_current_user, is_manager, require_roles
 from ..serializers import atrium_payload, comment_dict, task_card, task_detail, user_public
+from ..services import atrium_tasks
+from ..services import atrium_tasks
 from ..services import audit
 from ..services import maintasks as maintasks_svc
 from ..services import notifications as notif
@@ -86,7 +88,29 @@ def list_tasks(
     if priority:
         q = q.where(Task.priority == priority)
     tasks = [t for t in db.execute(q).scalars().all() if task_perms.can_view(user, t)]
-    return [task_card(t, db) for t in tasks]
+    cards = [task_card(t, db) for t in tasks]
+    # ATRIUM BRIDGE: Atrium owns the client-facing tasks (one workspace JSON per client), so a card
+    # typed into a client's Atrium board must appear here too -- this board is the team's
+    # cross-client window onto the same work, not a second system. Best-effort: if the bridge is
+    # off or Atrium is unreachable, the board still renders Sentinel's own rows.
+    if atrium_tasks.enabled():
+        # Resolve each Atrium workspace key to its Sentinel Client row so the board's client filter
+        # and client name work on Atrium cards too (Client.atrium_client_id is that bridge).
+        by_key = {c.atrium_client_id: c
+                  for c in db.execute(select(Client)).scalars().all() if c.atrium_client_id}
+        for a in atrium_tasks.fetch_tasks():
+            card = atrium_tasks.as_board_card(a, by_key.get(a.get("client_key")))
+            if status and card["status"] != status:
+                continue
+            if priority and card["priority"] != priority:
+                continue
+            if client_id and card["client_id"] != client_id:
+                continue
+            # Atrium tasks carry no Sentinel assignee/team, so those two filters exclude them.
+            if assignee_id or team_id:
+                continue
+            cards.append(card)
+    return cards
 
 
 def _aggregate(pts: list[Task], today, week_start, all_statuses) -> dict:
@@ -283,8 +307,23 @@ def delete_task(task_id: int, user: User = Depends(get_current_user), db: Sessio
 
 
 @router.patch("/{task_id}/status")
-def move_status(task_id: int, payload: TaskStatusIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    task = db.get(Task, task_id)
+def move_status(task_id: str, payload: TaskStatusIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    # An Atrium-owned card (id "atrium:<client_key>:<task_id>") lives in Atrium, so the move is
+    # written THERE -- Atrium is the source of truth for client-facing work. Atrium's own guards
+    # (open sub-tasks / unresolved change requests block completion) are surfaced verbatim.
+    a_key, a_task = atrium_tasks.split_id(str(task_id))
+    if a_key:
+        stage = atrium_tasks.STAGE_BY_STATUS.get(payload.status)
+        if not stage:
+            raise HTTPException(status_code=400, detail="Invalid status")
+        ok, err = atrium_tasks.move_task(a_key, a_task, stage, actor=user.email or "")
+        if not ok:
+            raise HTTPException(status_code=409, detail=err)
+        return {"ok": True, "id": str(task_id), "status": payload.status}
+    try:
+        task = db.get(Task, int(task_id))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=404, detail=_NOT_FOUND)
     if not task:
         raise HTTPException(status_code=404, detail=_NOT_FOUND)
     if payload.status not in task_config.statuses(db):
