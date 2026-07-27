@@ -735,9 +735,19 @@ textarea { resize: vertical; min-height: 78px; }
   padding-bottom:10px; border-bottom:1px solid var(--line-soft); }
 .pace-key { color:var(--muted); font-weight:400; text-transform:none; letter-spacing:.04em;
   display:flex; align-items:center; gap:6px; }
-.pace-row { display:grid; grid-template-columns:132px 1fr 116px; gap:14px; align-items:center;
-  padding:11px 0; border-top:1px solid var(--line-soft); }
-.dim-pace-head + .pace-row { border-top:none; }
+.pace-block { border-top:1px solid var(--line-soft); scroll-margin-top:82px; }
+.dim-pace-head + .pace-block { border-top:none; }
+.pace-row { display:grid; grid-template-columns:132px 1fr 116px 14px; gap:14px; align-items:center;
+  padding:11px 8px; margin:0 -8px; border-radius:10px; cursor:pointer; transition:background .12s; }
+.pace-row:hover { background:var(--hover); }
+.pace-row:focus-visible { outline:2px solid var(--hue); outline-offset:-2px; }
+.pr-chev { display:flex; justify-content:flex-end; }
+.pr-chev svg { width:14px; height:14px; stroke:var(--muted); transform:rotate(90deg); transition:transform .16s; }
+.pace-block.open .pr-chev svg { transform:rotate(-90deg); }
+/* The inline expansion: what an open pace row reveals (goals + record collapsibles) */
+.pace-detail { display:none; }
+.pace-block.open .pace-detail { display:block; border-top:1px dashed var(--line-soft);
+  margin-top:2px; padding:12px 0 14px; }
 .pr-name { font-family:var(--mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase;
   color:var(--sub); font-weight:700; display:flex; align-items:center; gap:7px; }
 .pr-name svg { width:13px; height:13px; stroke:var(--hue); flex:none; }
@@ -752,32 +762,9 @@ textarea { resize: vertical; min-height: 78px; }
 .pr-delta { text-align:right; }
 .pr-note { font-family:var(--mono); font-size:10.5px; color:var(--muted); }
 
-/* 3 · Dimension boxes — four equal cards; an open one takes the full row */
-.dim-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; align-items:start; }
-.dim-box { background:var(--card); border:1px solid var(--line); border-top:3px solid var(--hue);
-  border-radius:var(--radius); box-shadow:var(--shadow-sm); overflow:hidden; scroll-margin-top:82px; }
-.dim-box.open { grid-column:1 / -1; box-shadow:var(--shadow); }
-.dim-head { appearance:none; background:none; border:none; font:inherit; color:inherit; cursor:pointer;
-  width:100%; display:flex; align-items:center; gap:12px; padding:14px 16px; text-align:left; transition:background .12s; }
-.dim-head:hover { background:var(--hover); }
-.dim-head:focus-visible { outline:2px solid var(--hue); outline-offset:-3px; border-radius:8px; }
-.dim-glyph { width:34px; height:34px; border-radius:10px; background:var(--hue-bg); flex:none;
-  display:flex; align-items:center; justify-content:center; }
-.dim-glyph svg { width:17px; height:17px; stroke:var(--hue); }
-.dim-title { display:flex; flex-direction:column; gap:2px; min-width:0; }
-.dim-title strong { font-size:15.5px; letter-spacing:-.01em; }
-.dim-title small { font-family:var(--mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); }
-.dim-head-right { margin-left:auto; display:flex; align-items:center; gap:9px; }
-.dim-count { font-family:var(--mono); font-size:10.5px; color:var(--muted); white-space:nowrap; }
-.dim-head-right svg { width:15px; height:15px; stroke:var(--muted); transform:rotate(90deg); transition:transform .16s; }
-.dim-box.open .dim-head-right svg { transform:rotate(-90deg); }
-.dim-peek { padding:0 16px 15px; }
-.dim-box.open .dim-peek { display:none; }
-.dp-goal { font-size:13.5px; font-weight:600; margin-bottom:8px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.dp-goal.muted { color:var(--muted); font-weight:500; }
-.dp-bar { height:6px; }
-.dim-body { display:none; padding:0 16px 16px; border-top:1px solid var(--line-soft); }
-.dim-box.open .dim-body { display:block; padding-top:14px; }
+/* 3 · Dimension details — no longer separate boxes: each pace row above expands in place
+   (.pace-block / .pace-detail in §2). What an expanded row reveals is the goals list below
+   plus the record sub-sections. */
 
 /* Goals inside a box — each expands to its objectives */
 .goal-item { border:1px solid var(--line); border-radius:var(--radius-sm); margin-bottom:8px; }
@@ -815,7 +802,7 @@ textarea { resize: vertical; min-height: 78px; }
 .ds-body { padding:2px 2px 14px; }
 
 @media (prefers-reduced-motion: reduce) {
-  .dim-cell, .dim-head, .dim-head-right svg, .goal-item summary svg, .ds-right svg { transition:none; }
+  .dim-cell, .pace-row, .pr-chev svg, .goal-item summary svg, .ds-right svg { transition:none; }
 }
 
 /* Cards inside the ledger: quieter, hairline-led, green-forward */
@@ -830,7 +817,8 @@ textarea { resize: vertical; min-height: 78px; }
 @media (max-width:820px){
   .dim-rings{ grid-template-columns:repeat(2,1fr); }
   .dim-cell:nth-child(3){ border-left:none; } .dim-cell:nth-child(n+3){ border-top:1px solid var(--line); }
-  .dim-grid{ grid-template-columns:1fr; }
-  .pace-row{ grid-template-columns:1fr; gap:7px; padding:12px 0; }
-  .pr-delta{ text-align:left; } }
+  .pace-row{ grid-template-columns:1fr 14px; gap:7px 14px; padding:12px 8px; }
+  .pace-row .pr-lane{ grid-column:1 / -1; grid-row:2; }
+  .pace-row .pr-delta{ text-align:left; grid-column:1; grid-row:3; }
+  .pace-row .pr-chev{ grid-column:2; grid-row:1; } }
 @media (max-width:560px){ .dev-mast{ flex-direction:column; align-items:flex-start; } .dev-mast-right{ align-items:flex-start; } }

@@ -6,9 +6,10 @@
 //      "expected by today" on the run from the area's start to its deadline.
 //   2. The pace band — the same actual-vs-expected on a date track; each row's deadline is
 //      editable (default 2026-11-04) and stored per dimension (/api/development/areas).
-//   3. Four equal dimension boxes (click to expand). Goals + objectives first, then that
-//      dimension's records as collapsible sub-sections, then a free-form "Other info" dump
-//      the coach can read and edit. NOTHING from the old hub was dropped:
+//      Each row IS its dimension: the track renders exactly as before, and clicking a row
+//      expands that dimension's details INLINE beneath it — goals + objectives first, then
+//      its records as collapsible sub-sections, then a free-form "Other info" dump the coach
+//      can read and edit. NOTHING from the old hub was dropped:
 //      Physical → body stats + PRs · Professional → resume, achievements, skills, Academy ·
 //      Philosophical → books/essays + philosophy canon · Spiritual → journal.
 // A manager opens ?user=<id> for a read-only view. The same data feeds the AI coach.
@@ -147,6 +148,8 @@ window.pageInit = async (S) => {
   }
 
   // --- the pace band: engine score vs where-the-calendar-says per dimension ----
+  // The row is also the dimension's header — a div with role=button (not a <button>) because
+  // it legitimately nests an interactive element (the ✎ deadline editor).
   function paceRow(d) {
     const actual = dimActual(d.key), expected = dimExpected(d.key);
     const win = dimWindow(d.key);
@@ -157,10 +160,25 @@ window.pageInit = async (S) => {
       : paceChip(actual, expected);
     const dates = `<div class="pr-dates"><span>${esc(win.start)}</span>
       <span>target ${esc(win.end)}${readOnly ? "" : ` <a href="#" class="linky" data-edit-deadline="${d.key}" title="Edit this deadline">✎</a>`}</span></div>`;
-    return `<div class="pace-row" style="--hue:var(--dim-${d.key})">
+    return `<div class="pace-row" data-toggle-dim="${d.key}" role="button" tabindex="0"
+        aria-expanded="${openDims.has(d.key)}" title="Open ${esc(d.name)} details">
       <span class="pr-name">${S.ICON[d.icon]}${esc(d.name)}</span>
       <div class="pr-lane"><div class="pr-track"><i style="width:${fill.toFixed(1)}%"></i>${tick}</div>${dates}</div>
       <span class="pr-delta">${right}</span>
+      <span class="pr-chev">${S.ICON.chev}</span>
+    </div>`;
+  }
+
+  // One pace-block = the row (always visible, unchanged) + everything the old dimension box
+  // held, revealed inline beneath the row when it's clicked.
+  function paceBlock(d) {
+    const open = openDims.has(d.key);
+    return `<div class="pace-block ${open ? "open" : ""}" id="dim-${d.key}" style="--hue:var(--dim-${d.key})">
+      ${paceRow(d)}
+      <div class="pace-detail">
+        ${goalsBlock(d.key)}
+        <div class="dim-records">${SUBS[d.key]()}${infoSub(d.key)}</div>
+      </div>
     </div>`;
   }
 
@@ -383,34 +401,6 @@ window.pageInit = async (S) => {
 
   const SUBS = { spiritual: spiritualSubs, professional: professionalSubs, philosophical: philosophicalSubs, physical: physicalSubs };
 
-  // --- one dimension box --------------------------------------------------------
-  function dimBox(d) {
-    const gs = goalsFor(d.key);
-    const active = gs.filter((g) => g.status === "active");
-    const top = active[0] || gs[0];
-    const open = openDims.has(d.key);
-    const actual = dimActual(d.key);
-    const peek = top
-      ? `<div class="dp-goal">${esc(top.title)}</div>
-         ${actual == null ? "" : `<div class="pr-track dp-bar"><i style="width:${Math.max(0, Math.min(100, actual)).toFixed(1)}%"></i></div>`}`
-      : `<div class="dp-goal muted">No goals yet.</div>`;
-    return `<section class="dim-box ${open ? "open" : ""}" id="dim-${d.key}" style="--hue:var(--dim-${d.key});--hue-bg:var(--dim-${d.key}-bg)">
-      <button class="dim-head" data-toggle-dim="${d.key}" aria-expanded="${open}">
-        <span class="dim-glyph">${S.ICON[d.icon]}</span>
-        <span class="dim-title"><strong>${esc(d.name)}</strong><small>${esc(d.blurb)}</small></span>
-        <span class="dim-head-right">
-          <span class="dim-count">${active.length ? `${active.length} active` : gs.length ? `${gs.length} goal${gs.length === 1 ? "" : "s"}` : ""}</span>
-          ${S.ICON.chev}
-        </span>
-      </button>
-      <div class="dim-peek">${peek}</div>
-      <div class="dim-body">
-        ${goalsBlock(d.key)}
-        <div class="dim-records">${SUBS[d.key]()}${infoSub(d.key)}</div>
-      </div>
-    </section>`;
-  }
-
   // --- page render ----------------------------------------------------------------
   function render() {
     const who = readOnly && data.user ? esc(data.user.name.split(" ")[0]) + "’s growth" : "Your growth";
@@ -433,11 +423,9 @@ window.pageInit = async (S) => {
       <div class="dim-rings">${DIMS.map(ringCell).join("")}</div>
 
       <div class="dim-pace">
-        <div class="dim-pace-head">Pace — where you are vs where the calendar says <span class="pace-key"><b class="pr-tick demo"></b> = expected today</span></div>
-        ${DIMS.map(paceRow).join("")}
+        <div class="dim-pace-head">Pace — where you are vs where the calendar says <span class="pace-key"><b class="pr-tick demo"></b> = expected today · click a row for its details</span></div>
+        ${DIMS.map(paceBlock).join("")}
       </div>
-
-      <div class="dim-grid">${DIMS.map(dimBox).join("")}</div>
     </div>`;
 
     wire();
@@ -450,13 +438,20 @@ window.pageInit = async (S) => {
     const willOpen = forceOpen != null ? forceOpen : !openDims.has(key);
     if (willOpen) openDims.add(key); else openDims.delete(key);
     box.classList.toggle("open", willOpen);
-    const head = box.querySelector(".dim-head");
+    const head = box.querySelector(".pace-row");
     if (head) head.setAttribute("aria-expanded", String(willOpen));
   }
 
   function wire() {
     // Expand/collapse works in both modes; edits only when it's your own profile.
-    S.qsa("[data-toggle-dim]").forEach((b) => b.onclick = () => toggleDim(b.dataset.toggleDim));
+    // Rows are divs (see paceRow), so keyboard toggling is wired by hand.
+    S.qsa("[data-toggle-dim]").forEach((b) => {
+      b.onclick = () => toggleDim(b.dataset.toggleDim);
+      b.onkeydown = (e) => {
+        if (e.target !== b) return;  // Enter/Space on a nested link (the ✎) is its own action
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleDim(b.dataset.toggleDim); }
+      };
+    });
     S.qsa("[data-goto-dim]").forEach((b) => b.onclick = () => {
       const key = b.dataset.gotoDim;
       toggleDim(key, true);
@@ -498,6 +493,7 @@ window.pageInit = async (S) => {
     // Per-dimension area settings: the pace deadline (✎ on the pace band) and "Other info".
     S.qsa("[data-edit-deadline]").forEach((a) => a.onclick = (e) => {
       e.preventDefault();
+      e.stopPropagation();  // the ✎ lives inside the clickable pace row — don't toggle it
       const key = a.dataset.editDeadline;
       formModal(`${dimName(key)} deadline`, [
         { name: "deadline", label: `Deadline (blank = default ${DEADLINE_DEFAULT})`, type: "date", value: areaOf(key).deadline || "" },
