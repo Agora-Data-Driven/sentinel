@@ -63,6 +63,18 @@ def test_bridge_is_off_and_silent_without_config(monkeypatch):
     assert ok is False and err
 
 
+def test_bridge_imports_without_third_party_deps():
+    """STDLIB ONLY. `import requests` here crashed every container on boot -- it is not in the
+    image, and an optional bridge must never be able to take the app down at import time."""
+    import pathlib
+
+    src = pathlib.Path(atrium_tasks.__file__).read_text(encoding="utf-8")
+    for line in src.splitlines():
+        stripped = line.strip()
+        assert not stripped.startswith("import requests"), "requests is NOT in requirements.txt"
+        assert not stripped.startswith("from requests"), "requests is NOT in requirements.txt"
+
+
 def test_fetch_degrades_when_atrium_is_unreachable(monkeypatch):
     """An Atrium outage returns [] -- the board still renders Sentinel's own rows."""
     monkeypatch.setattr(atrium_tasks.settings, "platform_sso_secret", "s3cret", raising=False)
@@ -70,10 +82,12 @@ def test_fetch_degrades_when_atrium_is_unreachable(monkeypatch):
                         raising=False)
 
     def _boom(*a, **k):
-        raise atrium_tasks.requests.RequestException("down")
+        raise atrium_tasks.urllib.error.URLError("down")
 
-    monkeypatch.setattr(atrium_tasks.requests, "get", _boom)
+    monkeypatch.setattr(atrium_tasks.urllib.request, "urlopen", _boom)
     assert atrium_tasks.fetch_tasks() == []
+    ok, err = atrium_tasks.move_task("c", "tk_1", "todo")
+    assert ok is False and err
 
 
 def test_signed_request_carries_the_platform_hmac_headers(monkeypatch):
@@ -87,19 +101,26 @@ def test_signed_request_carries_the_platform_hmac_headers(monkeypatch):
     seen = {}
 
     class _Resp:
-        status_code = 200
+        status = 200
 
-        @staticmethod
-        def json():
-            return {"ok": True, "tasks": []}
+        def read(self):
+            return b'{"ok": true, "tasks": []}'
 
-    def _get(url, params=None, headers=None, timeout=None):
-        seen.update({"url": url, "headers": headers})
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def _urlopen(req, timeout=None):
+        seen["url"] = req.full_url
+        seen["headers"] = dict(req.headers)
         return _Resp()
 
-    monkeypatch.setattr(atrium_tasks.requests, "get", _get)
+    monkeypatch.setattr(atrium_tasks.urllib.request, "urlopen", _urlopen)
     atrium_tasks.fetch_tasks()
     assert seen["url"].endswith("/api/internal/tasks")
-    ts = seen["headers"]["X-Academy-Ts"]
+    # urllib title-cases header names.
+    ts = seen["headers"]["X-academy-ts"]
     expected = _hmac.new(b"s3cret", f"tasks:{ts}".encode(), hashlib.sha256).hexdigest()
-    assert seen["headers"]["X-Academy-Sig"] == expected
+    assert seen["headers"]["X-academy-sig"] == expected

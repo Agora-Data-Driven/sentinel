@@ -13,16 +13,22 @@ the same scheme `sentinel_directory.py` uses in the other direction and mastery-
 EVERYTHING here is best-effort and fail-SOFT: an unset secret, a missing URL, a timeout, a non-200
 or a malformed body all degrade to "no Atrium tasks" so the internal board still renders Sentinel's
 own rows. An Atrium outage must never blank the team's board.
+
+STDLIB ONLY (urllib, not requests): this service's requirements.txt is deliberately tight, and an
+optional bridge must never be able to take the app down at import time -- adding `import requests`
+here crashed every container on boot (2026-07-27) because it isn't in the image.
 """
 
 from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import logging
 import time
-
-import requests
+import urllib.error
+import urllib.parse
+import urllib.request
 
 from ..config import settings
 
@@ -72,28 +78,47 @@ def enabled() -> bool:
     return bool((settings.platform_sso_secret or "").strip() and _base_url())
 
 
-def fetch_tasks(client_key: str = "") -> list[dict]:
-    """Every Atrium task (optionally one client's). [] on any failure -- never raises."""
-    headers = _headers("tasks")
+def _call(purpose: str, path: str, params: dict | None = None,
+          body: dict | None = None) -> tuple[int, dict]:
+    """One signed request. Returns (status_code, parsed_json); (0, {}) if it never left the ground.
+
+    Never raises -- every caller degrades instead, because an Atrium outage must not break the
+    internal board."""
+    headers = _headers(purpose)
     base = _base_url()
     if not headers or not base:
-        return []
+        return 0, {}
+    url = base + path
+    if params:
+        url += "?" + urllib.parse.urlencode(params)
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=data, headers=headers,
+                                 method="POST" if body is not None else "GET")
     try:
-        resp = requests.get(
-            f"{base}/api/internal/tasks",
-            params={"client": client_key} if client_key else None,
-            headers=headers,
-            timeout=_TIMEOUT,
-        )
-    except requests.RequestException as exc:
-        log.warning("atrium task fetch failed: %s", exc)
-        return []
-    if resp.status_code != 200:
-        log.warning("atrium task fetch returned %s", resp.status_code)
-        return []
-    try:
-        body = resp.json()
-    except ValueError:
+        with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
+            raw = resp.read().decode("utf-8", "replace")
+            return resp.status, (json.loads(raw) if raw else {})
+    except urllib.error.HTTPError as exc:
+        # A non-2xx still carries a body worth surfacing (e.g. Atrium's completion guard).
+        try:
+            return exc.code, json.loads(exc.read().decode("utf-8", "replace"))
+        except Exception:
+            return exc.code, {}
+    except (urllib.error.URLError, ValueError, TimeoutError, OSError) as exc:
+        log.warning("atrium %s call failed: %s", purpose, exc)
+        return 0, {}
+
+
+def fetch_tasks(client_key: str = "") -> list[dict]:
+    """Every Atrium task (optionally one client's). [] on any failure -- never raises."""
+    code, body = _call("tasks", "/api/internal/tasks",
+                       params={"client": client_key} if client_key else None)
+    if code != 200:
+        if code:
+            log.warning("atrium task fetch returned %s", code)
         return []
     tasks = body.get("tasks")
     return tasks if isinstance(tasks, list) else []
@@ -101,52 +126,34 @@ def fetch_tasks(client_key: str = "") -> list[dict]:
 
 def move_task(client_key: str, task_id: str, stage: str, actor: str = "") -> tuple[bool, str]:
     """Move an Atrium task. Returns (ok, error_message) -- the error is safe to show the user."""
-    headers = _headers("task-move")
-    base = _base_url()
-    if not headers or not base:
+    if not enabled():
         return False, "The Atrium bridge is not configured."
-    try:
-        resp = requests.post(
-            f"{base}/api/internal/task-move",
-            json={"client_key": client_key, "task_id": task_id, "stage": stage, "actor": actor},
-            headers=headers,
-            timeout=_TIMEOUT,
-        )
-    except requests.RequestException as exc:
-        log.warning("atrium task move failed: %s", exc)
-        return False, "Couldn't reach Atrium to move that card."
-    if resp.status_code == 200:
+    code, body = _call("task-move", "/api/internal/task-move",
+                       body={"client_key": client_key, "task_id": task_id,
+                             "stage": stage, "actor": actor})
+    if code == 200:
         return True, ""
+    if not code:
+        return False, "Couldn't reach Atrium to move that card."
     # Atrium's completion guard (open sub-tasks / unresolved change requests) explains itself.
-    try:
-        return False, (resp.json().get("error") or "Atrium rejected that move.")
-    except ValueError:
-        return False, "Atrium rejected that move."
+    return False, (body.get("error") or "Atrium rejected that move.")
 
 
 def add_task(client_key: str, title: str, stage: str = "todo", client_facing: bool = False,
              priority: str = "Medium", department: str = "", due_date: str = "",
              actor: str = "", actor_name: str = "") -> tuple[bool, str]:
     """Create a task in Atrium. `client_facing=False` files internal work clients never see."""
-    headers = _headers("task-add")
-    base = _base_url()
-    if not headers or not base:
+    if not enabled():
         return False, "The Atrium bridge is not configured."
-    try:
-        resp = requests.post(
-            f"{base}/api/internal/task-add",
-            json={"client_key": client_key, "title": title, "stage": stage,
-                  "client_facing": client_facing, "priority": priority,
-                  "department": department, "due_date": due_date,
-                  "actor": actor, "actor_name": actor_name},
-            headers=headers,
-            timeout=_TIMEOUT,
-        )
-    except requests.RequestException as exc:
-        log.warning("atrium task add failed: %s", exc)
-        return False, "Couldn't reach Atrium to add that card."
-    if resp.status_code == 200:
+    code, _body = _call("task-add", "/api/internal/task-add",
+                        body={"client_key": client_key, "title": title, "stage": stage,
+                              "client_facing": client_facing, "priority": priority,
+                              "department": department, "due_date": due_date,
+                              "actor": actor, "actor_name": actor_name})
+    if code == 200:
         return True, ""
+    if not code:
+        return False, "Couldn't reach Atrium to add that card."
     return False, "Atrium rejected that card."
 
 
