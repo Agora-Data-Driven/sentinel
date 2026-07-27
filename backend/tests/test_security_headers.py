@@ -19,3 +19,17 @@ def test_frame_ancestors_none_still_hard_denies(client, monkeypatch):
     r = client.get("/api/health")
     assert "frame-ancestors 'none'" in r.headers["content-security-policy"]
     assert r.headers["x-frame-options"] == "DENY"
+
+
+def test_static_assets_force_revalidation_but_api_is_left_alone(client):
+    # Static files carry Last-Modified; without an explicit Cache-Control browsers apply
+    # heuristic freshness and can keep serving a pre-deploy JS/CSS copy without revalidating
+    # (live incident 2026-07-27: stale dashboard.js vs new /api/dashboard -> "undefined" KPIs).
+    # no-cache forces a cheap ETag revalidation on every use.
+    r = client.get("/static/js/app.js")
+    assert r.headers["cache-control"] == "no-cache"
+    r = client.get("/sw.js")
+    assert r.headers["cache-control"] == "no-cache"
+    # API JSON has no validators, so heuristic caching never applied — don't touch it.
+    r = client.get("/api/health")
+    assert "cache-control" not in r.headers

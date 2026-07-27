@@ -3,7 +3,7 @@
    always win when online, while the kiosk still works offline from cache. API calls are never
    cached — attendance punches queue in IndexedDB (see kiosk.js) instead.
    Bump CACHE on each meaningful change so old caches are purged on activate. */
-const CACHE = "sentinel-v34";
+const CACHE = "sentinel-v35";
 const CORE = [
   "/static/css/styles.css",
   "/static/js/app.js",
@@ -17,7 +17,12 @@ const CORE = [
 ];
 
 self.addEventListener("install", (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(CORE).catch(() => {})).then(() => self.skipWaiting()));
+  // no-cache Requests so precaching revalidates instead of copying stale HTTP-cache entries.
+  e.waitUntil(
+    caches.open(CACHE)
+      .then((c) => c.addAll(CORE.map((u) => new Request(u, { cache: "no-cache" }))).catch(() => {}))
+      .then(() => self.skipWaiting())
+  );
 });
 
 self.addEventListener("activate", (e) => {
@@ -50,9 +55,13 @@ self.addEventListener("fetch", (e) => {
   }
 
   // Static assets (css/js/img): network-first -- fresh copy when online (cache it for offline),
-  // fall back to cache when offline.
+  // fall back to cache when offline. cache:"no-cache" forces conditional revalidation so the
+  // BROWSER HTTP cache can't satisfy this fetch with a heuristically-"fresh" stale asset from
+  // before a deploy (the 2026-07-27 "undefined KPIs" incident) — server 304s make it cheap.
+  // (Navigations above can't take a RequestInit — fetch(navigate-mode request, init) throws —
+  // but they're covered by the server's Cache-Control: no-cache header instead.)
   e.respondWith(
-    fetch(e.request)
+    fetch(e.request, { cache: "no-cache" })
       .then((res) => { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(e.request, copy)); return res; })
       .catch(() => caches.match(e.request).then((hit) => hit || caches.match("/kiosk")))
   );
