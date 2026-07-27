@@ -209,19 +209,52 @@ window.pageInit = async (S) => {
   const num = (v) => (v === "" || v == null ? null : Number(v));
 
   // --- goals ------------------------------------------------------------------
-  // A goal's description doubles as its OBJECTIVES: lines starting with "-", "•" or "*" render
-  // as a checklist; anything else stays prose. That keeps objectives free-form and durable.
+  // A goal's description is LIGHT MARKDOWN (the AI coach writes it this way — see the
+  // add_goal guidance in mastery-engine's assistantProfileOps):
+  //   **bold** / *italic* inline; a short label line ("Mission:", "Why it matters:", or a
+  //   "**Label**" / "## Label" on its own line) renders as a small-caps section head; lines
+  //   starting with "-", "•" or "* " render as an objectives checklist; blank lines split
+  //   paragraphs. Anything else stays prose. Escape FIRST, then apply the inline spans.
+  function inlineMd(s) {
+    return esc(s)
+      .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>");
+  }
+  // Standalone labels the coach uses even without a trailing colon.
+  const KNOWN_LABELS = /^(mission|vision|standards?|values?|principles?|why( it matters)?|the why|identity|objectives)$/i;
   function objectivesHtml(desc) {
     if (!desc) return "";
-    const lines = String(desc).split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-    const items = [], prose = [];
-    lines.forEach((l) => {
-      const m = l.match(/^[-•*]\s+(.*)$/);
-      if (m) items.push(m[1]); else prose.push(l);
+    const out = [];
+    let para = [], items = [];
+    const flushPara = () => {
+      if (para.length) { out.push(`<div class="goal-desc">${para.map(inlineMd).join("<br>")}</div>`); para = []; }
+    };
+    const flushItems = () => {
+      if (!items.length) return;
+      // Only head the list "Objectives" when it isn't already sitting under a section label.
+      const headed = out.length && out[out.length - 1].startsWith(`<div class="goal-sec">`);
+      out.push((headed ? "" : `<div class="goal-sec">Objectives</div>`)
+        + `<ul class="goal-objectives">${items.map((o) => `<li>${inlineMd(o)}</li>`).join("")}</ul>`);
+      items = [];
+    };
+    String(desc).split(/\r?\n/).forEach((raw) => {
+      const l = raw.trim();
+      if (!l) { flushPara(); flushItems(); return; }        // blank line = block boundary
+      const head = l.match(/^#{1,3}\s+(.*)$/) || l.match(/^\*\*([^*]{1,60})\*\*:?$/);
+      if (head) { flushPara(); flushItems(); out.push(`<div class="goal-sec">${inlineMd(head[1].replace(/:$/, ""))}</div>`); return; }
+      const plain = l.replace(/:$/, "");
+      if (l.length <= 40 && (l.endsWith(":") || KNOWN_LABELS.test(plain))) {
+        flushPara(); flushItems();
+        out.push(`<div class="goal-sec">${inlineMd(plain)}</div>`);
+        return;
+      }
+      const bullet = l.match(/^[-•*]\s+(.*)$/);
+      if (bullet) { flushPara(); items.push(bullet[1]); return; }
+      flushItems();
+      para.push(l);
     });
-    return (prose.length ? `<div class="goal-desc">${prose.map(esc).join("<br>")}</div>` : "")
-      + (items.length ? `<div class="section-label" style="margin:8px 0 4px">Objectives</div>
-         <ul class="goal-objectives">${items.map((o) => `<li>${esc(o)}</li>`).join("")}</ul>` : "");
+    flushPara(); flushItems();
+    return out.join("");
   }
 
   // A goal card is qualitative now: title, status, target, objectives. Progress numbers live
@@ -548,7 +581,7 @@ window.pageInit = async (S) => {
     formModal(g ? "Edit goal" : `Add ${dimName(dimKey || "professional").toLowerCase()} goal`, [
       { name: "title", label: "Goal", value: g && g.title, ph: "e.g. Become Agora backend developer" },
       { name: "dimension", label: "Dimension", type: "select", value: g ? dimOf(g) : (dimKey || "professional"), options: DIMS.map((d) => ({ v: d.key, t: d.name })) },
-      { name: "description", label: "Objectives (one per line, start with -)", type: "textarea", value: g && g.description, ph: "- Ship the capstone\n- Read 2 papers a month" },
+      { name: "description", label: "Description — labels like \"Mission:\", **bold**, *italic*, - for objectives", type: "textarea", value: g && g.description, ph: "Mission:\nTo become…\n\nStandards:\n**Emotional mastery.** Meet stress with steadiness…\n\n- Ship the capstone" },
       { name: "status", label: "Status", type: "select", value: (g && g.status) || "active", options: [{ v: "active", t: "Active" }, { v: "paused", t: "Paused" }, { v: "done", t: "Done" }] },
       { name: "target_date", label: "Target date", type: "date", value: g && g.target_date },
     ], (o) => {

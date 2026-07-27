@@ -780,7 +780,15 @@ textarea { resize: vertical; min-height: 78px; }
 .gi-body { padding:2px 12px 12px; }
 .gi-bar { height:7px; margin:4px 0 8px; }
 .gi-meta { font-family:var(--mono); font-size:10.5px; color:var(--muted); margin-bottom:6px; }
-.goal-desc { font-size:13px; color:var(--sub); line-height:1.5; }
+.goal-desc { font-size:13px; color:var(--sub); line-height:1.55; margin:0 0 8px; }
+.goal-desc:last-child { margin-bottom:0; }
+/* Inline emphasis inside goal prose — the light markdown the coach writes (see growth.js). */
+.goal-desc strong, .goal-objectives strong { color:var(--text); font-weight:650; }
+.goal-desc em, .goal-objectives em { color:var(--text); }
+/* Section head inside a goal body ("Mission", "Standards", …) — matches the page's mono labels. */
+.goal-sec { font-family:var(--mono); font-weight:700; font-size:10px; text-transform:uppercase;
+  letter-spacing:.13em; color:var(--sub); margin:12px 0 4px; }
+.goal-sec:first-child { margin-top:2px; }
 .goal-objectives { margin:0; padding:0; list-style:none; }
 .goal-objectives li { position:relative; padding:4px 0 4px 20px; font-size:13px; border-top:1px dashed var(--line-soft); }
 .goal-objectives li:first-child { border-top:none; }
