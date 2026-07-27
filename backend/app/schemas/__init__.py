@@ -60,6 +60,13 @@ class EventIn(BaseModel):
     device: str = "kiosk"
 
 
+class SelfEventIn(BaseModel):
+    """Self clock-in/out from the web app (Dashboard). No token — the session is the identity."""
+    action: str
+    late_reason: str | None = None
+    handover_note: str | None = None
+
+
 class OfflinePunch(BaseModel):
     token: str
     action: str

@@ -227,3 +227,40 @@ def test_manual_attendance_edit_survives_recompute(db, make_user, client, auth):
     after = recompute_summary(db, emp, day, commit=True)
     assert after.clock_in is not None
     assert after.status != C.STATUS_ABSENT
+
+
+# --- self clock-in/out from the web app (Dashboard card) ---------------------
+def test_self_event_punches_own_record_without_badge(db, make_user, client, auth):
+    from sqlalchemy import select
+    from app.models import AttendanceEvent
+
+    emp = make_user(role=C.ROLE_EMPLOYEE)  # deliberately no QRToken — self-punch needs no badge
+    auth(emp)
+
+    r = client.post("/api/attendance/self-event", json={"action": C.ACTION_CLOCK_IN})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ok"] is True
+    assert body["scan"]["valid_actions"] == [C.ACTION_CLOCK_OUT]
+
+    ev = db.execute(select(AttendanceEvent).where(AttendanceEvent.user_id == emp.id)).scalar_one()
+    assert ev.device == "web"  # distinguishable from kiosk/scanner punches in records
+
+    # The punch state machine still applies: a second clock-in is rejected.
+    r2 = client.post("/api/attendance/self-event", json={"action": C.ACTION_CLOCK_IN})
+    assert r2.status_code == 409
+
+    r3 = client.post("/api/attendance/self-event",
+                     json={"action": C.ACTION_CLOCK_OUT, "handover_note": "done for the day"})
+    assert r3.status_code == 200, r3.text
+
+
+def test_self_event_rejects_anonymous_and_bad_action(make_user, client, auth):
+    # No session at all → turned away (401, or 403 if the CSRF check fires first).
+    r = client.post("/api/attendance/self-event", json={"action": C.ACTION_CLOCK_IN})
+    assert r.status_code in (401, 403)
+
+    emp = make_user(role=C.ROLE_EMPLOYEE)
+    auth(emp)
+    r2 = client.post("/api/attendance/self-event", json={"action": "nap"})
+    assert r2.status_code == 400
