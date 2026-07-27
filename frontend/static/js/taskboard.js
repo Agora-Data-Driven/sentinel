@@ -493,27 +493,38 @@ window.TaskBoard = {
   function taskForm(existing, presetStatus) {
     const e = existing || {};
     if (presetStatus && !e.status) e.status = presetStatus;  // column "Add card" pre-picks the status
+    // Only spring the advanced block open when an EXISTING task already carries one of those
+    // values -- otherwise editing would silently hide something the user themselves set. A new
+    // task always starts collapsed. (Status is excluded: the column's Add card presets it.)
+    const extrasOpen = !!existing && !!(e.client_id || e.assigned_team_id || e.assigned_to_id
+      || e.service_charge || e.content_type || e.deliverable_url || e.internal_notes
+      || (e.priority && e.priority !== "Medium"));
     const m = S.modal({
       title: existing ? "Edit task" : "New task",
       wide: true,
+      // SIMPLE BY DEFAULT (2026-07-27): filing a task should need a NAME and nothing else. Only
+      // name / description / due date are on show; every other field still exists, one click away
+      // under "More options". Atrium's board renders the same three-then-collapse form, so the two
+      // surfaces feel identical. The collapsed block auto-opens when editing a task that already
+      // uses those fields, so nothing is ever hidden from the person who set it.
       body: `<div class="grid" style="grid-template-columns:1fr 1fr;gap:16px">
-        <label class="field" style="grid-column:1/-1"><span>Client</span><select id="t-client"><option value="">—</option>${clients.map((c) => `<option value="${c.id}" ${c.id === e.client_id ? "selected" : ""}>${S.esc(c.name)}</option>`).join("")}</select></label>
-        <label class="field"><span>Department</span><select id="t-team"><option value="">—</option>${teams.map((t) => `<option value="${t.id}" ${t.id === e.assigned_team_id ? "selected" : ""}>${S.esc(t.name)}</option>`).join("")}</select></label>
-        <label class="field"><span>Lead (main)</span><select id="t-assignee"><option value="">Unassigned</option>${people.map((p) => `<option value="${p.id}" ${p.id === e.assigned_to_id ? "selected" : ""}>${S.esc(p.name)}</option>`).join("")}</select></label>
-        ${!existing ? `<label class="field" style="grid-column:1/-1"><span>Service type</span><select id="t-svc"><option value="">Custom (blank)</option></select></label>
-        <div class="field" style="grid-column:1/-1"><div class="form-hint">Pick a department, then a service type. The phases, steps, and labels are created for you. Choose Custom (blank) to start empty.</div></div>
-        <div class="field" style="grid-column:1/-1" id="t-svc-preview" hidden></div>` : ""}
-        <label class="field" style="grid-column:1/-1"><span>Campaign/Title</span><input id="t-campaign" value="${S.esc(e.campaign || e.title || "")}" placeholder="Optional — blank saves as “Untitled task”"></label>
-        ${isAM ? `<label class="field"><span>Priority</span><select id="t-priority">${vocab.priorities.map((p) => `<option ${p === (e.priority || "Medium") ? "selected" : ""}>${p}</option>`).join("")}</select></label>` : ""}
+        <label class="field" style="grid-column:1/-1"><span>Task name</span><input id="t-campaign" value="${S.esc(e.campaign || e.title || "")}" placeholder="What needs doing?" autofocus></label>
+        <label class="field" style="grid-column:1/-1"><span>Description</span><textarea id="t-desc" rows="3" placeholder="Optional — a sentence of context">${S.esc(e.description || "")}</textarea></label>
         <label class="field"><span>Due date</span><input type="date" id="t-due" value="${e.due_date || ""}"></label>
-        <label class="field"><span>Service charge ($)</span><input id="t-charge" inputmode="decimal" value="${S.esc(e.service_charge || "")}" placeholder="0" pattern="[0-9]*[.]?[0-9]*" title="Optional — numbers only (e.g. 4200 or 4200.50)"></label>
         <div class="field" style="grid-column:1/-1">
-          <details class="tk-extra" open>
-            <summary>Additional details (optional)</summary>
+          <details class="tk-extra"${extrasOpen ? " open" : ""}>
+            <summary>More options${extrasOpen ? "" : " — client, department, lead, priority…"}</summary>
             <div class="grid" style="grid-template-columns:1fr 1fr;gap:16px;margin-top:12px">
-              <label class="field"><span>Content type</span><input id="t-ctype" value="${S.esc(e.content_type || "")}"></label>
+              <label class="field" style="grid-column:1/-1"><span>Client</span><select id="t-client"><option value="">—</option>${clients.map((c) => `<option value="${c.id}" ${c.id === e.client_id ? "selected" : ""}>${S.esc(c.name)}</option>`).join("")}</select></label>
+              <label class="field"><span>Department</span><select id="t-team"><option value="">—</option>${teams.map((t) => `<option value="${t.id}" ${t.id === e.assigned_team_id ? "selected" : ""}>${S.esc(t.name)}</option>`).join("")}</select></label>
+              <label class="field"><span>Lead (main)</span><select id="t-assignee"><option value="">Unassigned</option>${people.map((p) => `<option value="${p.id}" ${p.id === e.assigned_to_id ? "selected" : ""}>${S.esc(p.name)}</option>`).join("")}</select></label>
+              ${!existing ? `<label class="field" style="grid-column:1/-1"><span>Service type</span><select id="t-svc"><option value="">Custom (blank)</option></select></label>
+              <div class="field" style="grid-column:1/-1"><div class="form-hint">Pick a department, then a service type. The phases, steps, and labels are created for you. Choose Custom (blank) to start empty.</div></div>
+              <div class="field" style="grid-column:1/-1" id="t-svc-preview" hidden></div>` : ""}
+              ${isAM ? `<label class="field"><span>Priority</span><select id="t-priority">${vocab.priorities.map((p) => `<option ${p === (e.priority || "Medium") ? "selected" : ""}>${p}</option>`).join("")}</select></label>` : ""}
               <label class="field"><span>Status</span><select id="t-status">${STATUSES.map((s) => `<option ${s === (e.status || "To Do") ? "selected" : ""}>${s}</option>`).join("")}</select></label>
-              <label class="field" style="grid-column:1/-1"><span>Description</span><textarea id="t-desc">${S.esc(e.description || "")}</textarea></label>
+              <label class="field"><span>Content type</span><input id="t-ctype" value="${S.esc(e.content_type || "")}"></label>
+              <label class="field"><span>Service charge ($)</span><input id="t-charge" inputmode="decimal" value="${S.esc(e.service_charge || "")}" placeholder="0" pattern="[0-9]*[.]?[0-9]*" title="Optional — numbers only (e.g. 4200 or 4200.50)"></label>
               <label class="field" style="grid-column:1/-1"><span>Deliverable URL (client-safe)</span><input id="t-deliv" value="${S.esc(e.deliverable_url || "")}"></label>
               <label class="field" style="grid-column:1/-1"><span>${S.ICON.lock}Internal notes</span><textarea id="t-inotes">${S.esc(e.internal_notes || "")}</textarea></label>
             </div>
@@ -522,6 +533,10 @@ window.TaskBoard = {
       footer: `<button class="btn ghost" id="t-cancel">Cancel</button><button class="btn primary" id="t-save">${existing ? "Save changes" : "Create task"}</button>`,
     });
     S.qs("#t-cancel").onclick = m.close;
+    // `autofocus` is unreliable on a node injected after load, so put the caret in the name field
+    // explicitly -- with the form this short, you can now type a task and hit save immediately.
+    const nameBox = S.qs("#t-campaign");
+    if (nameBox) nameBox.focus();
 
     // Service-type picker (new tasks only): filter recipes by the chosen department, preview the
     // checklist it will seed, and prefill the content type. The server does the actual seeding.

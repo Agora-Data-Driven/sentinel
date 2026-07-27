@@ -95,6 +95,31 @@ def test_resolve_client_refuses_to_guess_when_ambiguous():
     assert atrium_tasks.resolve_client([_Client(1, "RV")], "riverdance-rv", "Riverdance RV") is None
 
 
+def test_writes_get_a_longer_timeout_than_reads():
+    """A move is a read-modify-write of a whole workspace JSON in GCS. The original 6s gave up
+    while the write LANDED, so the card moved and the user was told it failed."""
+    assert atrium_tasks._WRITE_TIMEOUT >= 30
+    assert atrium_tasks._READ_TIMEOUT < atrium_tasks._WRITE_TIMEOUT
+
+
+def test_unconfirmed_write_is_not_reported_as_a_failure(monkeypatch):
+    """No answer != it didn't happen. Claiming failure on a write that landed invites a
+    double-move, so the wording must send the user to refresh instead."""
+    monkeypatch.setattr(atrium_tasks.settings, "platform_sso_secret", "s3cret", raising=False)
+    monkeypatch.setattr(atrium_tasks.settings, "atrium_api_url", "https://portal.example",
+                        raising=False)
+
+    def _timeout(*a, **k):
+        raise TimeoutError("slow")
+
+    monkeypatch.setattr(atrium_tasks.urllib.request, "urlopen", _timeout)
+    ok, err = atrium_tasks.move_task("riverdance-rv", "tk_1", "todo")
+    assert ok is False
+    low = err.lower()
+    assert "refresh" in low
+    assert "couldn't reach" not in low and "failed" not in low
+
+
 def test_bridge_imports_without_third_party_deps():
     """STDLIB ONLY. `import requests` here crashed every container on boot -- it is not in the
     image, and an optional bridge must never be able to take the app down at import time."""

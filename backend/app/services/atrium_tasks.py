@@ -37,7 +37,13 @@ log = logging.getLogger(__name__)
 # Atrium-owned cards carry this prefix in their board id so the frontend and the mutation routes can
 # tell them from Sentinel's own integer-keyed rows and send edits back to Atrium.
 ATRIUM_ID_PREFIX = "atrium:"
-_TIMEOUT = 6
+# Reads happen on every board load, so they must not hang the UI -- they degrade to [] instead.
+# WRITES need a lot more room: Atrium's move is a read-modify-write of the whole workspace JSON in
+# GCS, which on a cold instance took longer than the original 6s. Timing out did NOT cancel it --
+# the card moved while the user was told it had failed (seen live 2026-07-27), which invites a
+# confusing double-move. Be generous here and honest in the message below.
+_READ_TIMEOUT = 10
+_WRITE_TIMEOUT = 30
 
 # Sentinel status label -> Atrium stage key. Atrium deliberately adopted Sentinel's status set
 # (constants.TASK_STATUSES) so the two boards speak the same language; this is the key mapping.
@@ -79,7 +85,7 @@ def enabled() -> bool:
 
 
 def _call(purpose: str, path: str, params: dict | None = None,
-          body: dict | None = None) -> tuple[int, dict]:
+          body: dict | None = None, timeout: int | None = None) -> tuple[int, dict]:
     """One signed request. Returns (status_code, parsed_json); (0, {}) if it never left the ground.
 
     Never raises -- every caller degrades instead, because an Atrium outage must not break the
@@ -98,7 +104,7 @@ def _call(purpose: str, path: str, params: dict | None = None,
     req = urllib.request.Request(url, data=data, headers=headers,
                                  method="POST" if body is not None else "GET")
     try:
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
+        with urllib.request.urlopen(req, timeout=(timeout or _READ_TIMEOUT)) as resp:
             raw = resp.read().decode("utf-8", "replace")
             return resp.status, (json.loads(raw) if raw else {})
     except urllib.error.HTTPError as exc:
@@ -130,11 +136,14 @@ def move_task(client_key: str, task_id: str, stage: str, actor: str = "") -> tup
         return False, "The Atrium bridge is not configured."
     code, body = _call("task-move", "/api/internal/task-move",
                        body={"client_key": client_key, "task_id": task_id,
-                             "stage": stage, "actor": actor})
+                             "stage": stage, "actor": actor},
+                       timeout=_WRITE_TIMEOUT)
     if code == 200:
         return True, ""
     if not code:
-        return False, "Couldn't reach Atrium to move that card."
+        # We never got an answer -- but the write may well have landed anyway, so do NOT claim it
+        # failed. Telling someone it failed when it succeeded is how you get a double-move.
+        return False, "Atrium didn't confirm that move in time - refresh to see where the card is."
     # Atrium's completion guard (open sub-tasks / unresolved change requests) explains itself.
     return False, (body.get("error") or "Atrium rejected that move.")
 
@@ -149,11 +158,12 @@ def add_task(client_key: str, title: str, stage: str = "todo", client_facing: bo
                         body={"client_key": client_key, "title": title, "stage": stage,
                               "client_facing": client_facing, "priority": priority,
                               "department": department, "due_date": due_date,
-                              "actor": actor, "actor_name": actor_name})
+                              "actor": actor, "actor_name": actor_name},
+                        timeout=_WRITE_TIMEOUT)
     if code == 200:
         return True, ""
     if not code:
-        return False, "Couldn't reach Atrium to add that card."
+        return False, "Atrium didn't confirm that card in time - refresh before adding it again."
     return False, "Atrium rejected that card."
 
 
