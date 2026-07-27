@@ -23,6 +23,7 @@ from .models import (
     LeaveBalance,
     LeaveRequest,
     LeaveType,
+    DevelopmentArea,
     Notification,
     PersonalRecord,
     ProfessionalGoal,
@@ -386,6 +387,16 @@ def goal_dict(g: ProfessionalGoal) -> dict:
         "progress_pct": g.progress_pct,
         # created_at lets the hub compute expected-by-today pace against target_date.
         "created_at": _iso(g.created_at),
+    }
+
+
+def development_area_dict(a: DevelopmentArea) -> dict:
+    """One growth dimension's settings. Ring % is NOT here — it comes from the Mastery Engine."""
+    return {
+        "dimension": a.dimension,
+        "deadline": _d(a.deadline),
+        "other_info": a.other_info,
+        "updated_at": _iso(a.updated_at),
     }
 
 

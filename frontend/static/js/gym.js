@@ -21,8 +21,8 @@ window.pageInit = async (S) => {
   const tabs = isMgr ? ["Calendar", "Today", "History", "Team compliance"] : ["Calendar", "Today", "History"];
   view.innerHTML = `<div class="dev">
     <div class="dev-mast"><div>
-      <div class="dev-eyebrow">Development · Gym</div>
-      <h1>Train</h1>
+      <div class="dev-eyebrow">Growth · Physical</div>
+      <h1>Physical</h1>
       <div class="lede">Plan your week, log a workout on any day, and edit sets & reps whenever, nothing gets locked. Your body fat and PRs live here too.</div>
     </div><div class="dev-mast-right"><div class="dev-mast-meta">${isMgr ? "TEAM VIEW" : "PUSH · PULL · LEGS"}</div></div></div>
     <div id="gym-body"></div>

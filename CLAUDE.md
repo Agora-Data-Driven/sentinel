@@ -19,7 +19,7 @@ leave, payroll, reporting, and a "holistic development" hub (learning + reading 
 | **Runs on** | Cloud Run service `sentinel`, project `agora-data-driven`, region **`asia-southeast1`** |
 | **Live URL** | `https://sentinel-585951669065.asia-southeast1.run.app` |
 | **Timezone** | Stored **UTC**, displayed/ruled in **Asia/Manila (UTC+8)** |
-| **Embeds** | The Mastery Engine, via iframe — Academy tab + global Coach FAB |
+| **Embeds** | The Mastery Engine, via iframe — Professional (formerly Academy) tab, Philosophical + Spiritual tabs (each pinned to one engine program via `?program=`), and the global Coach FAB |
 
 > ⚠️ **Region is `asia-southeast1`, not `us-central1`.** Every other Agora service is
 > `us-central1`. Getting this wrong makes `gcloud` commands silently target nothing.
@@ -218,9 +218,17 @@ the Academy mic dies, immediately after a deploy.
 
 ### 🔴 Frontend change deployed but the browser shows the old version
 
-The service worker caches static assets. **Bump `CACHE` in [sw.js](frontend/sw.js#L6)**
-(`sentinel-v22` → `v23`) whenever you change CSS/JS. The `activate` handler purges every cache
-whose key isn't the current one.
+Two layers can serve stale JS/CSS; both are handled, don't undo either:
+1. **Service-worker cache** — **bump `CACHE` in [sw.js](frontend/sw.js#L6)** (`sentinel-v34` →
+   `v35`) whenever you change CSS/JS. The `activate` handler purges every cache whose key isn't
+   the current one.
+2. **Browser HTTP cache (heuristic freshness)** — static responses carry `Last-Modified`, so
+   without an explicit `Cache-Control` browsers may treat a pre-deploy copy as "fresh" and never
+   revalidate; the SW's network-first `fetch()` is satisfied by that same HTTP cache, so it can't
+   help. Live incident 2026-07-27: day-old `dashboard.js` ran against the new `/api/dashboard`
+   and rendered "undefined" KPIs. Fixed by `Cache-Control: no-cache` on all non-API responses
+   ([middleware.py](backend/app/middleware.py), pinned by `test_security_headers.py`) plus
+   `cache: "no-cache"` on the SW's fetches. ETag revalidation keeps it a cheap 304.
 
 ### 🔴 Login page flashes for ~2s before redirecting
 

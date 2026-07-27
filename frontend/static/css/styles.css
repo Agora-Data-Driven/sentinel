@@ -689,19 +689,19 @@ textarea { resize: vertical; min-height: 78px; }
 .dev-mast-right { display:flex; flex-direction:column; align-items:flex-end; gap:10px; }
 .dev-mast-meta { font-family:var(--mono); font-size:11px; color:var(--muted); letter-spacing:.06em; white-space:nowrap; }
 
-/* ---- The four growth dimensions: Spiritual · Professional · Mental · Physical ----
+/* ---- The four growth dimensions: Spiritual · Professional · Philosophical · Physical ----
    Each dimension owns a hue (retuned for dark below). Components read them through the
    --hue / --hue-bg custom props their root element sets inline. */
 :root {
   --dim-spiritual:#6D57D4;    --dim-spiritual-bg:#EFEBFB;
   --dim-professional:#3A9A2F; --dim-professional-bg:#E9F5E7;
-  --dim-mental:#2E6ED0;       --dim-mental-bg:#E8F0FC;
+  --dim-philosophical:#2E6ED0; --dim-philosophical-bg:#E8F0FC;
   --dim-physical:#DE6A25;     --dim-physical-bg:#FCEEE4;
 }
 :root[data-theme="dark"] {
   --dim-spiritual:#A99AF7;    --dim-spiritual-bg:rgba(169,154,247,.14);
   --dim-professional:#6BCB4E; --dim-professional-bg:rgba(107,203,78,.14);
-  --dim-mental:#7AA7F2;       --dim-mental-bg:rgba(122,167,242,.14);
+  --dim-philosophical:#7AA7F2; --dim-philosophical-bg:rgba(122,167,242,.14);
   --dim-physical:#F09A62;     --dim-physical-bg:rgba(240,154,98,.14);
 }
 

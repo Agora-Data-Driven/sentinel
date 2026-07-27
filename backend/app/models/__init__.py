@@ -23,6 +23,7 @@ from .client import Client
 from .development import (
     BodyMetric,
     CareerAchievement,
+    DevelopmentArea,
     DevelopmentProfile,
     GrowthItem,
     PersonalRecord,
@@ -67,6 +68,7 @@ __all__ = [
     "DevelopmentProfile",
     "CareerAchievement",
     "ProfessionalGoal",
+    "DevelopmentArea",
     "GrowthItem",
     "Skill",
     "ReadingItem",

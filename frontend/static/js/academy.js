@@ -1,26 +1,27 @@
-/* Academy — a native Sentinel dashboard of the worker's enrolled courses, plus the
-   Assignment of the Day. Courses/progress come from the mastery engine via a
-   server-to-server call (/api/academy/courses); clicking a course opens the engine
-   itself (embedded, carrying the same portal ag_sso cookie — no second sign-in).
+/* Professional (formerly "Academy") — a native Sentinel dashboard of the worker's enrolled
+   career courses, plus the Assignment of the Day. Courses/progress come from the mastery
+   engine via a server-to-server call (/api/academy/courses — the API path keeps the old
+   name; it's a stable identifier); clicking a course opens the engine itself (embedded,
+   carrying the same portal ag_sso cookie — no second sign-in).
 
    Assignment of the Day is a Phase-E placeholder (a scenario you explain aloud, AI-graded). */
 window.pageInit = async (S) => {
   const view = S.view();
   const esc = S.esc;
-  S.qs("#top-sub").textContent = "Your learning and today's assignment";
+  S.qs("#top-sub").textContent = "Your professional learning and today's assignment";
 
   let data;
   try {
     data = await S.api("/api/academy/courses");
   } catch (e) {
     view.innerHTML = `<div class="card" style="padding:28px;text-align:center">
-      <h2 style="margin:0 0 8px">Academy is unavailable</h2>
+      <h2 style="margin:0 0 8px">Professional is unavailable</h2>
       <p style="margin:0;color:var(--muted)">Couldn't reach the learning engine. Try again shortly.</p></div>`;
     return;
   }
 
   // Career/technical programs only — personal-growth/philosophy programs live under the
-  // Reading & Philosophy tab (same engine, separate subject). Untagged programs default to career.
+  // Philosophical / Spiritual tabs (same engine, separate subjects). Untagged default to career.
   const programs = (data.programs || []).filter((p) => (p.category || "career") !== "growth");
   const engineUrl = data.engineUrl || "";
   const isAdmin = !!data.admin;                 // the engine's own verdict (by email)
@@ -75,7 +76,7 @@ window.pageInit = async (S) => {
         ? `<div class="card ac-assign" style="background:linear-gradient(120deg, rgba(22,163,74,.12), rgba(12,16,34,.06))">
              <div style="flex:1;min-width:220px">
                <span class="ac-badge" style="background:#16a34a">Academy Admin</span>
-               <h3>Manage the Academy</h3>
+               <h3>Manage the curriculum</h3>
                <p style="margin:0;color:var(--muted)">Build curriculum, attach transcripts, generate the question bank, and enrol people.</p>
              </div>
              <button class="btn" id="ac-admin-open" style="background:#16a34a;color:#fff;font-weight:700">Open admin &rarr;</button>

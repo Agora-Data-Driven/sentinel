@@ -12,6 +12,7 @@ Tables:
     development_profiles   -> 1:1 with a user; resume + headline
     career_achievements    -> list of wins
     professional_goals     -> list of goals with status + progress
+    development_areas      -> per-user settings for one growth dimension (pace deadline, other info)
     growth_items           -> personal journal: obstacles / reflections / notes (bottom-up)
     reading_items          -> admin-curated canon of required books/philosophies (top-down)
     reading_progress       -> per-worker status + reflection on a canon item
@@ -103,12 +104,34 @@ class ProfessionalGoal(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
-    dimension: Mapped[str] = mapped_column(String(16), default="professional")  # spiritual|professional|mental|physical
+    dimension: Mapped[str] = mapped_column(String(16), default="professional")  # spiritual|professional|philosophical|physical
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     target_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     status: Mapped[str] = mapped_column(String(16), default="active")  # active|done|paused
     progress_pct: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class DevelopmentArea(Base):
+    """Per-user settings for ONE growth dimension (spiritual|professional|philosophical|physical).
+
+    The Overview's ring percentages come from the Mastery Engine (never typed by hand), so what a
+    dimension needs of its own is only: the pace `deadline` the whole area is racing toward
+    (defaulted in the UI, editable there and by the coach), and `other_info` — a free-form dump the
+    worker or the coach can keep per area. Rows are created lazily on first write; a missing row
+    just means "all defaults".
+    """
+
+    __tablename__ = "development_areas"
+    __table_args__ = (UniqueConstraint("user_id", "dimension", name="uq_dev_area_user_dim"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    dimension: Mapped[str] = mapped_column(String(16), nullable=False)
+    deadline: Mapped[date | None] = mapped_column(Date, nullable=True)
+    other_info: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 

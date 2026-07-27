@@ -60,6 +60,16 @@ STATUS_HALF_DAY = "HalfDay"
 STATUS_MISSING_CLOCKOUT = "MissingClockOut"
 STATUS_ON_LEAVE = "OnLeave"
 
+# --- Growth (holistic development) ------------------------------------------
+# The four growth dimensions the hub, its tabs, and the AI coach all organise by.
+# Stored on professional_goals.dimension and development_areas.dimension.
+# 'philosophical' replaced the original 'mental' on 2026-07-27 (data-migrated).
+DIM_SPIRITUAL = "spiritual"
+DIM_PROFESSIONAL = "professional"
+DIM_PHILOSOPHICAL = "philosophical"
+DIM_PHYSICAL = "physical"
+GROWTH_DIMENSIONS = [DIM_SPIRITUAL, DIM_PROFESSIONAL, DIM_PHILOSOPHICAL, DIM_PHYSICAL]
+
 # --- Gym -------------------------------------------------------------------
 DAY_PUSH = "Push"
 DAY_PULL = "Pull"

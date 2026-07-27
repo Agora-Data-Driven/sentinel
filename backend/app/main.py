@@ -114,6 +114,9 @@ def _ensure_columns() -> None:
         ("users", "shift_template_id", "INTEGER"),
         # Offline-punch idempotency key.
         ("attendance_events", "client_uid", "VARCHAR(64)"),
+        # The four growth dimensions (was missing from this list when e5a7c3d9b1f4 shipped —
+        # a pre-2026-07-26 local DB 500'd with `no such column: dimension`).
+        ("professional_goals", "dimension", "VARCHAR(16) DEFAULT 'professional'"),
     ]
     try:
         insp = inspect(engine)
@@ -124,6 +127,13 @@ def _ensure_columns() -> None:
                 with engine.begin() as conn:
                     conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {decl}"))
                 print(f"[sentinel] migrated: added {table}.{column}")
+        # Data fix (2026-07-27): the 'mental' growth dimension became 'philosophical'. Alembic
+        # f9b4d7a2c5e8 carries the same UPDATE for migrated DBs; this idempotent pass covers
+        # create_all-only DBs (and prod, where deploys don't run alembic automatically) — an
+        # un-migrated 'mental' goal would silently render under Professional (dimOf fallback).
+        if "professional_goals" in insp.get_table_names():
+            with engine.begin() as conn:
+                conn.execute(text("UPDATE professional_goals SET dimension='philosophical' WHERE dimension='mental'"))
     except Exception as exc:  # never let a migration attempt crash startup
         print(f"[sentinel] column ensure skipped: {exc}")
 
@@ -376,6 +386,10 @@ _PAGES = {
     "/growth": "growth.html",
     "/reading": "reading.html",
     "/academy": "academy.html",
+    # The two reading-program tabs — each hosts a Mastery Engine iframe pinned to its
+    # program (?program=philosophy / ?program=spiritual). Paths are new; no redirects needed.
+    "/philosophical": "philosophical.html",
+    "/spiritual": "spiritual.html",
     "/people": "people.html",
     "/leave": "leave.html",
     "/north-star": "north-star.html",

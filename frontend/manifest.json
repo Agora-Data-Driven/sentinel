@@ -16,6 +16,6 @@
   "shortcuts": [
     { "name": "Attendance Kiosk", "url": "/kiosk" },
     { "name": "Task Board", "url": "/dashboard" },
-    { "name": "Gym Tracker", "url": "/gym" }
+    { "name": "Physical", "url": "/gym" }
   ]
 }

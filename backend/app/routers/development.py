@@ -10,11 +10,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..constants import ROLE_ADMIN
+from ..constants import GROWTH_DIMENSIONS, ROLE_ADMIN
 from ..database import get_db
 from ..models import (
     BodyMetric,
     CareerAchievement,
+    DevelopmentArea,
     DevelopmentProfile,
     GrowthItem,
     PersonalRecord,
@@ -27,6 +28,7 @@ from ..models import (
 from ..schemas import (
     AchievementIn,
     AchievementUpdateIn,
+    AreaUpdateIn,
     BodyMetricIn,
     GoalIn,
     GoalUpdateIn,
@@ -45,6 +47,7 @@ from ..security import get_current_user, require_min_role
 from ..serializers import (
     achievement_dict,
     body_metric_dict,
+    development_area_dict,
     development_profile_dict,
     goal_dict,
     growth_item_dict,
@@ -214,6 +217,38 @@ def update_goal(goal_id: int, payload: GoalUpdateIn, user: User = Depends(get_cu
 def delete_goal(goal_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     db.delete(_own(db, ProfessionalGoal, goal_id, user))
     db.commit()
+
+
+# --- Growth areas (per-dimension settings) -----------------------------------
+@router.patch("/areas/{dimension}")
+def update_area(
+    dimension: str,
+    payload: AreaUpdateIn,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Upsert this user's settings for one growth dimension (pace deadline / other info).
+
+    Owner-only, lazily created. Uses exclude_unset (not _apply) so an explicit null CLEARS a
+    field — needed to reset a deadline back to the UI default, which _apply cannot express.
+    """
+    if dimension not in GROWTH_DIMENSIONS:
+        raise HTTPException(status_code=400, detail=f"Unknown dimension '{dimension}'")
+    area = db.execute(
+        select(DevelopmentArea).where(
+            DevelopmentArea.user_id == user.id, DevelopmentArea.dimension == dimension
+        )
+    ).scalar_one_or_none()
+    if not area:
+        area = DevelopmentArea(user_id=user.id, dimension=dimension)
+        db.add(area)
+    data = payload.model_dump(exclude_unset=True)
+    for f in ("deadline", "other_info"):
+        if f in data:
+            setattr(area, f, data[f])
+    area.updated_at = utcnow()
+    db.commit()
+    return development_area_dict(area)
 
 
 # --- Growth journal ---------------------------------------------------------

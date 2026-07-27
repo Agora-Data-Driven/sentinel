@@ -80,11 +80,17 @@
     // The Task Board has no tab of its own — it's embedded in the Dashboard (see taskboard.js);
     // the old /tasks URL redirects there so saved notification links keep working.
     { href: "/dashboard", label: "Dashboard", icon: "grid" },
+    // The four Growth tabs mirror the Overview's four dimensions one-to-one:
+    // Professional (the engine's career programs, formerly "Academy"), Philosophical and
+    // Spiritual (each a Mastery Engine pinned to its reading program), Physical (the gym,
+    // formerly "Gym"). Overview rolls all four up.
     { group: "Growth", icon: "sparkle", children: [
       { href: "/growth", label: "Overview", icon: "sparkle" },
-      { href: "/academy", label: "Academy", icon: "cap" },
-      { href: "/reading", label: "Reading & Philosophy", icon: "book" },
-      { href: "/gym", label: "Gym", icon: "dumbbell", hideRoles: ["super_admin"] },
+      { href: "/academy", label: "Professional", icon: "target" },
+      { href: "/philosophical", label: "Philosophical", icon: "cap" },
+      { href: "/spiritual", label: "Spiritual", icon: "flame" },
+      { href: "/gym", label: "Physical", icon: "dumbbell", hideRoles: ["super_admin"] },
+      { href: "/reading", label: "Reading", icon: "book" },
     ] },
     { group: "Time & Leave", icon: "clock", children: [
       { href: "/attendance", label: "Time", icon: "clock" },
@@ -415,7 +421,7 @@
     panel.id = "coach-panel";
     panel.innerHTML = `
       <div id="coach-head">
-        <div class="t">${ICON.sparkle}<div>Your Coach<small>Knows your growth: learning, gym, goals</small></div></div>
+        <div class="t">${ICON.sparkle}<div>Your Coach<small>Knows your growth: learning, training, goals</small></div></div>
         <span class="x-close" id="coach-x">${ICON.x}</span>
       </div>
       <div id="coach-frame-wrap" style="flex:1;display:flex"></div>`;
@@ -456,6 +462,7 @@
     const METRIC = ["body_fat_pct", "weight_kg", "date", "notes"];
     const RESUME = ["headline", "resume_text", "resume_file_url"];
     const READ = ["status", "reflection", "rating"];
+    const AREA = ["deadline", "other_info"];
 
     function coachExecute(action) {
       const a = action || {}, args = a.args || {}, id = args.id;
@@ -478,6 +485,9 @@
         case "update_skill": return api(`${DEV}/skills/${id}`, { method: "PATCH", body: pick(args, SKILL) });
         case "delete_skill": return api(`${DEV}/skills/${id}`, { method: "DELETE" });
         case "set_reading_progress": return api(`${DEV}/reading/${args.reading_item_id}/progress`, { method: "PUT", body: pick(args, READ) });
+        // Growth-area settings: the pace deadline + the per-dimension "Other info" dump.
+        // Keyed by dimension NAME (spiritual|professional|philosophical|physical), not an id.
+        case "update_area": return api(`${DEV}/areas/${encodeURIComponent(args.dimension || "")}`, { method: "PATCH", body: pick(args, AREA) });
         // Gym schedule (the weekly split + per-date overrides that drive the calendar).
         case "set_gym_week": return api(`${GYM}/plan/week`, { method: "POST", body: { week: args.week || {}, ...(args.cardio ? { cardio: args.cardio } : {}) } });
         case "set_gym_day": return api(`${GYM}/plan/day`, { method: "POST", body: pick(args, ["date", "day_type", "cardio"]) });

@@ -1,13 +1,16 @@
 // Development Overview — the holistic hub, organized around FOUR GROWTH DIMENSIONS:
-// Spiritual · Professional · Mental · Physical. Layout, top to bottom:
-//   1. The compass — four progress rings (goal progress per dimension). Each ring carries a
-//      small tick at the "expected by today" position, derived from the goal's created→target
-//      window, so ahead/behind is visible at a glance.
-//   2. The pace band — the same actual-vs-expected, laid on a date track per dimension.
+// Spiritual · Professional · Philosophical · Physical — mirroring the Growth nav tabs
+// one-to-one. Layout, top to bottom:
+//   1. The compass — four progress rings. A ring's % is the MASTERY ENGINE's score for that
+//      dimension's program(s) (via /api/academy/courses) — never typed by hand. The tick marks
+//      "expected by today" on the run from the area's start to its deadline.
+//   2. The pace band — the same actual-vs-expected on a date track; each row's deadline is
+//      editable (default 2026-11-04) and stored per dimension (/api/development/areas).
 //   3. Four equal dimension boxes (click to expand). Goals + objectives first, then that
-//      dimension's records as collapsible sub-sections. NOTHING from the old hub was dropped:
-//      Physical → body stats + PRs · Professional → resume, achievements, skills ·
-//      Mental → Academy learning + the book/essay canon · Spiritual → journal + philosophy canon.
+//      dimension's records as collapsible sub-sections, then a free-form "Other info" dump
+//      the coach can read and edit. NOTHING from the old hub was dropped:
+//      Physical → body stats + PRs · Professional → resume, achievements, skills, Academy ·
+//      Philosophical → books/essays + philosophy canon · Spiritual → journal.
 // A manager opens ?user=<id> for a read-only view. The same data feeds the AI coach.
 window.pageInit = async (S) => {
   const view = S.view();
@@ -35,10 +38,11 @@ window.pageInit = async (S) => {
   const srcLabel = (v) => (SKILL_SOURCES.find((s) => s.v === v) || {}).t || v;
 
   // The four dimensions. Hues live in styles.css as --dim-<key> so dark mode can retune them.
+  // ('philosophical' replaced 'mental' 2026-07-27; old rows were data-migrated.)
   const DIMS = [
-    { key: "spiritual", name: "Spiritual", icon: "flame", blurb: "Character & inner life" },
+    { key: "spiritual", name: "Spiritual", icon: "flame", blurb: "Faith & inner life" },
     { key: "professional", name: "Professional", icon: "target", blurb: "Craft & career" },
-    { key: "mental", name: "Mental", icon: "cap", blurb: "Learning & mind" },
+    { key: "philosophical", name: "Philosophical", icon: "cap", blurb: "Mindsets & mental models" },
     { key: "physical", name: "Physical", icon: "heart", blurb: "Body & training" },
   ];
   const DIM_KEYS = DIMS.map((d) => d.key);
@@ -48,28 +52,33 @@ window.pageInit = async (S) => {
   const dimName = (key) => (DIMS.find((d) => d.key === key) || {}).name || key;
 
   // --- progress + pace math ---------------------------------------------------
-  // Actual = avg progress of the dimension's ACTIVE goals; all-done ⇒ 100; no goals ⇒ null.
+  // Ring % = the MASTERY ENGINE's score for the dimension's program(s) — never typed by hand.
+  // Each Growth tab is one engine program; the professional ring rolls up every career
+  // program. Physical has no engine program yet, so its ring stays dashed until one exists.
+  // (courses is fetched only for your own profile, so a manager's read-only view dashes out.)
+  const DIM_PROGRAMS = { philosophical: ["philosophy"], spiritual: ["spiritual"], physical: ["physical"] };
   function dimActual(key) {
-    const gs = goalsFor(key);
-    const act = gs.filter((g) => g.status === "active");
-    if (act.length) return act.reduce((a, g) => a + (g.progress_pct || 0), 0) / act.length;
-    if (gs.length && gs.some((g) => g.status === "done")) return 100;
-    return null;
+    const progs = (courses && courses.programs) || [];
+    const mine = key === "professional"
+      ? progs.filter((p) => (p.category || "career") !== "growth")
+      : progs.filter((p) => (DIM_PROGRAMS[key] || []).includes(p.id));
+    if (!mine.length) return null;
+    return mine.reduce((a, p) => a + (p.pct || 0), 0) / mine.length;
   }
 
-  // Expected-by-today for one goal: linear from created_at → target_date. Null when undated.
-  function goalExpected(g) {
-    if (!g.target_date || !g.created_at || g.status !== "active") return null;
-    const start = new Date(g.created_at).getTime();
-    const end = new Date(g.target_date + "T23:59:59").getTime();
+  // The pace window every dimension races on: a fixed start (when the four-tab system began)
+  // to the area's own deadline — editable on the pace band, stored per dimension.
+  const START_DEFAULT = "2026-07-27";
+  const DEADLINE_DEFAULT = "2026-11-04";
+  const areaOf = (key) => (data.areas || {})[key] || {};
+  const areaDeadline = (key) => areaOf(key).deadline || DEADLINE_DEFAULT;
+
+  // Expected-by-today: linear from the start to this dimension's deadline.
+  function dimExpected(key) {
+    const start = new Date(START_DEFAULT + "T00:00:00").getTime();
+    const end = new Date(areaDeadline(key) + "T23:59:59").getTime();
     if (!(end > start)) return 100;
     return Math.max(0, Math.min(100, ((Date.now() - start) / (end - start)) * 100));
-  }
-
-  function dimExpected(key) {
-    const es = goalsFor(key).map(goalExpected).filter((e) => e != null);
-    if (!es.length) return null;
-    return es.reduce((a, b) => a + b, 0) / es.length;
   }
 
   // The shared ahead/behind verdict: within ±2 points reads as "on pace".
@@ -82,13 +91,8 @@ window.pageInit = async (S) => {
       : `<span class="pace-chip behind">▼ ${Math.abs(d)} behind</span>`;
   }
 
-  // Date window a dimension is pacing against: earliest active-goal start → latest target.
   function dimWindow(key) {
-    const gs = goalsFor(key).filter((g) => g.status === "active" && g.target_date && g.created_at);
-    if (!gs.length) return null;
-    const start = gs.map((g) => g.created_at.slice(0, 10)).sort()[0];
-    const end = gs.map((g) => g.target_date).sort().slice(-1)[0];
-    return { start, end };
+    return { start: START_DEFAULT, end: areaDeadline(key) };
   }
 
   // --- the compass ring: actual arc + expected-today tick ----------------------
@@ -116,30 +120,27 @@ window.pageInit = async (S) => {
     const actual = dimActual(d.key), expected = dimExpected(d.key);
     const active = goalsFor(d.key).filter((g) => g.status === "active").length;
     const sub = actual == null
-      ? "no goal set"
+      ? "no engine program yet"
       : `${active} active goal${active === 1 ? "" : "s"}`;
     return `<button class="dim-cell" data-goto-dim="${d.key}" style="--hue:var(--dim-${d.key})" title="Open ${esc(d.name)}">
       <span class="dc-label">${S.ICON[d.icon]}${esc(d.name)}</span>
       ${ringSvg(actual, expected)}
       <span class="dc-sub">${esc(sub)}</span>
-      <span class="dc-chip">${paceChip(actual, expected) || (actual == null && !readOnly ? '<span class="pace-chip none">+ set one</span>' : "")}</span>
+      <span class="dc-chip">${paceChip(actual, expected)}</span>
     </button>`;
   }
 
-  // --- the pace band: actual vs where-the-calendar-says per dimension ----------
+  // --- the pace band: engine score vs where-the-calendar-says per dimension ----
   function paceRow(d) {
     const actual = dimActual(d.key), expected = dimExpected(d.key);
     const win = dimWindow(d.key);
     const fill = actual == null ? 0 : Math.max(0, Math.min(100, actual));
-    const tick = expected == null ? "" : `<b class="pr-tick" style="left:${expected.toFixed(1)}%" title="Where you should be today"></b>`;
+    const tick = `<b class="pr-tick" style="left:${expected.toFixed(1)}%" title="Where you should be today"></b>`;
     const right = actual == null
-      ? `<span class="pr-note">no active goals</span>`
-      : expected == null
-        ? `<span class="pr-note">no target date</span>`
-        : paceChip(actual, expected);
-    const dates = win
-      ? `<div class="pr-dates"><span>${esc(win.start)}</span><span>target ${esc(win.end)}</span></div>`
-      : "";
+      ? `<span class="pr-note">no engine data</span>`
+      : paceChip(actual, expected);
+    const dates = `<div class="pr-dates"><span>${esc(win.start)}</span>
+      <span>target ${esc(win.end)}${readOnly ? "" : ` <a href="#" class="linky" data-edit-deadline="${d.key}" title="Edit this deadline">✎</a>`}</span></div>`;
     return `<div class="pace-row" style="--hue:var(--dim-${d.key})">
       <span class="pr-name">${S.ICON[d.icon]}${esc(d.name)}</span>
       <div class="pr-lane"><div class="pr-track"><i style="width:${fill.toFixed(1)}%"></i>${tick}</div>${dates}</div>
@@ -189,24 +190,18 @@ window.pageInit = async (S) => {
          <ul class="goal-objectives">${items.map((o) => `<li>${esc(o)}</li>`).join("")}</ul>` : "");
   }
 
+  // A goal card is qualitative now: title, status, target, objectives. Progress numbers live
+  // on the dimension itself (the Mastery Engine score) — goals no longer carry a manual %.
   function goalItem(g) {
-    const expected = goalExpected(g);
-    const pct = Math.max(0, Math.min(100, g.progress_pct || 0));
     const key = `goal:${g.id}`;
-    const tick = expected == null ? "" : `<b class="pr-tick" style="left:${expected.toFixed(1)}%"></b>`;
     return `<details class="goal-item" data-ui="${key}" ${openSubs.has(key) ? "open" : ""}>
       <summary>
         <span class="gi-title">${esc(g.title)}</span>
         <span class="pill ${g.status === "done" ? "green" : g.status === "paused" ? "amber" : ""}">${esc(g.status)}</span>
-        <span class="gi-pct">${pct}%</span>
         ${S.ICON.chev}
       </summary>
       <div class="gi-body">
-        <div class="pr-track gi-bar"><i style="width:${pct}%"></i>${tick}</div>
-        <div class="gi-meta">
-          ${g.target_date ? `Target ${esc(g.target_date)}` : "No target date"}
-          ${expected != null ? ` · by today you should be at <strong>${Math.round(expected)}%</strong> ` + paceChip(g.progress_pct || 0, expected) : ""}
-        </div>
+        <div class="gi-meta">${g.target_date ? `Target ${esc(g.target_date)}` : "No target date"}</div>
         ${objectivesHtml(g.description)}
         ${readOnly ? "" : `<div class="row" style="gap:10px;margin-top:8px"><a href="#" class="linky" data-edit-goal="${g.id}">edit</a><a href="#" class="linky danger" data-del-goal="${g.id}">delete</a></div>`}
       </div>
@@ -217,7 +212,7 @@ window.pageInit = async (S) => {
     const gs = goalsFor(dimKey);
     return `<div class="section-label" style="margin-bottom:6px">Goals ${readOnly ? "" : `<a href="#" class="linky" data-add-goal="${dimKey}">+ add</a>`}</div>
       ${gs.length ? gs.map(goalItem).join("")
-        : `<div class="empty">No ${esc(dimName(dimKey).toLowerCase())} goals yet.${readOnly ? "" : " Add one to start the ring."}</div>`}`;
+        : `<div class="empty">No ${esc(dimName(dimKey).toLowerCase())} goals yet.</div>`}`;
   }
 
   // --- collapsible record sub-sections (everything the old hub showed) ---------
@@ -269,7 +264,7 @@ window.pageInit = async (S) => {
     const groups = {};
     skills.forEach((s) => { (groups[s.source] = groups[s.source] || []).push(s); });
     const order = SKILL_SOURCES.map((s) => s.v).filter((v) => groups[v]);
-    const skillsInner = `<div class="sub" style="margin-bottom:8px">What you can already do, including skills you proved on real projects, not just in the Academy. Your coach uses these.</div>
+    const skillsInner = `<div class="sub" style="margin-bottom:8px">What you can already do, including skills you proved on real projects, not just in the engine. Your coach uses these.</div>
       ${readOnly ? "" : `<div style="margin-bottom:8px"><a href="#" id="add-skill" class="linky">+ add skill</a></div>`}
       ${skills.length ? order.map((src) => `
         <div style="margin-bottom:10px">
@@ -279,32 +274,42 @@ window.pageInit = async (S) => {
               ${esc(s.name)} <span class="muted" style="font-size:11px">${esc(s.level)}</span>
               ${readOnly ? "" : `<a href="#" class="linky danger" data-del-skill="${s.id}" style="margin-left:4px">✕</a>`}</span>`).join("")}</div>
         </div>`).join("") : '<div class="empty">No skills listed yet.</div>'}`;
-    return sub("professional", "profile", "Career profile", resumeBlock,
+    let out = sub("professional", "profile", "Career profile", resumeBlock,
         prof.headline ? `<span class="ds-hint">${esc(prof.headline)}</span>` : "")
       + sub("professional", "achievements", "Achievements", `${readOnly ? "" : `<div style="margin-bottom:6px"><a href="#" id="add-ach" class="linky">+ add</a></div>`}${achList}`,
           `<span class="ds-hint">${ach.length}</span>`)
       + sub("professional", "skills", "Skills", skillsInner, `<span class="ds-hint">${skills.length}</span>`);
+    if (!readOnly) {  // enrollment progress is the viewer's, not the target's
+      const career = ((courses && courses.programs) || []).filter((p) => (p.category || "career") !== "growth");
+      out += sub("professional", "learning", "Learning · engine programs",
+        `<div class="sub">${career.length ? `You're enrolled in ${career.length} program${career.length === 1 ? "" : "s"} — this ring is their engine score.` : "Your career programs and today's assignment live in the Professional tab."} <a class="linky" href="/academy">Open Professional</a></div>`,
+        career.length ? `<span class="ds-hint">${career.length}</span>` : "");
+    }
+    return out;
   }
 
-  function mentalSubs() {
-    // Books + essays live here; philosophy items belong to the Spiritual dimension below.
+  function philosophicalSubs() {
+    // Books, essays and the philosophy canon all live here — the reading dimension.
+    // Mastery of them happens in the Philosophical tab's engine (book decks + recall).
     const canon = (data.reading || []).filter((x) => x.kind !== "philosophy");
     const now = canon.filter((x) => x.progress.status === "reading");
     const done = canon.filter((x) => x.progress.status === "done");
-    const readingInner = `<div class="sub" style="margin-bottom:8px">${done.length}/${canon.length} of the canon complete${now.length ? ` · reading ${now.length}` : ""}. <a class="linky" href="/reading">Open the canon</a></div>
+    const readingInner = `<div class="sub" style="margin-bottom:8px">${done.length}/${canon.length} of the canon complete${now.length ? ` · reading ${now.length}` : ""}. <a class="linky" href="/reading">Open the canon</a> · <a class="linky" href="/philosophical">Open the engine</a></div>
       ${now.length ? `<div class="section-label">Reading now</div><ul class="tickitems">${now.map((x) => `<li>${S.ICON.book}${esc(x.title)}${x.author ? ` <span class="muted">· ${esc(x.author)}</span>` : ""}</li>`).join("")}</ul>`
         : '<div class="empty">Nothing in progress. Open the canon to start.</div>'}`;
-    let out = "";
-    if (!readOnly) {  // enrollment progress is the viewer's, not the target's
-      const list = courses ? (courses.programs || courses.courses || []) : [];
-      const n = Array.isArray(list) ? list.length : 0;
-      out += sub("mental", "learning", "Learning · Academy",
-        `<div class="sub">${n ? `You're enrolled in ${n} course${n === 1 ? "" : "s"}. Keep your streak going in the Academy.` : "Your Academy courses and today's assignment live in the Academy tab."} <a class="linky" href="/academy">Open Academy</a></div>`,
-        n ? `<span class="ds-hint">${n} course${n === 1 ? "" : "s"}</span>` : "");
-    }
-    out += sub("mental", "reading", "Reading — books & essays", readingInner,
-      `<span class="ds-hint">${done.length}/${canon.length}</span>`);
-    return out;
+    const phil = (data.reading || []).filter((x) => x.kind === "philosophy");
+    const philDone = phil.filter((x) => x.progress.status === "done");
+    const philInner = phil.length ? `<ul class="tickitems">${phil.map((x) => `
+        <li style="display:block;padding:5px 0"><div class="row between">
+          <span>${S.ICON.book}${esc(x.title)}${x.author ? ` <span class="muted">· ${esc(x.author)}</span>` : ""}</span>
+          <span class="pill ${x.progress.status === "done" ? "green" : x.progress.status === "reading" ? "amber" : ""}">${esc(x.progress.status.replace("_", " "))}</span>
+        </div></li>`).join("")}</ul>
+        <div class="sub" style="margin-top:6px"><a class="linky" href="/reading">Open the canon</a></div>`
+      : '<div class="empty">No philosophies in the canon yet.</div>';
+    return sub("philosophical", "reading", "Reading — books & essays", readingInner,
+        `<span class="ds-hint">${done.length}/${canon.length}</span>`)
+      + sub("philosophical", "philosophy", "Philosophy", philInner,
+          phil.length ? `<span class="ds-hint">${philDone.length}/${phil.length}</span>` : "");
   }
 
   function spiritualSubs() {
@@ -316,24 +321,22 @@ window.pageInit = async (S) => {
           <div><span class="pill ${g.kind === "obstacle" ? "amber" : ""}">${esc(g.kind)}</span> <strong>${esc(g.title)}</strong>${g.detail ? `<div class="sub">${esc(g.detail)}</div>` : ""}</div>
           ${readOnly ? "" : `<a href="#" class="linky danger" data-del-growth="${g.id}">delete</a>`}
         </div>`).join("") : '<div class="empty">Nothing yet.</div>'}`;
-    const phil = (data.reading || []).filter((x) => x.kind === "philosophy");
-    const philDone = phil.filter((x) => x.progress.status === "done");
-    const philInner = phil.length ? `<ul class="tickitems">${phil.map((x) => `
-        <li style="display:block;padding:5px 0"><div class="row between">
-          <span>${S.ICON.book}${esc(x.title)}${x.author ? ` <span class="muted">· ${esc(x.author)}</span>` : ""}</span>
-          <span class="pill ${x.progress.status === "done" ? "green" : x.progress.status === "reading" ? "amber" : ""}">${esc(x.progress.status.replace("_", " "))}</span>
-        </div></li>`).join("")}</ul>
-        <div class="sub" style="margin-top:6px"><a class="linky" href="/reading">Open the canon</a></div>`
-      : '<div class="empty">No philosophies in the canon yet.</div>';
-    let out = sub("spiritual", "journal", "Growth journal", journalInner,
-      `<span class="ds-hint">${items.length}</span>`);
-    if (phil.length || !readOnly)
-      out += sub("spiritual", "philosophy", "Philosophy", philInner,
-        phil.length ? `<span class="ds-hint">${philDone.length}/${phil.length}</span>` : "");
-    return out;
+    return sub("spiritual", "journal", "Growth journal", journalInner,
+        `<span class="ds-hint">${items.length}</span>`)
+      + (readOnly ? "" : sub("spiritual", "engine", "Scripture & study",
+          `<div class="sub">Apologetics, church history and doctrine — mastered book by book in the Spiritual tab's engine. <a class="linky" href="/spiritual">Open Spiritual</a></div>`, ""));
   }
 
-  const SUBS = { spiritual: spiritualSubs, professional: professionalSubs, mental: mentalSubs, physical: physicalSubs };
+  // Free-form per-dimension dump — the worker's or the coach's. Appended to every box.
+  function infoSub(key) {
+    const txt = (areaOf(key).other_info || "").trim();
+    const inner = `<div class="sub" style="margin-bottom:8px">Anything worth keeping for this area — notes, links, context. Your coach reads this and can edit it (with your approval).</div>
+      ${txt ? `<div class="prewrap">${esc(txt)}</div>` : '<div class="empty">Nothing here yet.</div>'}
+      ${readOnly ? "" : `<div style="margin-top:8px"><a href="#" class="linky" data-edit-info="${key}">${txt ? "edit" : "+ add"}</a></div>`}`;
+    return sub(key, "info", "Other info", inner, txt ? `<span class="ds-hint">·</span>` : "");
+  }
+
+  const SUBS = { spiritual: spiritualSubs, professional: professionalSubs, philosophical: philosophicalSubs, physical: physicalSubs };
 
   // --- one dimension box --------------------------------------------------------
   function dimBox(d) {
@@ -341,10 +344,11 @@ window.pageInit = async (S) => {
     const active = gs.filter((g) => g.status === "active");
     const top = active[0] || gs[0];
     const open = openDims.has(d.key);
+    const actual = dimActual(d.key);
     const peek = top
       ? `<div class="dp-goal">${esc(top.title)}</div>
-         <div class="pr-track dp-bar"><i style="width:${Math.max(0, Math.min(100, top.progress_pct || 0))}%"></i></div>`
-      : `<div class="dp-goal muted">${readOnly ? "No goals yet." : "No goals yet — set one to start the ring."}</div>`;
+         ${actual == null ? "" : `<div class="pr-track dp-bar"><i style="width:${Math.max(0, Math.min(100, actual)).toFixed(1)}%"></i></div>`}`
+      : `<div class="dp-goal muted">No goals yet.</div>`;
     return `<section class="dim-box ${open ? "open" : ""}" id="dim-${d.key}" style="--hue:var(--dim-${d.key});--hue-bg:var(--dim-${d.key}-bg)">
       <button class="dim-head" data-toggle-dim="${d.key}" aria-expanded="${open}">
         <span class="dim-glyph">${S.ICON[d.icon]}</span>
@@ -357,7 +361,7 @@ window.pageInit = async (S) => {
       <div class="dim-peek">${peek}</div>
       <div class="dim-body">
         ${goalsBlock(d.key)}
-        <div class="dim-records">${SUBS[d.key]()}</div>
+        <div class="dim-records">${SUBS[d.key]()}${infoSub(d.key)}</div>
       </div>
     </section>`;
   }
@@ -373,7 +377,7 @@ window.pageInit = async (S) => {
         <div>
           <div class="dev-eyebrow">${eyebrow}</div>
           <h1>${who}</h1>
-          <div class="lede">Four dimensions of everything you're becoming: spirit, craft, mind, and body.</div>
+          <div class="lede">Four dimensions of everything you're becoming: spirit, craft, philosophy, and body — each ring is its tab's Mastery Engine score.</div>
         </div>
         <div class="dev-mast-right">
           ${readOnly ? "" : `<button class="btn primary dev-coach" id="ask-coach">${S.ICON.sparkle}Ask your coach</button>`}
@@ -442,6 +446,22 @@ window.pageInit = async (S) => {
     S.qsa("[data-edit-goal]").forEach((a) => a.onclick = (e) => { e.preventDefault(); goalForm(data.career.goals.find((g) => g.id == a.dataset.editGoal)); });
     S.qsa("[data-del-goal]").forEach((a) => a.onclick = (e) => { e.preventDefault(); del(`/api/development/goals/${a.dataset.delGoal}`); });
 
+    // Per-dimension area settings: the pace deadline (✎ on the pace band) and "Other info".
+    S.qsa("[data-edit-deadline]").forEach((a) => a.onclick = (e) => {
+      e.preventDefault();
+      const key = a.dataset.editDeadline;
+      formModal(`${dimName(key)} deadline`, [
+        { name: "deadline", label: `Deadline (blank = default ${DEADLINE_DEFAULT})`, type: "date", value: areaOf(key).deadline || "" },
+      ], (o) => api(`/api/development/areas/${key}`, { method: "PATCH", body: { deadline: o.deadline || null } }));
+    });
+    S.qsa("[data-edit-info]").forEach((a) => a.onclick = (e) => {
+      e.preventDefault();
+      const key = a.dataset.editInfo;
+      formModal(`${dimName(key)} — other info`, [
+        { name: "other_info", label: "Notes, links, context — anything worth keeping", type: "textarea", rows: 8, value: areaOf(key).other_info || "" },
+      ], (o) => api(`/api/development/areas/${key}`, { method: "PATCH", body: { other_info: o.other_info || null } }));
+    });
+
     const aa = S.qs("#add-ach"); if (aa) aa.onclick = (e) => { e.preventDefault(); formModal("Add achievement", [
       { name: "title", label: "Title", ph: "e.g. Shipped the Atrium assistant" },
       { name: "description", label: "Description", type: "textarea", rows: 3, ph: "What you did and the impact (optional)" },
@@ -478,16 +498,16 @@ window.pageInit = async (S) => {
     });
   }
 
+  // No progress-% field: a dimension's % is its Mastery Engine score, never typed by hand.
   function goalForm(g, dimKey) {
     formModal(g ? "Edit goal" : `Add ${dimName(dimKey || "professional").toLowerCase()} goal`, [
       { name: "title", label: "Goal", value: g && g.title, ph: "e.g. Become Agora backend developer" },
       { name: "dimension", label: "Dimension", type: "select", value: g ? dimOf(g) : (dimKey || "professional"), options: DIMS.map((d) => ({ v: d.key, t: d.name })) },
       { name: "description", label: "Objectives (one per line, start with -)", type: "textarea", value: g && g.description, ph: "- Ship the capstone\n- Read 2 papers a month" },
       { name: "status", label: "Status", type: "select", value: (g && g.status) || "active", options: [{ v: "active", t: "Active" }, { v: "paused", t: "Paused" }, { v: "done", t: "Done" }] },
-      { name: "progress_pct", label: "Progress %", type: "number", value: (g && g.progress_pct) || 0 },
-      { name: "target_date", label: "Target date (drives the pace tick)", type: "date", value: g && g.target_date },
+      { name: "target_date", label: "Target date", type: "date", value: g && g.target_date },
     ], (o) => {
-      const body = { title: o.title, dimension: o.dimension, description: o.description, status: o.status, progress_pct: num(o.progress_pct), target_date: o.target_date || null };
+      const body = { title: o.title, dimension: o.dimension, description: o.description, status: o.status, target_date: o.target_date || null };
       return g ? api(`/api/development/goals/${g.id}`, { method: "PATCH", body }) : api("/api/development/goals", { method: "POST", body });
     });
   }

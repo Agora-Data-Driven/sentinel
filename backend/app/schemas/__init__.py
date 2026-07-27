@@ -211,7 +211,7 @@ class AchievementUpdateIn(BaseModel):
 
 class GoalIn(BaseModel):
     title: str
-    dimension: str = "professional"  # spiritual | professional | mental | physical
+    dimension: str = "professional"  # spiritual | professional | philosophical | physical
     description: str | None = None
     target_date: date | None = None
     status: str = "active"  # active | done | paused
@@ -225,6 +225,15 @@ class GoalUpdateIn(BaseModel):
     target_date: date | None = None
     status: str | None = None
     progress_pct: int | None = Field(default=None, ge=0, le=100)
+
+
+class AreaUpdateIn(BaseModel):
+    """Patch one growth dimension's settings. Fields the client OMITS are left alone; an
+    explicit null CLEARS (deadline back to the default, other_info emptied) — the router
+    uses exclude_unset to tell the two apart."""
+
+    deadline: date | None = None
+    other_info: str | None = None
 
 
 class GrowthItemIn(BaseModel):

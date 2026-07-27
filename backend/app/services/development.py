@@ -19,6 +19,7 @@ from ..constants import ADMIN_ROLES, GYM_COMPLETED, ROLE_TEAM_LEAD
 from ..models import (
     BodyMetric,
     CareerAchievement,
+    DevelopmentArea,
     DevelopmentProfile,
     GrowthItem,
     GymLog,
@@ -34,6 +35,7 @@ from . import gym as gym_svc
 from ..serializers import (
     achievement_dict,
     body_metric_dict,
+    development_area_dict,
     development_profile_dict,
     goal_dict,
     growth_item_dict,
@@ -120,6 +122,17 @@ def _profile(db: Session, user_id: int) -> DevelopmentProfile | None:
     ).scalar_one_or_none()
 
 
+def _areas(db: Session, user_id: int) -> dict[str, DevelopmentArea]:
+    """This user's per-dimension settings rows, keyed by dimension. Rows are lazy —
+    a dimension with no row simply uses the frontend defaults."""
+    return {
+        a.dimension: a
+        for a in db.execute(
+            select(DevelopmentArea).where(DevelopmentArea.user_id == user_id)
+        ).scalars()
+    }
+
+
 def reading_with_progress(db: Session, user_id: int) -> list[dict]:
     """The whole canon, each item merged with this worker's progress on it."""
     items = list(
@@ -152,6 +165,9 @@ def full_profile(db: Session, user: User) -> dict:
         "skills": [skill_dict(s) for s in _skills(db, user.id)],
         "growth": [growth_item_dict(g) for g in _growth(db, user.id)],
         "reading": reading_with_progress(db, user.id),
+        # Per-dimension settings (pace deadline / other info), keyed by dimension.
+        # Missing keys = the frontend's defaults; ring % comes from the Mastery Engine.
+        "areas": {dim: development_area_dict(a) for dim, a in _areas(db, user.id).items()},
     }
 
 
@@ -194,6 +210,17 @@ def holistic_digest(db: Session, user: User) -> dict:
     obstacles = [g.title for g in growth if g.kind == "obstacle" and g.status != "archived"][:6]
     reflections = [g.title for g in growth if g.kind in ("reflection", "note")][:6]
 
+    # Per-dimension area settings (pace deadline + the free-form "other info" dump). The coach
+    # can both read these and edit them via the update_area action, so include current values.
+    areas = _areas(db, user.id)
+    area_summaries = {
+        dim: {
+            "deadline": a.deadline.isoformat() if a.deadline else None,
+            "other_info": (a.other_info or "")[:600] or None,
+        }
+        for dim, a in areas.items()
+    }
+
     # Items with their ids, for the assistant's edit actions (update/delete need the id).
     editable = {
         "prs": [{"id": p.id, "label": _pr_line(p)} for p in prs],
@@ -202,6 +229,8 @@ def holistic_digest(db: Session, user: User) -> dict:
         "skills": [{"id": s.id, "label": f"{s.name} ({s.level}, {s.source})"} for s in skills],
         "growth": [{"id": g.id, "label": f"({g.kind}) {g.title}"} for g in growth[:15]],
         "reading": [{"id": r["id"], "label": r["title"]} for r in reading],
+        # Areas are keyed by dimension NAME, not id — update_area takes the dimension directly.
+        "areas": ["spiritual", "professional", "philosophical", "physical"],
     }
 
     return {
@@ -238,5 +267,6 @@ def holistic_digest(db: Session, user: User) -> dict:
         ],
         "reading": {"reading_now": reading_now, "done": reading_done},
         "growth": {"obstacles": obstacles, "reflections": reflections},
+        "areas": area_summaries,
         "editable": editable,
     }
