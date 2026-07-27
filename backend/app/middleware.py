@@ -82,6 +82,16 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         hsts = settings.hsts_enabled if settings.hsts_enabled is not None else settings.secure_cookies
         if hsts:
             h.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+        # Static assets and page shells carry Last-Modified but (before this) no Cache-Control,
+        # so browsers applied HEURISTIC freshness and could serve a stale JS/CSS copy after a
+        # deploy without ever revalidating — the service worker's "network-first" fetch() is
+        # satisfied by the HTTP cache, so it can't help. Seen live 2026-07-27: day-old
+        # dashboard.js ran against the new /api/dashboard and rendered "undefined" KPIs.
+        # "no-cache" keeps the copy but forces ETag revalidation on every use: a cheap 304
+        # when unchanged, the new file the moment a deploy changes it. /api/* is left alone
+        # (JSON responses carry no validators, so heuristic caching never applied there).
+        if not request.url.path.startswith("/api/"):
+            h.setdefault("Cache-Control", "no-cache")
         return response
 
 
