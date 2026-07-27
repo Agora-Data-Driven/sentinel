@@ -569,7 +569,7 @@ window.TaskBoard = {
     }
 
     S.qs("#t-save").onclick = async () => {
-      // The one name field is labelled "Campaign/Title" and drives BOTH — the campaign IS the task's
+      // The one name field is labelled "Task name" and drives BOTH — the campaign IS the task's
       // title (mirrors Atrium). Labels aren't sent (the server seeds them from the service template).
       // The name is never forced: blank falls back to "Untitled task" (rename any time).
       const name = val("t-campaign") || "Untitled task";
