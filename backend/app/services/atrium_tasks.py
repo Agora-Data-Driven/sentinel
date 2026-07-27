@@ -157,6 +157,45 @@ def add_task(client_key: str, title: str, stage: str = "todo", client_facing: bo
     return False, "Atrium rejected that card."
 
 
+def _norm(text: str) -> str:
+    """Lowercase alphanumerics only -- 'Riverdance RV' and 'riverdance-rv' both -> 'riverdancerv'."""
+    return "".join(ch for ch in (text or "").lower() if ch.isalnum())
+
+
+def resolve_client(clients: list, client_key: str, client_name: str = ""):
+    """Find the Sentinel Client an Atrium workspace belongs to, or None.
+
+    Order matters, and so does refusing to guess:
+      1. `Client.atrium_client_id` -- the EXPLICIT link, always wins.
+      2. an exact normalised-name match ('Honey Tribe' == 'honey-tribe').
+      3. an UNAMBIGUOUS prefix match, so Sentinel's 'Riverdance' still picks up Atrium's
+         'Riverdance RV' -- but only when exactly ONE client could be meant, and only for names
+         long enough (>=5 chars) that the prefix is meaningful.
+    Anything ambiguous returns None: the card still renders with Atrium's own client name, which is
+    far better than silently filing one client's work under another."""
+    if not clients:
+        return None
+    for c in clients:
+        if getattr(c, "atrium_client_id", None) and c.atrium_client_id == client_key:
+            return c
+    targets = {_norm(client_key), _norm(client_name)} - {""}
+    if not targets:
+        return None
+    exact = [c for c in clients if _norm(getattr(c, "name", "")) in targets]
+    if len(exact) == 1:
+        return exact[0]
+    if exact:
+        return None  # two clients with the same name -- refuse to guess
+    partial = []
+    for c in clients:
+        cn = _norm(getattr(c, "name", ""))
+        if len(cn) < 5:
+            continue
+        if any(t.startswith(cn) or cn.startswith(t) for t in targets if len(t) >= 5):
+            partial.append(c)
+    return partial[0] if len(partial) == 1 else None
+
+
 def as_board_card(t: dict, client: object = None) -> dict:
     """Map an Atrium task onto the shape the Kanban board already renders (serializers.task_card).
 

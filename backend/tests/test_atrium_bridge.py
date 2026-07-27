@@ -63,6 +63,38 @@ def test_bridge_is_off_and_silent_without_config(monkeypatch):
     assert ok is False and err
 
 
+class _Client:
+    def __init__(self, cid, name, atrium_client_id=None):
+        self.id, self.name, self.atrium_client_id = cid, name, atrium_client_id
+
+
+def test_resolve_client_prefers_the_explicit_link():
+    """atrium_client_id always wins, even when another client's NAME looks like a better match."""
+    rows = [_Client(1, "Riverdance RV"), _Client(2, "Something Else", "riverdance-rv")]
+    assert atrium_tasks.resolve_client(rows, "riverdance-rv", "Riverdance RV").id == 2
+
+
+def test_resolve_client_matches_on_normalised_name():
+    rows = [_Client(1, "Honey Tribe"), _Client(3, "Riverdance")]
+    # 'Honey Tribe' == 'honey-tribe' once normalised.
+    assert atrium_tasks.resolve_client(rows, "honey-tribe", "Honey Tribe").id == 1
+    # Sentinel's 'Riverdance' should still pick up Atrium's 'Riverdance RV' (unambiguous prefix).
+    assert atrium_tasks.resolve_client(rows, "riverdance-rv", "Riverdance RV").id == 3
+
+
+def test_resolve_client_refuses_to_guess_when_ambiguous():
+    """Mislinking one client's work to another is worse than leaving it unlinked."""
+    rows = [_Client(1, "Riverdance North"), _Client(2, "Riverdance South")]
+    assert atrium_tasks.resolve_client(rows, "riverdance-rv", "Riverdance RV") is None
+    # Duplicated names are equally unsafe.
+    assert atrium_tasks.resolve_client([_Client(1, "Acme"), _Client(2, "Acme")], "acme", "Acme") is None
+    # Nothing remotely similar, and an empty roster.
+    assert atrium_tasks.resolve_client([_Client(1, "Totally Other")], "riverdance-rv", "Riverdance RV") is None
+    assert atrium_tasks.resolve_client([], "riverdance-rv", "Riverdance RV") is None
+    # A very short name must not prefix-match half the roster.
+    assert atrium_tasks.resolve_client([_Client(1, "RV")], "riverdance-rv", "Riverdance RV") is None
+
+
 def test_bridge_imports_without_third_party_deps():
     """STDLIB ONLY. `import requests` here crashed every container on boot -- it is not in the
     image, and an optional bridge must never be able to take the app down at import time."""

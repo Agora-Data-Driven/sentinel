@@ -94,12 +94,14 @@ def list_tasks(
     # cross-client window onto the same work, not a second system. Best-effort: if the bridge is
     # off or Atrium is unreachable, the board still renders Sentinel's own rows.
     if atrium_tasks.enabled():
-        # Resolve each Atrium workspace key to its Sentinel Client row so the board's client filter
-        # and client name work on Atrium cards too (Client.atrium_client_id is that bridge).
-        by_key = {c.atrium_client_id: c
-                  for c in db.execute(select(Client)).scalars().all() if c.atrium_client_id}
+        # Resolve each Atrium workspace to its Sentinel Client so the board's client filter and
+        # client name work on Atrium cards too: Client.atrium_client_id is the explicit bridge,
+        # with an unambiguous name match as a fallback while those links are still unset.
+        clients = db.execute(select(Client)).scalars().all()
         for a in atrium_tasks.fetch_tasks():
-            card = atrium_tasks.as_board_card(a, by_key.get(a.get("client_key")))
+            card = atrium_tasks.as_board_card(
+                a, atrium_tasks.resolve_client(clients, a.get("client_key", ""),
+                                               a.get("client_name", "")))
             if status and card["status"] != status:
                 continue
             if priority and card["priority"] != priority:
