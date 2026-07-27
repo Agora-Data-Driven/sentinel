@@ -8,26 +8,19 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ..constants import (
-    ADMIN_ROLES,
-    LEAVE_PENDING,
-    REQ_PENDING,
-    TASK_COMPLETED,
-)
+from ..constants import ADMIN_ROLES
 from ..database import get_db
 from ..models import (
-    AttendanceRequest,
     AuditLog,
     DailyAttendanceSummary,
     GymLog,
-    LeaveRequest,
     Notification,
-    Task,
     User,
 )
 from ..schemas import AnnouncementIn, SettingsIn
 from ..security import get_current_user, require_min_role
-from ..serializers import summary_dict, task_card, user_public
+from ..serializers import summary_dict, user_public
+from ..services import attendance as att
 from ..services import audit
 from ..services import settings as settings_svc
 from ..services import notifications as notif
@@ -105,48 +98,54 @@ _WD = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
 
 @router.get("/insights")
 def insights(admin: User = Depends(require_min_role("admin")), db: Session = Depends(get_db)):
-    """Aggregates for the dashboard charts: 14-day attendance trend + open tasks by status."""
+    """14-day clock-in trend for the dashboard chart.
+
+    Presence only — absence is deliberately not derived here (product call, 2026-07-27:
+    the dashboard tracks who showed up, not who didn't). Each day carries its full
+    clocked-in roster so the frontend can show "who was in" on bar click without a
+    second request; at Agora's headcount that stays a few KB.
+    """
     today = today_ph()
     start = today - timedelta(days=13)
     smap = settings_svc.get_map(db)
     workdays = {_WD[d.strip().lower()[:3]] for d in smap.get("work_days", "Mon,Tue,Wed,Thu,Fri").split(",")
                 if d.strip()[:3].lower() in _WD} or {0, 1, 2, 3, 4}
-    headcount = db.execute(select(func.count(User.id)).where(User.is_active.is_(True))).scalar() or 0
 
     summaries = db.execute(
         select(DailyAttendanceSummary).where(
-            DailyAttendanceSummary.date >= start, DailyAttendanceSummary.date <= today
+            DailyAttendanceSummary.date >= start, DailyAttendanceSummary.date <= today,
+            DailyAttendanceSummary.clock_in.is_not(None),
         )
     ).scalars().all()
+    user_ids = {s.user_id for s in summaries}
+    users = {u.id: u for u in db.execute(select(User).where(User.id.in_(user_ids))).scalars()} if user_ids else {}
+
     by_day: dict = {}
     for s in summaries:
-        b = by_day.setdefault(s.date, {"ontime": 0, "late": 0, "onleave": 0})
+        b = by_day.setdefault(s.date, {"ontime": 0, "late": 0, "people": []})
         if s.status == "Late":
             b["late"] += 1
-        elif s.status == "OnLeave":
-            b["onleave"] += 1
-        elif s.clock_in:  # OnTime, HalfDay, MissingClockOut all count as present
+        else:  # OnTime, HalfDay, MissingClockOut — all clocked in
             b["ontime"] += 1
+        b["people"].append({
+            "user": user_public(users.get(s.user_id)),
+            "clock_in": to_ph(s.clock_in).isoformat(),
+            "status": s.status,
+        })
 
     trend = []
     for i in range(14):
         day = start + timedelta(days=i)
-        b = by_day.get(day, {"ontime": 0, "late": 0, "onleave": 0})
-        is_workday = day.weekday() in workdays
-        # Absent only makes sense for past working days (today is still in progress).
-        absent = max(0, headcount - b["ontime"] - b["late"] - b["onleave"]) if (is_workday and day < today) else 0
+        b = by_day.get(day, {"ontime": 0, "late": 0, "people": []})
+        b["people"].sort(key=lambda p: p["clock_in"])
         trend.append({
             "date": day.isoformat(),
-            "ontime": b["ontime"], "late": b["late"], "absent": absent,
-            "workday": is_workday,
+            "ontime": b["ontime"], "late": b["late"],
+            "people": b["people"],
+            "workday": day.weekday() in workdays,
         })
 
-    status_rows = db.execute(
-        select(Task.status, func.count(Task.id)).where(Task.status != TASK_COMPLETED).group_by(Task.status)
-    ).all()
-    tasks_by_status = [{"status": s, "count": c} for s, c in sorted(status_rows, key=lambda r: -r[1])]
-
-    return {"attendance_trend": trend, "tasks_by_status": tasks_by_status, "headcount": headcount}
+    return {"attendance_trend": trend}
 
 
 # --- Dashboard -------------------------------------------------------------
@@ -165,30 +164,16 @@ def dashboard(user: User = Depends(get_current_user), db: Session = Depends(get_
         ).scalars().all()
         present = sum(1 for s in today_summaries if s.clock_in)
         late = sum(1 for s in today_summaries if s.status == "Late")
-        open_tasks = db.execute(select(func.count(Task.id)).where(Task.status != TASK_COMPLETED)).scalar() or 0
-        overdue = db.execute(
-            select(func.count(Task.id)).where(
-                Task.due_date.is_not(None), Task.due_date < today, Task.status != TASK_COMPLETED
-            )
-        ).scalar() or 0
-        pending_leave = db.execute(
-            select(func.count(LeaveRequest.id)).where(LeaveRequest.status == LEAVE_PENDING)
-        ).scalar() or 0
-        pending_att = db.execute(
-            select(func.count(AttendanceRequest.id)).where(AttendanceRequest.status == REQ_PENDING)
-        ).scalar() or 0
         week_start = today - timedelta(days=today.weekday())
         gym_week = db.execute(select(GymLog).where(GymLog.date >= week_start)).scalars().all()
         gym_completed = sum(1 for g in gym_week if g.status == "Completed")
 
+        # Presence-focused on purpose: no absent/task/approval counts here (2026-07-27).
+        # Tasks live on the embedded board below; approvals have their own page + bell.
         payload["kpis"] = {
             "headcount": headcount,
             "present_today": present,
             "late_today": late,
-            "absent_today": max(0, headcount - present),
-            "open_tasks": open_tasks,
-            "overdue_tasks": overdue,
-            "pending_approvals": pending_leave + pending_att,
             "gym_completed_week": gym_completed,
         }
         # Yesterday's handover notes surface on the dashboard.
@@ -212,9 +197,6 @@ def dashboard(user: User = Depends(get_current_user), db: Session = Depends(get_
             DailyAttendanceSummary.user_id == user.id, DailyAttendanceSummary.date == today
         )
     ).scalar_one_or_none()
-    my_tasks = db.execute(
-        select(Task).where(Task.assigned_to_id == user.id, Task.status != TASK_COMPLETED)
-    ).scalars().all()
     my_gym = db.execute(
         select(GymLog).where(GymLog.user_id == user.id, GymLog.date == today)
     ).scalar_one_or_none()
@@ -223,9 +205,13 @@ def dashboard(user: User = Depends(get_current_user), db: Session = Depends(get_
             Notification.user_id == user.id, Notification.is_read.is_(False)
         )
     ).scalar() or 0
+    # Today's punch state drives the Clock In / Clock Out buttons on the dashboard card
+    # (self-punch via POST /api/attendance/self-event — no kiosk needed).
+    my_events = att._events_for(db, user.id, today)
+    # No task payload here — the dashboard embeds the full Task Board, which loads its own data.
     payload["me"] = {
         "attendance_today": summary_dict(my_today, user) if my_today else None,
-        "open_tasks": [task_card(t, db) for t in my_tasks],
+        "attendance_actions": att.valid_actions(my_events),
         "gym_today": {"status": my_gym.status, "day_type": my_gym.day_type} if my_gym else None,
         "unread_notifications": unread,
     }

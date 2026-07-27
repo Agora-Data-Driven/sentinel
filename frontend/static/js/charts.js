@@ -12,12 +12,12 @@
 
   // Status palette — validated (node scripts/validate_palette.js) for each surface.
   // light on #FFF: CVD ok, contrast relieved by legend+labels+table. dark on #111C15: CVD 12.1, contrast pass.
+  // Presence only — no "absent" series (product call, 2026-07-27: the chart shows who clocked in).
   const ATT = {
-    light: { ontime: "#54B948", late: "#F59E0B", absent: "#EF4444" },
-    dark:  { ontime: "#4CAF43", late: "#E0930F", absent: "#EF5A5A" },
+    light: { ontime: "#54B948", late: "#F59E0B" },
+    dark:  { ontime: "#4CAF43", late: "#E0930F" },
   };
-  const BAR_HUE = { light: "#54B948", dark: "#6BCB4E" };
-  const SERIES = [["ontime", "On-time"], ["late", "Late"], ["absent", "Absent"]];
+  const SERIES = [["ontime", "On-time"], ["late", "Late"]];
 
   // ---- shared tooltip ----
   let tip;
@@ -86,9 +86,10 @@
   const shortDay = (iso) => { const d = new Date(iso + "T00:00:00+08:00"); return d.getDate(); };
   const wday = (iso) => new Date(iso + "T00:00:00+08:00").toLocaleDateString("en-PH", { timeZone: "Asia/Manila", weekday: "short" });
 
-  // ============ Attendance trend (stacked bars) ============
-  function attendanceTrend(host, trend) {
-    if (!trend || !trend.length) { host.classList.add("chart-card"); host.innerHTML = `<div class="chart-head"><h3>Attendance, last 14 days</h3></div><div class="chart-empty">No attendance yet.</div>`; return; }
+  // ============ Clock-in trend (stacked bars: on-time + late) ============
+  // onDayClick(day) — optional; wired by dashboard.js to open the "who clocked in" modal.
+  function attendanceTrend(host, trend, onDayClick) {
+    if (!trend || !trend.length) { host.classList.add("chart-card"); host.innerHTML = `<div class="chart-head"><h3>Clock-ins, last 14 days</h3></div><div class="chart-empty">No clock-ins yet.</div>`; return; }
 
     const legendHtml = () => { const c = ATT[isDark() ? "dark" : "light"]; return `<div class="chart-legend">${SERIES.map(([k, lbl]) => `<span class="lg"><span class="sw" style="background:${c[k]}"></span>${lbl}</span>`).join("")}</div>`; };
 
@@ -96,8 +97,8 @@
       const c = ATT[isDark() ? "dark" : "light"];
       const W = 720, H = 250, padL = 34, padR = 10, padT = 12, padB = 30;
       const x0 = padL, x1 = W - padR, y0 = padT, y1 = H - padB, plotW = x1 - x0, plotH = y1 - y0;
-      const max = niceMax(Math.max(1, ...trend.map((d) => d.ontime + d.late + d.absent)));
-      const svg = svgEl("svg", { class: "chart-svg", viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Attendance last 14 days" });
+      const max = niceMax(Math.max(1, ...trend.map((d) => d.ontime + d.late)));
+      const svg = svgEl("svg", { class: "chart-svg", viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Clock-ins last 14 days" });
       // gridlines + y labels (recessive)
       for (let i = 0; i <= 4; i++) {
         const val = Math.round(max * i / 4), gy = y1 - plotH * i / 4;
@@ -107,8 +108,22 @@
       const slot = plotW / trend.length, bw = Math.min(30, slot * 0.62);
       trend.forEach((d, i) => {
         const cx = x0 + slot * i + slot / 2, bx = cx - bw / 2;
+        const clickable = !!onDayClick && (d.ontime + d.late) > 0;
+        // Full-height invisible hit area (drawn first, so the real bars stay hoverable on
+        // top) — a 1-person bar is only a couple of px tall, the whole column should click.
+        if (clickable) {
+          const hit = svgEl("rect", { x: x0 + slot * i, y: y0, width: slot, height: plotH, fill: "transparent" });
+          hit.style.cursor = "pointer";
+          hit.addEventListener("mousemove", (e) => showTip(
+            `<div style="color:var(--ink);font-weight:700;margin-bottom:4px">${wday(d.date)} ${shortDay(d.date)}</div>
+             <div class="tt-row">Clocked in<b>${d.ontime + d.late}</b></div>
+             <div class="tt-row" style="margin-top:4px;color:var(--muted)">Click to see who</div>`, e.clientX, e.clientY));
+          hit.addEventListener("mouseleave", hideTip);
+          hit.addEventListener("click", () => { hideTip(); onDayClick(d); });
+          svg.appendChild(hit);
+        }
         let cursorY = y1;
-        const segs = [["ontime", d.ontime], ["late", d.late], ["absent", d.absent]];
+        const segs = [["ontime", d.ontime], ["late", d.late]];
         const topIdx = segs.reduce((acc, s, idx) => (s[1] > 0 ? idx : acc), -1);
         segs.forEach(([k, v], idx) => {
           if (v <= 0) return;
@@ -122,8 +137,10 @@
           node.addEventListener("mousemove", (e) => showTip(
             `<div style="color:var(--ink);font-weight:700;margin-bottom:4px">${wday(d.date)} ${shortDay(d.date)}</div>
              <div class="tt-row"><span class="tt-sw" style="background:${c[k]}"></span>${label}<b>${v}</b></div>
-             <div class="tt-row" style="margin-top:2px">Total present<b>${d.ontime + d.late}</b></div>`, e.clientX, e.clientY));
+             <div class="tt-row" style="margin-top:2px">Clocked in<b>${d.ontime + d.late}</b></div>
+             ${clickable ? `<div class="tt-row" style="margin-top:4px;color:var(--muted)">Click to see who</div>` : ""}`, e.clientX, e.clientY));
           node.addEventListener("mouseleave", hideTip);
+          if (clickable) { node.style.cursor = "pointer"; node.addEventListener("click", () => { hideTip(); onDayClick(d); }); }
           svg.appendChild(node); cursorY -= h;
         });
         // x label (day of month), weekends dimmed
@@ -133,35 +150,11 @@
       return svg;
     };
 
-    const renderTable = () => `<table class="chart-tbl"><thead><tr><th>Date</th><th>On-time</th><th>Late</th><th>Absent</th></tr></thead>
-      <tbody>${trend.map((d) => `<tr><td>${wday(d.date)} ${shortDay(d.date)}</td><td>${d.ontime}</td><td>${d.late}</td><td>${d.absent}</td></tr>`).join("")}</tbody></table>`;
+    const renderTable = () => `<table class="chart-tbl"><thead><tr><th>Date</th><th>On-time</th><th>Late</th><th>Clocked in</th></tr></thead>
+      <tbody>${trend.map((d) => `<tr><td>${wday(d.date)} ${shortDay(d.date)}</td><td>${d.ontime}</td><td>${d.late}</td><td>${d.ontime + d.late}</td></tr>`).join("")}</tbody></table>`;
 
-    mountChart(host, "Attendance, last 14 days", null, () => { const f = document.createDocumentFragment(); f.appendChild(renderPlot()); const l = document.createElement("div"); l.innerHTML = legendHtml(); f.appendChild(l.firstChild); return f; }, renderTable);
+    mountChart(host, "Clock-ins, last 14 days", null, () => { const f = document.createDocumentFragment(); f.appendChild(renderPlot()); const l = document.createElement("div"); l.innerHTML = legendHtml(); f.appendChild(l.firstChild); return f; }, renderTable);
   }
 
-  // ============ Open tasks by status (horizontal bars, single hue) ============
-  function tasksByStatus(host, rows) {
-    if (!rows || !rows.length) { host.classList.add("chart-card"); host.innerHTML = `<div class="chart-head"><h3>Open tasks by status</h3></div><div class="chart-empty">No open tasks.</div>`; return; }
-    const renderPlot = () => {
-      const hue = BAR_HUE[isDark() ? "dark" : "light"];
-      const rowH = 30, W = 720, padL = 128, padR = 40, padT = 6;
-      const H = padT * 2 + rows.length * rowH, x0 = padL, x1 = W - padR, plotW = x1 - x0;
-      const max = Math.max(1, ...rows.map((r) => r.count));
-      const svg = svgEl("svg", { class: "chart-svg", viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Open tasks by status" });
-      rows.forEach((r, i) => {
-        const cy = padT + i * rowH + rowH / 2, w = Math.max(2, (r.count / max) * plotW), bh = 16;
-        const lbl = svgEl("text", { x: x0 - 10, y: cy + 4, "text-anchor": "end", "font-size": 12, fill: "var(--sub)", "font-weight": 600 }); lbl.textContent = r.status; svg.appendChild(lbl);
-        const bar = svgEl("rect", { x: x0, y: cy - bh / 2, width: w, height: bh, rx: 4, fill: hue, class: "chart-seg" });
-        bar.addEventListener("mousemove", (e) => showTip(`<div class="tt-row">${esc(r.status)}<b>${r.count}</b></div>`, e.clientX, e.clientY));
-        bar.addEventListener("mouseleave", hideTip); svg.appendChild(bar);
-        const val = svgEl("text", { x: x0 + w + 7, y: cy + 4, "font-size": 12, fill: "var(--ink)", "font-weight": 700 }); val.textContent = r.count; svg.appendChild(val);
-      });
-      return svg;
-    };
-    const renderTable = () => `<table class="chart-tbl"><thead><tr><th>Status</th><th>Open tasks</th></tr></thead>
-      <tbody>${rows.map((r) => `<tr><td>${esc(r.status)}</td><td>${r.count}</td></tr>`).join("")}</tbody></table>`;
-    mountChart(host, "Open tasks by status", null, renderPlot, renderTable);
-  }
-
-  window.SentinelCharts = { attendanceTrend, tasksByStatus };
+  window.SentinelCharts = { attendanceTrend };
 })();

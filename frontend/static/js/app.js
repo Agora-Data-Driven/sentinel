@@ -92,9 +92,10 @@
       // One inbox for attendance-correction + leave approvals (managers+). Replaces the separate
       // "Approvals" tabs that used to live on the Time and Leave pages.
       { href: "/approvals", label: "Approvals", icon: "inbox", min: "team_lead" },
-      // Check-in (the QR scanner station) is an operational tool, not personal — visible to all
-      // roles so a super_admin can reach it too (it was hidden before, hence "missing").
-      { href: "/scanner", label: "Check-in", icon: "qr" },
+      // Clock in (the QR scanner station) punches OTHER people's badges, and the punch endpoints
+      // only trust a Super-Admin session (attendance.kiosk_guard) — so only super_admin gets the
+      // tab. Everyone else clocks themselves in from the Dashboard's Attendance card.
+      { href: "/scanner", label: "Clock in", icon: "qr", roles: ["super_admin"] },
     ] },
     { href: "/north-star", label: "Our North Star", icon: "compass" },
     { section: "Admin" },
