@@ -31,6 +31,7 @@ from ..schemas import (
     AchievementIn,
     AchievementUpdateIn,
     AreaUpdateIn,
+    AtriumImportIn,
     BodyMetricIn,
     GoalIn,
     GoalUpdateIn,
@@ -62,7 +63,7 @@ from ..serializers import (
     reading_item_dict,
     skill_dict,
 )
-from ..services import development as dev_svc
+from ..services import atrium_watcher, development as dev_svc
 from ..utils.time import today_ph, utcnow
 
 router = APIRouter(prefix="/api/development", tags=["development"])
@@ -372,6 +373,40 @@ def get_transcript(transcript_id: int, user: User = Depends(get_current_user), d
 def delete_transcript(transcript_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     db.delete(_own(db, MentorTranscript, transcript_id, user))
     db.commit()
+
+
+# --- Mentor library: import from Atrium's Watcher (creators already archived there) ---------------
+# Watcher (Atrium's team-only tab) already auto-fetches full transcripts for watched YouTube
+# creators -- this lets the Growth hub import one of those instead of hand-pasting text. Read-only
+# browsing, then a one-time COPY into `mentor_transcripts` (not a live link): the coach's digest and
+# this page both read Sentinel's own table, so an Atrium outage never breaks an already-imported
+# transcript. See services/atrium_watcher.py -- everything here degrades to empty/404 when the
+# bridge isn't configured, never a 500.
+@router.get("/atrium/channels")
+def atrium_channels(user: User = Depends(get_current_user)):
+    return {"ready": atrium_watcher.ready(), "channels": atrium_watcher.list_channels()}
+
+
+@router.get("/atrium/channels/{channel_id}/videos")
+def atrium_videos(channel_id: str, user: User = Depends(get_current_user)):
+    return {"videos": atrium_watcher.list_videos(channel_id)}
+
+
+@router.post("/atrium/import")
+def atrium_import(payload: AtriumImportIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    v = atrium_watcher.get_transcript(payload.channel_id, payload.video_id)
+    if not v:
+        raise HTTPException(status_code=404, detail="That transcript isn't available from Atrium yet.")
+    t = MentorTranscript(
+        user_id=user.id,
+        mentor_name=payload.mentor_name,
+        title=v["title"] or "Untitled",
+        source_url=v["url"] or None,
+        transcript_text=v["transcript"],
+    )
+    db.add(t)
+    db.commit()
+    return mentor_transcript_dict(t)
 
 
 # --- Reading & philosophy ---------------------------------------------------

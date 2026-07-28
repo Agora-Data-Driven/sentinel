@@ -323,6 +323,12 @@ class MentorTranscriptIn(BaseModel):
     transcript_text: str
 
 
+class AtriumImportIn(BaseModel):
+    channel_id: str
+    video_id: str
+    mentor_name: str
+
+
 # --- Tasks -----------------------------------------------------------------
 class ChecklistItem(BaseModel):
     text: str

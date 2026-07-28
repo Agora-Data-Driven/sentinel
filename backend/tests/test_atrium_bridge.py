@@ -10,7 +10,7 @@ These pin the contract that took a full day to get right (2026-07-27):
 from __future__ import annotations
 
 from app.constants import TASK_STATUSES
-from app.services import atrium_tasks
+from app.services import atrium_bridge, atrium_tasks
 
 
 def test_status_map_covers_every_sentinel_status():
@@ -54,9 +54,9 @@ def test_board_card_shape_and_client_resolution():
 
 def test_bridge_is_off_and_silent_without_config(monkeypatch):
     """No secret / no URL => disabled, and every call degrades instead of raising."""
-    monkeypatch.setattr(atrium_tasks.settings, "platform_sso_secret", "", raising=False)
-    monkeypatch.setattr(atrium_tasks.settings, "atrium_api_url", "", raising=False)
-    monkeypatch.setattr(atrium_tasks.settings, "portal_login_url", "", raising=False)
+    monkeypatch.setattr(atrium_bridge.settings, "platform_sso_secret", "", raising=False)
+    monkeypatch.setattr(atrium_bridge.settings, "atrium_api_url", "", raising=False)
+    monkeypatch.setattr(atrium_bridge.settings, "portal_login_url", "", raising=False)
     assert atrium_tasks.enabled() is False
     assert atrium_tasks.fetch_tasks() == []
     ok, err = atrium_tasks.move_task("c", "tk_1", "todo")
@@ -105,14 +105,14 @@ def test_writes_get_a_longer_timeout_than_reads():
 def test_unconfirmed_write_is_not_reported_as_a_failure(monkeypatch):
     """No answer != it didn't happen. Claiming failure on a write that landed invites a
     double-move, so the wording must send the user to refresh instead."""
-    monkeypatch.setattr(atrium_tasks.settings, "platform_sso_secret", "s3cret", raising=False)
-    monkeypatch.setattr(atrium_tasks.settings, "atrium_api_url", "https://portal.example",
+    monkeypatch.setattr(atrium_bridge.settings, "platform_sso_secret", "s3cret", raising=False)
+    monkeypatch.setattr(atrium_bridge.settings, "atrium_api_url", "https://portal.example",
                         raising=False)
 
     def _timeout(*a, **k):
         raise TimeoutError("slow")
 
-    monkeypatch.setattr(atrium_tasks.urllib.request, "urlopen", _timeout)
+    monkeypatch.setattr(atrium_bridge.urllib.request, "urlopen", _timeout)
     ok, err = atrium_tasks.move_task("riverdance-rv", "tk_1", "todo")
     assert ok is False
     low = err.lower()
@@ -122,26 +122,30 @@ def test_unconfirmed_write_is_not_reported_as_a_failure(monkeypatch):
 
 def test_bridge_imports_without_third_party_deps():
     """STDLIB ONLY. `import requests` here crashed every container on boot -- it is not in the
-    image, and an optional bridge must never be able to take the app down at import time."""
+    image, and an optional bridge must never be able to take the app down at import time. Checks
+    every module in the bridge: the shared transport (atrium_bridge) and both its callers."""
     import pathlib
 
-    src = pathlib.Path(atrium_tasks.__file__).read_text(encoding="utf-8")
-    for line in src.splitlines():
-        stripped = line.strip()
-        assert not stripped.startswith("import requests"), "requests is NOT in requirements.txt"
-        assert not stripped.startswith("from requests"), "requests is NOT in requirements.txt"
+    from app.services import atrium_watcher
+
+    for mod in (atrium_bridge, atrium_tasks, atrium_watcher):
+        src = pathlib.Path(mod.__file__).read_text(encoding="utf-8")
+        for line in src.splitlines():
+            stripped = line.strip()
+            assert not stripped.startswith("import requests"), f"requests is NOT in requirements.txt ({mod.__name__})"
+            assert not stripped.startswith("from requests"), f"requests is NOT in requirements.txt ({mod.__name__})"
 
 
 def test_fetch_degrades_when_atrium_is_unreachable(monkeypatch):
     """An Atrium outage returns [] -- the board still renders Sentinel's own rows."""
-    monkeypatch.setattr(atrium_tasks.settings, "platform_sso_secret", "s3cret", raising=False)
-    monkeypatch.setattr(atrium_tasks.settings, "atrium_api_url", "https://portal.example",
+    monkeypatch.setattr(atrium_bridge.settings, "platform_sso_secret", "s3cret", raising=False)
+    monkeypatch.setattr(atrium_bridge.settings, "atrium_api_url", "https://portal.example",
                         raising=False)
 
     def _boom(*a, **k):
-        raise atrium_tasks.urllib.error.URLError("down")
+        raise atrium_bridge.urllib.error.URLError("down")
 
-    monkeypatch.setattr(atrium_tasks.urllib.request, "urlopen", _boom)
+    monkeypatch.setattr(atrium_bridge.urllib.request, "urlopen", _boom)
     assert atrium_tasks.fetch_tasks() == []
     ok, err = atrium_tasks.move_task("c", "tk_1", "todo")
     assert ok is False and err
@@ -152,8 +156,8 @@ def test_signed_request_carries_the_platform_hmac_headers(monkeypatch):
     import hashlib
     import hmac as _hmac
 
-    monkeypatch.setattr(atrium_tasks.settings, "platform_sso_secret", "s3cret", raising=False)
-    monkeypatch.setattr(atrium_tasks.settings, "atrium_api_url", "https://portal.example",
+    monkeypatch.setattr(atrium_bridge.settings, "platform_sso_secret", "s3cret", raising=False)
+    monkeypatch.setattr(atrium_bridge.settings, "atrium_api_url", "https://portal.example",
                         raising=False)
     seen = {}
 
@@ -174,7 +178,7 @@ def test_signed_request_carries_the_platform_hmac_headers(monkeypatch):
         seen["headers"] = dict(req.headers)
         return _Resp()
 
-    monkeypatch.setattr(atrium_tasks.urllib.request, "urlopen", _urlopen)
+    monkeypatch.setattr(atrium_bridge.urllib.request, "urlopen", _urlopen)
     atrium_tasks.fetch_tasks()
     assert seen["url"].endswith("/api/internal/tasks")
     # urllib title-cases header names.

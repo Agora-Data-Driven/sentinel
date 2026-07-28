@@ -225,12 +225,17 @@ window.TaskBoard = {
   // fetches /api/tasks/{id}) can't open them. Point the user at the system that actually owns them.
   function openTask(id) {
     const t = allTasks.find((x) => String(x.id) === String(id));
-    if (t && t.source === "atrium") { S.toast("This card is managed in Atrium — open it there to view or edit.", "err"); return; }
+    if (t && t.source === "atrium") { S.toast("Card details live in Atrium — open it there to view or edit. Drag still works here to change its status.", "err"); return; }
     openDetail(id);
   }
 
   function wireCardClicks() {
-    S.qsa(".tcard").forEach((c) => c.onclick = () => { if (!c.classList.contains("dragging")) openTask(c.dataset.id); });
+    // Some browsers still dispatch a click on the source element right after a completed native
+    // drag (the "dragging" class is already gone by then, since dragend clears it synchronously) --
+    // wireDnD also stamps a short-lived data-just-dragged flag so that trailing click is swallowed
+    // instead of reopening the card it was just moved from (which, for an Atrium card, would wrongly
+    // show the "open it in Atrium" block on what was really just a move).
+    S.qsa(".tcard").forEach((c) => c.onclick = () => { if (!c.classList.contains("dragging") && !c.dataset.justDragged) openTask(c.dataset.id); });
     // The hover ✕ deletes in place (confirm first — deletion is irreversible). stopPropagation
     // so the click doesn't also open the detail drawer.
     S.qsa(".t-del").forEach((b) => b.onclick = (e) => {
@@ -270,7 +275,14 @@ window.TaskBoard = {
     let dragEl = null;
     S.qsa(".tcard").forEach((c) => {
       c.ondragstart = (e) => { dragEl = c; c.classList.add("dragging"); e.dataTransfer.effectAllowed = "move"; };
-      c.ondragend = () => { c.classList.remove("dragging"); S.qsa(".col.drag-over").forEach((x) => x.classList.remove("drag-over")); };
+      c.ondragend = () => {
+        c.classList.remove("dragging");
+        S.qsa(".col.drag-over").forEach((x) => x.classList.remove("drag-over"));
+        // See wireCardClicks: swallow exactly one trailing click, in case this browser fires one
+        // after the drag instead of suppressing it.
+        c.dataset.justDragged = "1";
+        setTimeout(() => { delete c.dataset.justDragged; }, 0);
+      };
     });
     S.qsa(".col-list").forEach((list) => {
       const col = list.closest(".col");
