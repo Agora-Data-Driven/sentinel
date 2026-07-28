@@ -10,9 +10,11 @@ window.TaskBoard = {
   const isAM = canManage;   // priority is settable by AM + admin + super_admin (not team leads/staff)
   // Mirrors task_perms.can_delete (the server enforces it): AM+ anywhere, team lead in their
   // team, and the creator for their own tasks. Drives the ✕ on cards + Delete in the drawer.
-  const canDelete = (t) => canManage
+  // Atrium-bridged cards (t.source === "atrium") are never deletable here -- they have no local
+  // Task row, Atrium owns them, and Sentinel's task_id-keyed endpoints can't act on their string id.
+  const canDelete = (t) => t.source !== "atrium" && (canManage
     || (canMonitor && t.assigned_team_id != null && t.assigned_team_id === S.user.team_id)
-    || (t.created_by_id != null && t.created_by_id === S.user.id);
+    || (t.created_by_id != null && t.created_by_id === S.user.id));
 
   // Board-only styles (styles.css stays untouched): the hover ✕ on cards. Injected once,
   // same pattern as the Coach FAB styles in app.js — CSP allows style elements, not inline JS.
@@ -218,8 +220,17 @@ window.TaskBoard = {
     lane.classList.remove("flash"); requestAnimationFrame(() => lane.classList.add("flash"));
   }
 
+  // Atrium-bridged cards (t.source === "atrium") have no local Task row -- their id is a string
+  // like "atrium:client_key:task_id", not a Sentinel primary key, so the detail drawer (which
+  // fetches /api/tasks/{id}) can't open them. Point the user at the system that actually owns them.
+  function openTask(id) {
+    const t = allTasks.find((x) => String(x.id) === String(id));
+    if (t && t.source === "atrium") { S.toast("This card is managed in Atrium — open it there to view or edit.", "err"); return; }
+    openDetail(id);
+  }
+
   function wireCardClicks() {
-    S.qsa(".tcard").forEach((c) => c.onclick = () => { if (!c.classList.contains("dragging")) openDetail(c.dataset.id); });
+    S.qsa(".tcard").forEach((c) => c.onclick = () => { if (!c.classList.contains("dragging")) openTask(c.dataset.id); });
     // The hover ✕ deletes in place (confirm first — deletion is irreversible). stopPropagation
     // so the click doesn't also open the detail drawer.
     S.qsa(".t-del").forEach((b) => b.onclick = (e) => {
@@ -596,7 +607,7 @@ window.TaskBoard = {
   // Deep-links: ?open=<id> (notification) and ?new=1 (command palette) — read from the current
   // URL, which is /dashboard now that the board is embedded there (/tasks 302s here too).
   const params = new URLSearchParams(location.search);
-  if (params.get("open")) openDetail(params.get("open"));
+  if (params.get("open")) openTask(params.get("open"));
   if (params.get("new") && canCreate) taskForm(null);
 
   // Live board: reload when someone ELSE changes a task (SSE). Our own changes are already

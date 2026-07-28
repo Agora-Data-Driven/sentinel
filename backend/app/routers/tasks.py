@@ -66,6 +66,18 @@ def _broadcast(action: str, task: Task, actor_id: int) -> None:
     })
 
 
+def _resolve_task(db: Session, task_id: str) -> Task | None:
+    """Look up a Sentinel task by id. The board also renders Atrium-bridged cards, whose id is
+    "atrium:<client_key>:<task_id>" (see atrium_tasks.as_board_card) -- not a Sentinel primary
+    key, since those cards have no local Task row. A path param typed `int` would reject that
+    id with a raw Pydantic 422 before this code ever runs; typing it `str` and parsing here
+    turns it into an ordinary 404 instead (mirrors move_status's handling of the same id shape)."""
+    try:
+        return db.get(Task, int(task_id))
+    except (TypeError, ValueError):
+        return None
+
+
 @router.get("")
 def list_tasks(
     client_id: int | None = Query(None),
@@ -171,8 +183,8 @@ def list_templates(user: User = Depends(get_current_user), db: Session = Depends
 
 
 @router.get("/{task_id}")
-def get_task(task_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    task = db.get(Task, task_id)
+def get_task(task_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    task = _resolve_task(db, task_id)
     if not task:
         raise HTTPException(status_code=404, detail=_NOT_FOUND)
     if not task_perms.can_view(user, task):
@@ -247,8 +259,8 @@ def create_task(payload: TaskCreateIn, user: User = Depends(get_current_user), d
 
 
 @router.patch("/{task_id}")
-def update_task(task_id: int, payload: TaskUpdateIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    task = db.get(Task, task_id)
+def update_task(task_id: str, payload: TaskUpdateIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    task = _resolve_task(db, task_id)
     if not task:
         raise HTTPException(status_code=404, detail=_NOT_FOUND)
     if not task_perms.can_edit(user, task):
@@ -290,9 +302,9 @@ def update_task(task_id: int, payload: TaskUpdateIn, user: User = Depends(get_cu
 
 
 @router.delete("/{task_id}")
-def delete_task(task_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def delete_task(task_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Delete a task and everything hanging off it. Team lead (own team) + AM / admin / super_admin."""
-    task = db.get(Task, task_id)
+    task = _resolve_task(db, task_id)
     if not task:
         raise HTTPException(status_code=404, detail=_NOT_FOUND)
     if not task_perms.can_delete(user, task):
@@ -300,10 +312,10 @@ def delete_task(task_id: int, user: User = Depends(get_current_user), db: Sessio
     title = task.title
     _broadcast("deleted", task, user.id)  # while the row is still valid
     # comments + history cascade via the relationship; Atrium approvals have no cascade, so clear them.
-    db.query(AtriumApproval).filter(AtriumApproval.task_id == task_id).delete()
+    db.query(AtriumApproval).filter(AtriumApproval.task_id == task.id).delete()
     db.delete(task)
     db.commit()
-    audit.record(db, actor_id=user.id, table_name="tasks", record_id=task_id, action="delete",
+    audit.record(db, actor_id=user.id, table_name="tasks", record_id=task.id, action="delete",
                  old={"title": title})
     return {"ok": True}
 
@@ -349,8 +361,8 @@ def move_status(task_id: str, payload: TaskStatusIn, user: User = Depends(get_cu
 
 
 @router.patch("/{task_id}/priority")
-def set_priority(task_id: int, payload: TaskPriorityIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    task = db.get(Task, task_id)
+def set_priority(task_id: str, payload: TaskPriorityIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    task = _resolve_task(db, task_id)
     if not task:
         raise HTTPException(status_code=404, detail=_NOT_FOUND)
     # Priority is a management decision: team lead (own team) + AM / admin / super_admin.
@@ -369,8 +381,8 @@ def set_priority(task_id: int, payload: TaskPriorityIn, user: User = Depends(get
 
 
 @router.post("/{task_id}/comments")
-def add_comment(task_id: int, payload: CommentIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    task = db.get(Task, task_id)
+def add_comment(task_id: str, payload: CommentIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    task = _resolve_task(db, task_id)
     if not task:
         raise HTTPException(status_code=404, detail=_NOT_FOUND)
     if not task_perms.can_view(user, task):
@@ -386,8 +398,8 @@ def add_comment(task_id: int, payload: CommentIn, user: User = Depends(get_curre
 
 
 @router.post("/{task_id}/attachments")
-async def add_attachment(task_id: int, file: UploadFile = File(...), user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    task = db.get(Task, task_id)
+async def add_attachment(task_id: str, file: UploadFile = File(...), user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    task = _resolve_task(db, task_id)
     if not task:
         raise HTTPException(status_code=404, detail=_NOT_FOUND)
     if not task_perms.can_view(user, task):
@@ -405,9 +417,9 @@ async def add_attachment(task_id: int, file: UploadFile = File(...), user: User 
 
 
 @router.post("/{task_id}/send-to-atrium", dependencies=[Depends(require_roles(*AM_PLUS))])
-def send_to_atrium(task_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def send_to_atrium(task_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Bridge to Atrium: mark visible + record an approval. Only client-facing fields cross over."""
-    task = db.get(Task, task_id)
+    task = _resolve_task(db, task_id)
     if not task:
         raise HTTPException(status_code=404, detail=_NOT_FOUND)
     task.atrium_visible = True
