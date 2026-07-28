@@ -24,6 +24,7 @@ from .models import (
     LeaveRequest,
     LeaveType,
     DevelopmentArea,
+    MentorTranscript,
     Notification,
     PersonalRecord,
     PhysicalGoal,
@@ -449,6 +450,22 @@ def skill_dict(s: Skill) -> dict:
         "source": s.source,
         "note": s.note,
     }
+
+
+def mentor_transcript_dict(t: MentorTranscript, full: bool = False) -> dict:
+    """A mentor library entry. `full=False` (the list/hub view) omits `transcript_text` —
+    it can be a whole video's worth of text — so the Growth page's /me payload stays light.
+    The single-item endpoint passes full=True to return the text for viewing."""
+    d = {
+        "id": t.id,
+        "mentor_name": t.mentor_name,
+        "title": t.title,
+        "source_url": t.source_url,
+        "created_at": _iso(t.created_at),
+    }
+    if full:
+        d["transcript_text"] = t.transcript_text
+    return d
 
 
 def reading_item_dict(r: ReadingItem, progress: ReadingProgress | None = None) -> dict:

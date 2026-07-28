@@ -316,6 +316,13 @@ class SkillUpdateIn(BaseModel):
     note: str | None = None
 
 
+class MentorTranscriptIn(BaseModel):
+    mentor_name: str
+    title: str
+    source_url: str | None = None
+    transcript_text: str
+
+
 # --- Tasks -----------------------------------------------------------------
 class ChecklistItem(BaseModel):
     text: str

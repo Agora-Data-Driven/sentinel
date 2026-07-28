@@ -17,6 +17,7 @@ Tables:
     growth_items           -> personal journal: obstacles / reflections / notes (bottom-up)
     reading_items          -> admin-curated canon of required books/philosophies (top-down)
     reading_progress       -> per-worker status + reflection on a canon item
+    mentor_transcripts     -> full transcripts imported from outside mentors (e.g. Atrium creators)
 """
 from __future__ import annotations
 
@@ -230,3 +231,21 @@ class ReadingProgress(Base):
     reflection: Mapped[str | None] = mapped_column(Text, nullable=True)
     rating: Mapped[int | None] = mapped_column(Integer, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class MentorTranscript(Base):
+    """A full transcript imported from an outside mentor's video/lesson (e.g. an Atrium
+    creator like Nic Saraev or Carson Reed) — a personal, bottom-up knowledge base the
+    worker builds so the AI coach can draw on someone else's playbook, not just the
+    Mastery Engine's own curriculum. `transcript_text` can be long (a whole video), so
+    list views should read the compact digest and fetch the full row only on demand."""
+
+    __tablename__ = "mentor_transcripts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    mentor_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    title: Mapped[str] = mapped_column(String(300), nullable=False)
+    source_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    transcript_text: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
