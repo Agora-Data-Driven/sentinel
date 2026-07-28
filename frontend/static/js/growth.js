@@ -483,10 +483,13 @@ window.pageInit = async (S) => {
     return `<div class="card" style="margin-top:16px">
       <div class="card-head">
         <h3>${S.ICON.book}Mentor library</h3>
-        ${readOnly ? "" : `<button class="btn sm ghost" id="add-transcript">${S.ICON.plus}Import transcript</button>`}
+        ${readOnly ? "" : `<div class="row" style="gap:8px">
+          <button class="btn sm primary" id="add-transcript-atrium">${S.ICON.plus}Import from Atrium</button>
+          <button class="btn sm ghost" id="add-transcript">${S.ICON.plus}Paste transcript</button>
+        </div>`}
       </div>
       <div class="card-body">
-        <div class="sub" style="margin-bottom:12px">Full video/lesson transcripts you've imported from outside mentors (e.g. Atrium creators) — a pseudo-mentor knowledge base your coach can draw on.</div>
+        <div class="sub" style="margin-bottom:12px">Full video/lesson transcripts from outside mentors (e.g. Atrium Watcher creators like Nic Saraev or Carson Reed) — a pseudo-mentor knowledge base your coach can draw on.</div>
         ${items.length ? items.map(transcriptRow).join("") : '<div class="empty">No transcripts imported yet.</div>'}
       </div>
     </div>`;
@@ -575,6 +578,7 @@ window.pageInit = async (S) => {
     const ac = S.qs("#ask-coach"); if (ac) ac.onclick = () => (window.SentinelOpenCoach ? window.SentinelOpenCoach() : S.toast("Coach isn't configured", "err"));
 
     const at = S.qs("#add-transcript"); if (at) at.onclick = (e) => { e.preventDefault(); transcriptForm(); };
+    const ata = S.qs("#add-transcript-atrium"); if (ata) ata.onclick = (e) => { e.preventDefault(); atriumImportPicker(); };
     S.qsa("[data-del-transcript]").forEach((a) => a.onclick = (e) => { e.preventDefault(); delete transcriptText[a.dataset.delTranscript]; del(`/api/development/transcripts/${a.dataset.delTranscript}`); });
 
     const am = S.qs("#add-metric"); if (am) am.onclick = () => formModal("Log body stats", [
@@ -697,17 +701,84 @@ window.pageInit = async (S) => {
     });
   }
 
-  // Import-only — a mentor transcript is pasted verbatim, not hand-edited afterward.
+  // Import-only — a mentor transcript is pasted verbatim, not hand-edited afterward. For anything
+  // not (yet) archived in Atrium's Watcher — a one-off video, a non-YouTube source.
   function transcriptForm() {
-    formModal("Import mentor transcript", [
+    formModal("Paste a transcript", [
       { name: "mentor_name", label: "Mentor", ph: "e.g. Nic Saraev, Carson Reed" },
       { name: "title", label: "Video / lesson title", ph: "e.g. Cold email systemization, pt. 2" },
-      { name: "source_url", label: "Source URL (optional)", ph: "Link back to the Atrium video" },
+      { name: "source_url", label: "Source URL (optional)", ph: "Link back to the source" },
       { name: "transcript_text", label: "Full transcript", type: "textarea", rows: 14, ph: "Paste the full transcript text…" },
     ], (o) => api("/api/development/transcripts", {
       method: "POST",
       body: { mentor_name: o.mentor_name, title: o.title, source_url: o.source_url || null, transcript_text: o.transcript_text },
     }), { wide: true });
+  }
+
+  // --- import from Atrium's Watcher archive: creator -> video -> copy the transcript in ----------
+  function atriumImportPicker() {
+    const m = S.modal({ title: "Import from Atrium", body: `<div id="ax-body">${S.skeleton({ rows: 4 })}</div>`, wide: true });
+    const body = () => S.qs("#ax-body", m.root);
+
+    function showChannels(channels) {
+      body().innerHTML = `<div class="sub" style="margin-bottom:10px">Pick a creator, then a video to pull its transcript from Atrium's Watcher archive.</div>
+        ${channels.map((c) => `<button class="card pad ax-pick" data-channel="${esc(c.id)}" data-mentor="${esc(c.title)}" style="display:block;width:100%;text-align:left;margin-bottom:8px;cursor:pointer;appearance:none;font:inherit;color:inherit">
+          <div class="row between"><strong>${esc(c.title)}</strong><span class="pill">${esc(c.kind || "creator")}</span></div>
+          <div class="sub" style="margin-top:4px">${c.transcript_count || 0}/${c.video_count || 0} transcripts fetched${c.industry ? " · " + esc(c.industry) : ""}</div>
+        </button>`).join("")}`;
+      S.qsa(".ax-pick", body()).forEach((b) => b.onclick = () => showVideos(b.dataset.channel, b.dataset.mentor));
+    }
+
+    async function showVideos(channelId, mentorName) {
+      body().innerHTML = S.skeleton({ rows: 4 });
+      let videos = [];
+      try { videos = (await api(`/api/development/atrium/channels/${channelId}/videos`)).videos || []; }
+      catch (e) { videos = []; }
+      const withText = videos.filter((v) => v.has_transcript);
+      body().innerHTML = `<a href="#" class="linky" id="ax-back">&larr; Creators</a>
+        <div class="sub" style="margin:8px 0">${esc(mentorName)} — pick a video that already has a transcript fetched.</div>
+        ${withText.length ? withText.map((v) => `<button class="card pad ax-pick" data-video="${esc(v.id)}" style="display:block;width:100%;text-align:left;margin-bottom:8px;cursor:pointer;appearance:none;font:inherit;color:inherit">
+            <strong>${esc(v.title)}</strong>
+            <div class="sub" style="margin-top:4px">${v.words} words</div>
+          </button>`).join("")
+          : '<div class="empty">No fetched transcripts on this creator yet — run "Fetch missing" on it in Atrium first.</div>'}`;
+      S.qs("#ax-back", body()).onclick = (e) => { e.preventDefault(); loadChannels(); };
+      S.qsa(".ax-pick", body()).forEach((b) => b.onclick = () => doImport(channelId, b.dataset.video, mentorName));
+    }
+
+    async function doImport(channelId, videoId, mentorName) {
+      body().innerHTML = S.skeleton({ rows: 3 });
+      try {
+        await api("/api/development/atrium/import", {
+          method: "POST",
+          body: { channel_id: channelId, video_id: videoId, mentor_name: mentorName },
+        });
+        m.close();
+        S.toast("Imported", "ok");
+        load();
+      } catch (e) {
+        S.toast(e.detail || "Couldn't import that transcript", "err");
+        showVideos(channelId, mentorName);
+      }
+    }
+
+    async function loadChannels() {
+      body().innerHTML = S.skeleton({ rows: 4 });
+      let data;
+      try { data = await api("/api/development/atrium/channels"); }
+      catch (e) { data = { ready: false, channels: [] }; }
+      if (!data.ready) {
+        body().innerHTML = `<div class="empty">Atrium isn't connected for this yet — use "Paste transcript" instead.</div>`;
+        return;
+      }
+      if (!(data.channels || []).length) {
+        body().innerHTML = `<div class="empty">No creators watched in Atrium yet — add one there first.</div>`;
+        return;
+      }
+      showChannels(data.channels);
+    }
+
+    loadChannels();
   }
 
   async function del(path) {

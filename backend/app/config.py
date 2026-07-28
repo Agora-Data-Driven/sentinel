@@ -66,6 +66,11 @@ class Settings(BaseSettings):
     # Atrium shows up here. Unset = derived from portal_login_url; if neither resolves, the bridge
     # is simply off and the board shows Sentinel's own rows only.
     atrium_api_url: str = ""
+    # Which Atrium client workspace's Watcher archive the Growth hub's Mentor Library reads from
+    # (services/atrium_watcher.py) -- Watcher's channels are per-workspace, and mentor content
+    # (Nic Saraev, Carson Reed, ...) isn't any one client's, so it lives under Agora's own
+    # workspace. Unset = the picker is simply off; manual paste still works.
+    atrium_watcher_client_key: str = "agora"
     # The host Sentinel should be reached on. The shared cookie is scoped to
     # .agoradatadriven.com, so on the raw *.run.app URL (an old bookmark, a stale link) SSO simply
     # cannot work and you get asked to sign in again for no visible reason. Set this and browsers

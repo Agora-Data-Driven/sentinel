@@ -5,45 +5,30 @@ work lives in that client's own workspace JSON, which is why a task typed into a
 Progress board belongs to that client by construction. Sentinel's board is the team's cross-client
 view over the same work, PLUS its own internal-only rows that clients never see.
 
-Transport is the platform's existing server-to-server HMAC (no cookie, no new secret): HMAC-SHA256
-over `"{purpose}:{ts}"` with the shared `platform-sso-key`, sent as X-Academy-Ts / X-Academy-Sig --
-the same scheme `sentinel_directory.py` uses in the other direction and mastery-engine uses against
-`/api/internal/people`.
+Transport is the platform's existing server-to-server HMAC (no cookie, no new secret) --
+see `atrium_bridge.py` (shared with `atrium_watcher.py`), which also uses this signing.
 
 EVERYTHING here is best-effort and fail-SOFT: an unset secret, a missing URL, a timeout, a non-200
 or a malformed body all degrade to "no Atrium tasks" so the internal board still renders Sentinel's
 own rows. An Atrium outage must never blank the team's board.
-
-STDLIB ONLY (urllib, not requests): this service's requirements.txt is deliberately tight, and an
-optional bridge must never be able to take the app down at import time -- adding `import requests`
-here crashed every container on boot (2026-07-27) because it isn't in the image.
 """
 
 from __future__ import annotations
 
-import hashlib
-import hmac
-import json
 import logging
-import time
-import urllib.error
-import urllib.parse
-import urllib.request
 
-from ..config import settings
+from . import atrium_bridge
+from .atrium_bridge import enabled
 
 log = logging.getLogger(__name__)
+
+_READ_TIMEOUT = atrium_bridge.READ_TIMEOUT
+_WRITE_TIMEOUT = atrium_bridge.WRITE_TIMEOUT
+_call = atrium_bridge.call
 
 # Atrium-owned cards carry this prefix in their board id so the frontend and the mutation routes can
 # tell them from Sentinel's own integer-keyed rows and send edits back to Atrium.
 ATRIUM_ID_PREFIX = "atrium:"
-# Reads happen on every board load, so they must not hang the UI -- they degrade to [] instead.
-# WRITES need a lot more room: Atrium's move is a read-modify-write of the whole workspace JSON in
-# GCS, which on a cold instance took longer than the original 6s. Timing out did NOT cancel it --
-# the card moved while the user was told it had failed (seen live 2026-07-27), which invites a
-# confusing double-move. Be generous here and honest in the message below.
-_READ_TIMEOUT = 10
-_WRITE_TIMEOUT = 30
 
 # Sentinel status label -> Atrium stage key. Atrium deliberately adopted Sentinel's status set
 # (constants.TASK_STATUSES) so the two boards speak the same language; this is the key mapping.
@@ -56,66 +41,6 @@ STAGE_BY_STATUS = {
     "Completed": "completed",
     "Blocked": "blocked",
 }
-
-
-def _base_url() -> str:
-    """The portal's origin, or "" when unconfigured (bridge stays off)."""
-    url = (getattr(settings, "atrium_api_url", "") or "").strip()
-    if not url:
-        # Fall back to the portal login URL's origin, so a deploy that already knows where the
-        # portal lives needs no extra setting.
-        login = (getattr(settings, "portal_login_url", "") or "").strip()
-        if login:
-            url = login.split("/auth/")[0].split("/login")[0]
-    return url.rstrip("/")
-
-
-def _headers(purpose: str) -> dict | None:
-    secret = (settings.platform_sso_secret or "").strip()
-    if not secret:
-        return None
-    ts = str(int(time.time()))
-    sig = hmac.new(secret.encode(), f"{purpose}:{ts}".encode(), hashlib.sha256).hexdigest()
-    return {"X-Academy-Ts": ts, "X-Academy-Sig": sig}
-
-
-def enabled() -> bool:
-    """True when both the shared secret and the portal URL are configured."""
-    return bool((settings.platform_sso_secret or "").strip() and _base_url())
-
-
-def _call(purpose: str, path: str, params: dict | None = None,
-          body: dict | None = None, timeout: int | None = None) -> tuple[int, dict]:
-    """One signed request. Returns (status_code, parsed_json); (0, {}) if it never left the ground.
-
-    Never raises -- every caller degrades instead, because an Atrium outage must not break the
-    internal board."""
-    headers = _headers(purpose)
-    base = _base_url()
-    if not headers or not base:
-        return 0, {}
-    url = base + path
-    if params:
-        url += "?" + urllib.parse.urlencode(params)
-    data = None
-    if body is not None:
-        data = json.dumps(body).encode("utf-8")
-        headers["Content-Type"] = "application/json"
-    req = urllib.request.Request(url, data=data, headers=headers,
-                                 method="POST" if body is not None else "GET")
-    try:
-        with urllib.request.urlopen(req, timeout=(timeout or _READ_TIMEOUT)) as resp:
-            raw = resp.read().decode("utf-8", "replace")
-            return resp.status, (json.loads(raw) if raw else {})
-    except urllib.error.HTTPError as exc:
-        # A non-2xx still carries a body worth surfacing (e.g. Atrium's completion guard).
-        try:
-            return exc.code, json.loads(exc.read().decode("utf-8", "replace"))
-        except Exception:
-            return exc.code, {}
-    except (urllib.error.URLError, ValueError, TimeoutError, OSError) as exc:
-        log.warning("atrium %s call failed: %s", purpose, exc)
-        return 0, {}
 
 
 def fetch_tasks(client_key: str = "") -> list[dict]:
