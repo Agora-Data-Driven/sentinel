@@ -23,6 +23,7 @@ from ..models import (
     DevelopmentProfile,
     GrowthItem,
     GymLog,
+    MentorTranscript,
     PersonalRecord,
     PhysicalGoal,
     ProfessionalGoal,
@@ -40,6 +41,7 @@ from ..serializers import (
     development_profile_dict,
     goal_dict,
     growth_item_dict,
+    mentor_transcript_dict,
     personal_record_dict,
     physical_goal_dict,
     pr_display,
@@ -143,6 +145,16 @@ def _areas(db: Session, user_id: int) -> dict[str, DevelopmentArea]:
     }
 
 
+def _transcripts(db: Session, user_id: int) -> list[MentorTranscript]:
+    return list(
+        db.execute(
+            select(MentorTranscript)
+            .where(MentorTranscript.user_id == user_id)
+            .order_by(MentorTranscript.created_at.desc())
+        ).scalars()
+    )
+
+
 def reading_with_progress(db: Session, user_id: int) -> list[dict]:
     """The whole canon, each item merged with this worker's progress on it."""
     items = list(
@@ -181,6 +193,8 @@ def full_profile(db: Session, user: User) -> dict:
         # Per-dimension settings (pace deadline / other info), keyed by dimension.
         # Missing keys = the frontend's defaults; ring % comes from the Mastery Engine.
         "areas": {dim: development_area_dict(a) for dim, a in _areas(db, user.id).items()},
+        # Mentor library — compact (no transcript_text; that's fetched per-item on demand).
+        "transcripts": [mentor_transcript_dict(t) for t in _transcripts(db, user.id)],
     }
 
 
@@ -199,6 +213,7 @@ def holistic_digest(db: Session, user: User) -> dict:
     skills = _skills(db, user.id)
     growth = _growth(db, user.id)
     reading = reading_with_progress(db, user.id)
+    transcripts = _transcripts(db, user.id)
 
     resume = (profile.resume_text or "").strip() if profile else ""
     resume_excerpt = (resume[:700] + ("…" if len(resume) > 700 else "")) if resume else None
@@ -292,5 +307,8 @@ def holistic_digest(db: Session, user: User) -> dict:
         "reading": {"reading_now": reading_now, "done": reading_done},
         "growth": {"obstacles": obstacles, "reflections": reflections},
         "areas": area_summaries,
+        # Titles only — a mentor transcript can be a whole video's worth of text, so the
+        # digest lists what's available rather than dumping it into every prompt.
+        "mentor_library": [f"{t.mentor_name} — {t.title}" for t in transcripts[:40]],
         "editable": editable,
     }

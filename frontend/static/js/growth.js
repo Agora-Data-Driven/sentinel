@@ -27,6 +27,8 @@ window.pageInit = async (S) => {
   // UI state that must survive the full re-render load() does after every save.
   const openDims = new Set();      // expanded dimension boxes
   const openSubs = new Set();      // expanded <details> — "dim:sub" and "goal:<id>" keys
+  const openTranscripts = new Set();  // expanded mentor-library rows (by transcript id)
+  const transcriptText = {};          // id -> fetched transcript_text, cached across re-renders
 
   const SKILL_LEVELS = ["Beginner", "Intermediate", "Advanced"];
   const SKILL_SOURCES = [
@@ -183,7 +185,7 @@ window.pageInit = async (S) => {
   }
 
   // --- generic form modal ---------------------------------------------------
-  function formModal(title, fields, onSave) {
+  function formModal(title, fields, onSave, opts) {
     const body = fields.map((f) => {
       if (f.type === "textarea")
         return `<label class="field"><span>${esc(f.label)}</span><textarea id="f-${f.name}" rows="${f.rows || 4}" placeholder="${esc(f.ph || "")}">${esc(f.value || "")}</textarea></label>`;
@@ -195,6 +197,7 @@ window.pageInit = async (S) => {
       title,
       body: `<div class="formgrid">${body}</div>`,
       footer: `<button class="btn ghost" id="fm-cancel">Cancel</button><button class="btn primary" id="fm-save">Save</button>`,
+      wide: !!(opts && opts.wide),
     });
     S.qs("#fm-cancel").onclick = m.close;
     S.qs("#fm-save").onclick = async () => {
@@ -453,6 +456,42 @@ window.pageInit = async (S) => {
 
   const SUBS = { spiritual: spiritualSubs, professional: professionalSubs, philosophical: philosophicalSubs, physical: physicalSubs };
 
+  // --- mentor library: full transcripts imported from outside mentors (e.g. Atrium creators
+  // like Nic Saraev or Carson Reed) — a bottom-up knowledge base so the coach can draw on
+  // someone else's playbook. Sits at the bottom of the page, below the four dimensions;
+  // transcript_text is fetched lazily per row (the /me payload only carries the light fields).
+  function transcriptRow(t) {
+    const open = openTranscripts.has(String(t.id));
+    const text = transcriptText[t.id];
+    return `<div class="card pad" style="margin-bottom:10px">
+      <div class="row between" style="gap:10px;align-items:flex-start">
+        <div style="min-width:0">
+          <div>${S.ICON.doc}<strong>${esc(t.title)}</strong></div>
+          <div class="sub" style="margin-top:2px">${esc(t.mentor_name)}${t.source_url ? ` · <a href="${esc(t.source_url)}" target="_blank" rel="noopener" class="linky">source</a>` : ""}</div>
+        </div>
+        <div class="row" style="gap:8px;flex:none">
+          <a href="#" class="linky" data-view-transcript="${t.id}">${open ? "hide" : "view"}</a>
+          ${readOnly ? "" : `<a href="#" class="linky danger" data-del-transcript="${t.id}">delete</a>`}
+        </div>
+      </div>
+      ${open ? `<div class="prewrap" style="margin-top:10px;max-height:340px;overflow:auto;padding-top:10px;border-top:1px solid var(--line)">${text != null ? esc(text) : "Loading…"}</div>` : ""}
+    </div>`;
+  }
+
+  function libraryBlock() {
+    const items = data.transcripts || [];
+    return `<div class="card" style="margin-top:16px">
+      <div class="card-head">
+        <h3>${S.ICON.book}Mentor library</h3>
+        ${readOnly ? "" : `<button class="btn sm ghost" id="add-transcript">${S.ICON.plus}Import transcript</button>`}
+      </div>
+      <div class="card-body">
+        <div class="sub" style="margin-bottom:12px">Full video/lesson transcripts you've imported from outside mentors (e.g. Atrium creators) — a pseudo-mentor knowledge base your coach can draw on.</div>
+        ${items.length ? items.map(transcriptRow).join("") : '<div class="empty">No transcripts imported yet.</div>'}
+      </div>
+    </div>`;
+  }
+
   // --- page render ----------------------------------------------------------------
   function render() {
     const who = readOnly && data.user ? esc(data.user.name.split(" ")[0]) + "’s growth" : "Your growth";
@@ -478,6 +517,8 @@ window.pageInit = async (S) => {
         <div class="dim-pace-head">Pace — where you are vs where the calendar says <span class="pace-key"><b class="pr-tick demo"></b> = expected today · click a row for its details</span></div>
         ${DIMS.map(paceBlock).join("")}
       </div>
+
+      ${libraryBlock()}
     </div>`;
 
     wire();
@@ -516,8 +557,25 @@ window.pageInit = async (S) => {
       if (dt.open) openSubs.add(dt.dataset.ui); else openSubs.delete(dt.dataset.ui);
     }));
 
+    // Viewing a transcript is read-only in both modes; fetch its text once and cache it.
+    S.qsa("[data-view-transcript]").forEach((a) => a.onclick = async (e) => {
+      e.preventDefault();
+      const id = a.dataset.viewTranscript;
+      if (openTranscripts.has(id)) { openTranscripts.delete(id); render(); return; }
+      openTranscripts.add(id);
+      render();
+      if (transcriptText[id] == null) {
+        try { const t = await api(`/api/development/transcripts/${id}`); transcriptText[id] = t.transcript_text; }
+        catch (e) { transcriptText[id] = "(couldn't load this transcript)"; }
+        render();
+      }
+    });
+
     if (readOnly) return;
     const ac = S.qs("#ask-coach"); if (ac) ac.onclick = () => (window.SentinelOpenCoach ? window.SentinelOpenCoach() : S.toast("Coach isn't configured", "err"));
+
+    const at = S.qs("#add-transcript"); if (at) at.onclick = (e) => { e.preventDefault(); transcriptForm(); };
+    S.qsa("[data-del-transcript]").forEach((a) => a.onclick = (e) => { e.preventDefault(); delete transcriptText[a.dataset.delTranscript]; del(`/api/development/transcripts/${a.dataset.delTranscript}`); });
 
     const am = S.qs("#add-metric"); if (am) am.onclick = () => formModal("Log body stats", [
       { name: "body_fat_pct", label: "Body fat %", type: "number", step: "0.1" },
@@ -637,6 +695,19 @@ window.pageInit = async (S) => {
       const body = { name: o.name, level: o.level, source: o.source, note: o.note || null };
       return sk ? api(`/api/development/skills/${sk.id}`, { method: "PATCH", body }) : api("/api/development/skills", { method: "POST", body });
     });
+  }
+
+  // Import-only — a mentor transcript is pasted verbatim, not hand-edited afterward.
+  function transcriptForm() {
+    formModal("Import mentor transcript", [
+      { name: "mentor_name", label: "Mentor", ph: "e.g. Nic Saraev, Carson Reed" },
+      { name: "title", label: "Video / lesson title", ph: "e.g. Cold email systemization, pt. 2" },
+      { name: "source_url", label: "Source URL (optional)", ph: "Link back to the Atrium video" },
+      { name: "transcript_text", label: "Full transcript", type: "textarea", rows: 14, ph: "Paste the full transcript text…" },
+    ], (o) => api("/api/development/transcripts", {
+      method: "POST",
+      body: { mentor_name: o.mentor_name, title: o.title, source_url: o.source_url || null, transcript_text: o.transcript_text },
+    }), { wide: true });
   }
 
   async function del(path) {

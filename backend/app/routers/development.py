@@ -18,6 +18,7 @@ from ..models import (
     DevelopmentArea,
     DevelopmentProfile,
     GrowthItem,
+    MentorTranscript,
     PersonalRecord,
     PhysicalGoal,
     ProfessionalGoal,
@@ -35,6 +36,7 @@ from ..schemas import (
     GoalUpdateIn,
     GrowthItemIn,
     GrowthItemUpdateIn,
+    MentorTranscriptIn,
     PersonalRecordIn,
     PersonalRecordUpdateIn,
     PhysicalGoalIn,
@@ -54,6 +56,7 @@ from ..serializers import (
     development_profile_dict,
     goal_dict,
     growth_item_dict,
+    mentor_transcript_dict,
     personal_record_dict,
     physical_goal_dict,
     reading_item_dict,
@@ -341,6 +344,33 @@ def update_skill(skill_id: int, payload: SkillUpdateIn, user: User = Depends(get
 @router.delete("/skills/{skill_id}", status_code=204)
 def delete_skill(skill_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     db.delete(_own(db, Skill, skill_id, user))
+    db.commit()
+
+
+# --- Mentor library (imported transcripts) ----------------------------------
+@router.post("/transcripts")
+def add_transcript(payload: MentorTranscriptIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    t = MentorTranscript(
+        user_id=user.id,
+        mentor_name=payload.mentor_name,
+        title=payload.title,
+        source_url=payload.source_url,
+        transcript_text=payload.transcript_text,
+    )
+    db.add(t)
+    db.commit()
+    return mentor_transcript_dict(t)
+
+
+@router.get("/transcripts/{transcript_id}")
+def get_transcript(transcript_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """The full row, including transcript_text — fetched on demand when a library entry is opened."""
+    return mentor_transcript_dict(_own(db, MentorTranscript, transcript_id, user), full=True)
+
+
+@router.delete("/transcripts/{transcript_id}", status_code=204)
+def delete_transcript(transcript_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    db.delete(_own(db, MentorTranscript, transcript_id, user))
     db.commit()
 
 

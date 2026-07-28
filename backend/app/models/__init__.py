@@ -14,7 +14,8 @@ full schema. The tables:
     body_metrics, personal_records,
     development_profiles, career_achievements,
     professional_goals, growth_items,
-    reading_items, reading_progress                  -> development.py
+    reading_items, reading_progress,
+    mentor_transcripts                               -> development.py
     notifications                                    -> notification.py
     audit_logs, system_settings                      -> system.py
 """
@@ -26,6 +27,7 @@ from .development import (
     DevelopmentArea,
     DevelopmentProfile,
     GrowthItem,
+    MentorTranscript,
     PersonalRecord,
     PhysicalGoal,
     ProfessionalGoal,
@@ -75,6 +77,7 @@ __all__ = [
     "Skill",
     "ReadingItem",
     "ReadingProgress",
+    "MentorTranscript",
     "Notification",
     "PayrollEntry",
     "AuditLog",
