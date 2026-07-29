@@ -3,23 +3,28 @@
 The rules (higher roles inherit lower ones):
 
     | action        | employee/intern | team_lead        | account_manager | admin/super_admin |
-    | view          | own             | team + own       | all             | all               |
+    | view          | assigned        | team + own       | all             | all               |
     | create        | yes             | yes              | yes             | yes               |
-    | edit fields   | own             | team + own       | all             | all               |
+    | edit fields   | assigned        | team + own       | all             | all               |
     | reassign      | self only       | team             | all             | all               |
     | priority      | no              | team (scoped)    | all             | all               |
     | delete        | own created     | team + created   | all             | all               |
-    | move status   | own             | team             | all             | all               |
+    | move status   | assigned        | team             | all             | all               |
     | bridge/Atrium | no              | no               | AM              | admin/super       |
+    | see Atrium    | no              | yes              | yes             | yes               |
 
-"own" = task.assigned_to_id == user.id (or assigned to one of the user's sub-tasks), OR
-task.created_by_id == user.id — the creator tag is set automatically on create, so a task an
-employee quick-adds stays on their board even while unassigned or after a manager reassigns it.
+"assigned" = task.assigned_to_id == user.id, or assigned to one of the task's sub-tasks. That is
+the WHOLE rule for an employee/intern: their board is their own work queue, so a card that is
+unassigned, or someone else's, is not on it — even one they created themselves (2026-07-30; before
+that the automatic creator tag also granted sight, which meant a card an intern raised and a
+manager then delegated stayed on the intern's board).
+"own"  = "assigned", or task.created_by_id == user.id (the automatic creator tag) — a team lead
+keeps sight of what they raised for another team.
 "team" = task.assigned_team_id == user.team_id (a team lead's own team).
 """
 from __future__ import annotations
 
-from ..constants import ADMIN_ROLES, ROLE_ACCOUNT_MANAGER, ROLE_TEAM_LEAD
+from ..constants import ADMIN_ROLES, MANAGER_ROLES, ROLE_ACCOUNT_MANAGER, ROLE_TEAM_LEAD
 from ..models import Task, User
 from . import maintasks as MT
 
@@ -47,12 +52,20 @@ def _assigned(user: User, task: Task) -> bool:
 
 
 def _created(user: User, task: Task) -> bool:
-    """The automatic creator tag — whoever made the task never loses sight of it."""
+    """The automatic creator tag, set on create — never a form field. It grants sight to a team lead
+    (work they raised for another team) and lets any creator delete their own card; on its own it no
+    longer keeps a delegated card on an employee's/intern's board (see can_view)."""
     return getattr(task, "created_by_id", None) == user.id
 
 
 def can_view(user: User, task: Task) -> bool:
-    return _is_full(user) or _leads_team(user, task) or _assigned(user, task) or _created(user, task)
+    if _is_full(user):
+        return True
+    if user.role == ROLE_TEAM_LEAD:
+        return _leads_team(user, task) or _assigned(user, task) or _created(user, task)
+    # Employee / intern: assignment is the whole rule. Their board answers "what am I working on",
+    # so it must not carry work nobody handed them -- see the module docstring.
+    return _assigned(user, task)
 
 
 # Editing a task's own fields (title, dates, breakdown, labels, notes) = anyone who can see it.
@@ -77,8 +90,12 @@ def can_prioritize(user: User, task: Task) -> bool:
 def can_delete(user: User, task: Task) -> bool:
     """Delete — destructive. Team lead within their team, AM/admin/super anywhere, and the
     creator for their own tasks (anyone can quick-add a card, so anyone can clean up their
-    own mistake — but never someone else's work)."""
-    return _is_full(user) or _leads_team(user, task) or _created(user, task)
+    own mistake — but never someone else's work).
+
+    The creator branch is gated on `can_view`: once a card has left your board (a manager took it
+    off you) it is no longer "your own mistake" to clean up, and deleting what you can't even see
+    is never the intent."""
+    return _is_full(user) or _leads_team(user, task) or (_created(user, task) and can_view(user, task))
 
 
 def can_bridge(user: User) -> bool:
@@ -89,20 +106,31 @@ def can_bridge(user: User) -> bool:
 # --- Atrium-owned cards ----------------------------------------------------
 # A card Atrium owns (board id "atrium:<client_key>:<task_id>") has no local Task row: no assignee,
 # no team, no creator tag. Every rule above is written in terms of those three, so none of them can
-# apply — these two are the whole model for that kind of card.
+# apply — these three are the whole model for that kind of card, and the only honest way to scope
+# them is by role.
 #
-# Everyone who loads the board already SEES every Atrium card (list_tasks appends them unfiltered),
-# so hiding the editor behind a role would only mean "you may look at client work but not fix it" —
-# which is what the old "open it in Atrium" dead end amounted to. Editing content is therefore open
-# to any staff member, exactly like `can_edit` on a Sentinel task you can see.
+# Visibility is a MANAGER surface (team lead and up). Until 2026-07-30 `list_tasks` appended every
+# Atrium card to every board unfiltered, so an intern's "your tasks" board filled up with unassigned
+# client work from clients they don't touch — which is what this fixes.
 #
-# The three decisions that are not the editor's to make stay with managers, mirroring
-# can_prioritize / can_bridge / can_delete for work nobody on the team owns.
+# Editing a card's content follows visibility exactly (never "you may look at client work but not
+# fix it" — that dead end is what the in-place editor replaced). The three decisions that are not
+# the editor's to make stay with FULL, mirroring can_prioritize / can_bridge / can_delete for work
+# nobody on the team owns.
+
+
+def can_view_atrium(user: User) -> bool:
+    """See client cards Atrium owns on this board — team lead and up.
+
+    Managers work across clients, so the cross-client client-facing board is theirs. An
+    employee's/intern's board is the work assigned to *them*, and an Atrium card is assigned to
+    nobody here (its owners are Atrium roster emails, not Sentinel users)."""
+    return user.role in MANAGER_ROLES
 
 
 def can_edit_atrium(user: User) -> bool:
-    """Edit an Atrium card's content (title, dates, breakdown, notes, comments) — any staff."""
-    return True
+    """Edit an Atrium card's content (title, dates, breakdown, notes, comments) — whoever sees it."""
+    return can_view_atrium(user)
 
 
 def can_manage_atrium(user: User) -> bool:

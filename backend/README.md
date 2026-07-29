@@ -25,7 +25,7 @@ unit map + cookbook.
 | `app/services/attendance.py` | The attendance engine (punch state machine, late/grace in Manila) |
 | `app/services/atrium_bridge.py` · `atrium_watcher.py` | HMAC signer + Watcher-archive client (Mentor Library import; fail-soft by design) |
 | `app/services/atrium_tasks.py` | Whole Atrium task-bridge translation layer: `FIELD_MAP`, `to_atrium_fields`, `as_board_card`, `as_task_detail`, `split_id`, `GONE`/`GONE_COMMENT` |
-| `app/services/task_perms.py` | `can_edit_atrium` / `can_manage_atrium` |
+| `app/services/task_perms.py` | The whole task RBAC table. `can_view` (employee/intern = **assigned to them**, nothing else) · `can_view_atrium` / `can_edit_atrium` (team lead+) / `can_manage_atrium` (AM+) |
 | `app/services/task_config.py` · `task_templates.py` · `maintasks.py` | Board vocab (task_vocab), service templates, two-level work breakdown |
 | `app/services/mentor_search.py` | Per-user BM25-ish retrieval over `mentor_transcripts` (`resolve_mentor`, `DEFAULT_LIMIT`; no table of its own — deliberate) |
 | `app/services/development.py` | Holistic hub incl. `holistic_digest` (feeds the Coach) |

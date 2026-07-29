@@ -131,6 +131,7 @@ Adding a router? Register it in the tuple at [main.py:322](backend/app/main.py#L
 | id | an integer PK | the string `atrium:<client_key>:<task_id>` |
 | stored in | Postgres `tasks` | that client's Atrium workspace JSON — **Atrium is the source of truth** |
 | reaches the board via | `task_card` | `atrium_tasks.fetch_tasks()` → `as_board_card` (fail-soft: an Atrium outage just hides them) |
+| who sees it | `task_perms.can_view` (employee/intern: **only what's assigned to them**) | `task_perms.can_view_atrium` — **team lead and up** |
 
 **Both are fully editable here** (since 2026-07-29 — before that, opening an Atrium card said "open
 it in Atrium to view or edit", which is a dead end, not an answer). Every route in `tasks.py` looks
@@ -146,9 +147,12 @@ instead of to Postgres: `GET /{id}`, `PATCH /{id}`, `DELETE /{id}`, `PATCH /{id}
   assignee, team or description, and its owners are roster **emails**, not user ids.
 - **Signing purposes** (HMAC, shared `platform-sso-key`, same scheme as everything else):
   `tasks`, `task-detail`, `task-update`, `task-delete`, `task-move`, `task-add`, `task-comment`.
-- **Permissions** live in `task_perms.can_edit_atrium` / `can_manage_atrium`: content is editable by
-  any staff member (everyone already sees every Atrium card on the board), while priority, client
-  visibility and deletion stay AM+ — the same three decisions Sentinel reserves for managers.
+- **Permissions** live in `task_perms.can_view_atrium` / `can_edit_atrium` / `can_manage_atrium`:
+  a client card is a **manager surface** (team lead and up) because it belongs to no Sentinel user;
+  whoever sees it may edit its content; priority, client visibility and deletion stay AM+ — the same
+  three decisions Sentinel reserves for managers. Every Atrium branch in `tasks.py` calls
+  `_require_atrium` (or the stricter `can_manage_atrium`) — scoping only the board LIST would be
+  theatre while the id still opened and edited the card.
 - 🔴 **Only Atrium's own 404 may surface as "that card is gone."** The board LIST is fail-soft, but
   every explicit act (open / edit / delete / comment) reports its failure — the router keys its 404
   off `atrium_tasks.GONE`/`GONE_COMMENT` and answers **502** for anything else, so a timeout is
@@ -320,6 +324,22 @@ batch mode ("Constraint must have a name"); the same chain runs fine on prod Pos
 validate a new migration by replaying history from scratch — test the single revision in
 isolation: `alembic stamp <parent>` on an existing (seeded) DB, then `alembic upgrade head`.
 That is how `a9c4e7f2d5b8` was verified.
+
+### 🟡 A board scoped by role still showed other people's work
+
+An intern's Task Board showed seven cards, none of them theirs (2026-07-30). Two independent
+reasons, and the second is the one to remember:
+
+1. The creator tag (`created_by_id`) granted visibility on its own, so a card they raised and a
+   manager then delegated stayed on their board. `can_view` now means **assigned** for
+   employee/intern (the creator branch survives for team leads only, and `can_delete`'s creator
+   branch is gated on `can_view`).
+2. **`list_tasks` appended every Atrium card to every board**, bypassing `can_view` entirely —
+   those cards have no assignee, team or creator to test, so no ownership rule *could* apply to
+   them. They are scoped by role instead (`can_view_atrium`, team lead and up).
+
+The lesson generalises: a bridged/aggregated row that joins a list *after* the permission filter is
+invisible to that filter. Scope it where it is appended, and give it its own predicate.
 
 ### 🔴 "Import from Atrium" says there are no creators when there obviously are
 
