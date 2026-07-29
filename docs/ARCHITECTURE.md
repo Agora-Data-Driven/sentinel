@@ -1,6 +1,6 @@
 # Sentinel — Architecture & API reference
 
-Deep reference. Read [../CLAUDE.md](../CLAUDE.md) first for the operating rules and gotchas.
+Deep reference. Read [../AGENTS.md](../AGENTS.md) first for the operating rules and gotchas.
 
 ---
 
@@ -30,13 +30,14 @@ internal-vs-client-safe split (what may cross into Atrium) is enforced there.
 
 ---
 
-## Database schema — 33 tables
+## Database schema — 38 tables
 
 ### Identity & org
 | Table | Notes |
 |---|---|
 | `users` | **Source of truth for who may sign in.** SSO/Google authenticate; this table authorizes. |
 | `teams` | Org units |
+| `shift_templates` | Reusable shift schedules, assignable to a team or an employee |
 | `clients` | Client accounts (task//report scoping) |
 | `qr_tokens` | Rotating badge tokens for the kiosk |
 
@@ -63,14 +64,19 @@ internal-vs-client-safe split (what may cross into Atrium) is enforced there.
 |---|---|
 | `development_profiles` | Per-user development record |
 | `career_achievements`, `professional_goals` | Career track |
+| `physical_goals` | Physical targets (drives the Physical ring — mean progress) |
+| `development_areas` | The four growth dimensions' area records |
 | `growth_items`, `skills` | Growth track |
 | `reading_items`, `reading_progress` | Reading canon + per-user progress |
+| `mentor_transcripts` | Imported Watcher transcripts — the Mentor Library (feeds `/internal/mentor-search`) |
 
 ### Tasks
 | Table | Notes |
 |---|---|
 | `tasks` | Kanban card. **`priority` is Account-Manager-only** (403 otherwise). |
 | `task_comments`, `task_history` | Detail panel + activity log |
+| `service_templates` | Editable service recipes — default maintasks/priority/labels for new cards |
+| `task_vocab` | Board vocabulary — statuses, labels, priorities (`kind` partitions), super-admin-editable |
 | `atrium_approvals` | The Send-to-Atrium bridge record |
 
 ### Leave / payroll / system
@@ -87,14 +93,11 @@ internal-vs-client-safe split (what may cross into Atrium) is enforced there.
 `backend/alembic/versions/` — production truth. The app also calls `create_all` for local
 convenience, which is why a missing migration passes locally and fails in prod.
 
-| Revision | Adds |
-|---|---|
-| `2ea39b27b42d` | Initial schema |
-| `c3a8e5f1b920` | Skills |
-| `d4b1f6a2c8e1` | PR detail |
-| `b7f2a1c9d4e0` | Holistic development (8 tables) |
-| `f6d2b8a4c1e2` | Gym schedule + plan overrides |
-| `a1c7e93f5b60` | Gym cardio (`cardio_json`, `cardio`) |
+**The revision list lives in `backend/alembic/versions/` itself** — read the files (each names
+what it adds), don't trust any hardcoded list here; every copy of one went stale. Two rules from
+AGENTS.md §4–5: migrations for tables `create_all` already built in prod must be
+existence-guarded (`a9c4e7f2d5b8_service_templates_task_vocab.py` is the pattern), and the full
+chain does not replay onto a fresh SQLite DB — validate new revisions in isolation.
 
 ---
 
@@ -165,10 +168,14 @@ All paths are prefixed `/api`. Every endpoint enforces RBAC.
 `GET /stream` — Server-Sent Events push (backed by `events.py`)
 
 ### `internal` — service-to-service, **HMAC-signed, not cookie-auth**
-`GET /internal/people` · `GET /internal/user-lookup` · `GET /internal/holistic-profile`
+`GET /internal/people` · `GET /internal/user-lookup` · `GET /internal/holistic-profile` ·
+`GET /internal/mentor-search`
 
 > `/internal/holistic-profile` is what feeds the Mastery Engine's **Coach** with training load,
 > so a hard gym day produces a lighter study plan. Covered by `tests/test_internal.py`.
+> `/internal/mentor-search` ([internal.py:128](../backend/app/routers/internal.py#L128), signing
+> purpose `mentor-search`) retrieves the Mentor Library passages that bear on a question — how
+> the Coach answers "what would Nick say?" (AGENTS.md §5). Covered by `tests/test_mentor_search.py`.
 
 ### `cron`
 `POST /cron/daily` — scheduled rollups
@@ -184,20 +191,27 @@ No framework, no bundler. `pages/*.html` are ~0.7 kb shells; JS renders the mark
 | `app.js` (44 kb) | Shell: nav, `api()`, `toast()`, `modal()`, `skeleton()`, icons, command palette, Coach FAB |
 | `gym.js` (36 kb) | Calendar, day editor, history |
 | `growth.js` (23 kb) | Development hub |
-| `taskboard.js` (19 kb) | Kanban + drag/drop — a mountable component embedded in the dashboard (no /tasks page; the URL 302s to /dashboard) |
+| `taskboard.js` (19 kb) | Kanban + drag/drop — a mountable component embedded in the dashboard (no /tasks page; the URL **307-redirects** to /dashboard, query string intact) |
 | `kiosk.js` (17 kb) | QR scanning + **IndexedDB offline punch queue** (syncs every 30s) |
 | `manage.js`, `reading.js`, `charts.js`, `people.js`, … | One per page |
 | `academy.js` | Hosts the Mastery Engine iframe |
 
 `app.js` exports a shared toolkit — always use `api()` so FastAPI's two error shapes are
-normalised (see CLAUDE.md §5).
+normalised (see AGENTS.md §5).
 
-### Worker-facing IA
+### Navigation (the `NAV` array, `app.js:78`)
 
-Three tabs: **My Day** · **Development** · **HR + Admin**. The Development hub (`/growth`) plus
-Reading (`/reading`) and the gym card make up the holistic system; the Mastery Engine's assistant
-is reused as a global **Coach** FAB fed by the Mastery Engine's `lib/sentinel.js` and Sentinel's
-`/internal/holistic-profile`.
+Two sidebar sections. **Workspace**: Dashboard (with the embedded task board) · a **Growth**
+group whose four tabs mirror the Overview's four dimensions one-to-one — Overview (`/growth`),
+Professional (`/academy`, the engine's career programs), Philosophical + Spiritual (each a
+Mastery Engine pinned to its reading program), Physical (`/gym`) · a **Time & Leave** group —
+Time (`/attendance`), Leave, Approvals (team_lead+, one inbox for attendance + leave),
+Clock in (`/scanner`, super_admin only) · Our North Star (`/north-star`). **Admin**: People,
+Reports (team_lead+), Payroll, Manage (super_admin), Settings (admin+). There is no Reading tab —
+`/reading` stays reachable from the Overview's links.
+
+The Mastery Engine's assistant is reused as a global **Coach** FAB fed by the Mastery Engine's
+`lib/sentinel.js` and Sentinel's `/internal/holistic-profile` + `/internal/mentor-search`.
 
 ---
 

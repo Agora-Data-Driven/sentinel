@@ -17,7 +17,12 @@ Registry repo `agora`. Override any of them with the script params.
 
 ```powershell
 gcloud auth login
-gcloud config set project agora-data-driven
+
+# Verify the per-window config pin — do NOT `gcloud config set` anything. Each VS Code window
+# pins a named gcloud config via CLOUDSDK_ACTIVE_CONFIG_NAME (this workspace pins `agora`), and
+# `config set` would clobber it for every window sharing that config. Expected output:
+# info@agoradatadriven.com  agora-data-driven
+gcloud config list --format="value(core.account,core.project)"
 
 # Enable the APIs Sentinel uses
 gcloud services enable run.googleapis.com cloudbuild.googleapis.com `
@@ -33,6 +38,12 @@ Create the **JWT secret** (used in every mode):
 python -c "import secrets; print(secrets.token_urlsafe(48))" | `
   gcloud secrets create sentinel-jwt-secret --data-file=-
 ```
+
+> ⚠️ **Standing debt (open human action):** session-token files leaked into this repo's early
+> commits (`live.txt`, `backend/{cg,cm,em,live,pw,sa}.txt`). They were removed from disk and
+> gitignored (2026-07-17) but **remain in git history** — rotating the prod `JWT_SECRET`
+> (add a new secret version, redeploy) and scrubbing history with `git filter-repo` are still
+> outstanding. See AGENTS.md §9.
 
 ---
 
@@ -92,8 +103,11 @@ just click through the empty app. Prefer Option A for anything real.
 
 With `DEV_LOGIN_ENABLED=false` there's no dropdown login. Two ways to get your first admin in:
 
-1. **Wire Google OAuth** (recommended): set `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` (as secrets),
-   then complete the OAuth callback wiring in `app/routers/auth.py` (stubbed in this MVP).
+1. **Wire Google OAuth** (recommended): set `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` (as secrets)
+   per [GOOGLE-SIGNIN-SETUP.md](GOOGLE-SIGNIN-SETUP.md). The callback flow is **fully implemented**
+   (`app/routers/auth.py:163-221` — state cookie, code exchange, userinfo, active-user gate) and has
+   been live since 2026-07-17; sign-in still requires an active row in `users` (SSO/Google
+   authenticate, the table authorizes).
 2. **Seed a minimal admin** via the seed job, then edit/disable the rest in the People page.
 
 ---
@@ -119,6 +133,14 @@ Then add the shown DNS records at your registrar. Cloud Run provisions the TLS c
 `db-f1-micro` Cloud SQL + a scale-to-zero Cloud Run service is a few dollars/month at low traffic.
 Cloud SQL bills while the instance exists (it doesn't scale to zero) — stop it when unused:
 `gcloud sql instances patch sentinel-db --activation-policy=NEVER`.
+
+## Backups — ⚠️ not set up
+
+Cloud SQL **automated backups were never enabled and a restore has never been tested** (open ops
+task, needs GCP access). Until that happens, attendance/payroll data is unrecoverable — `seed.py`
+regenerates demo data, not history. When someone picks this up: enable automated backups +
+point-in-time recovery on `sentinel-db`, then prove a restore into a scratch instance actually
+works. See AGENTS.md §9.
 
 ## Troubleshooting
 - **403 on the URL:** expected if you open it before logging in — the app gates everything behind
