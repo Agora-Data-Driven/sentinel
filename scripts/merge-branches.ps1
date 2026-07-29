@@ -367,4 +367,4 @@ git -c http.version=HTTP/1.1 fetch origin --prune *>$null
 $m = @(Get-MergedDevBranches $skip)
 if ($m.Count -gt 0) { Write-Host "[..] Pruning merged dev branches: $($m -join ', ')" -ForegroundColor Cyan; Remove-RemoteBranches $m }
 
-Write-Host "`n[OK] DONE -- integrated, landed on main, deployed to Cloud Run." -ForegroundColor Green
+Write-Host "`n[OK] DONE -- integrated, landed on main$(if ($NoDeploy) { ' (deploy skipped: -NoDeploy)' } else { ', deployed to Cloud Run' })." -ForegroundColor Green
