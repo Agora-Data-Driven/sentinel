@@ -31,6 +31,7 @@ from ..schemas import (
     AchievementIn,
     AchievementUpdateIn,
     AreaUpdateIn,
+    AtriumImportAllIn,
     AtriumImportIn,
     BodyMetricIn,
     GoalIn,
@@ -407,6 +408,48 @@ def atrium_import(payload: AtriumImportIn, user: User = Depends(get_current_user
     db.add(t)
     db.commit()
     return mentor_transcript_dict(t)
+
+
+@router.post("/atrium/import-all")
+def atrium_import_all(payload: AtriumImportAllIn, user: User = Depends(get_current_user),
+                      db: Session = Depends(get_db)):
+    """Import EVERY fetched transcript on one creator in a single call.
+
+    Pulling a 200-video creator one click at a time was the whole complaint. Atrium hands the
+    channel over in one (byte-budgeted) transfer, so this is a handful of round trips rather than
+    one per video.
+
+    IDEMPOTENT: re-running only adds what's missing, so it doubles as "catch me up since Atrium
+    fetched more". A transcript is considered already-mine by source_url (stable per video), falling
+    back to its title for the rare archived item that has no URL."""
+    items = atrium_watcher.list_transcripts(payload.channel_id)
+    if not items:
+        raise HTTPException(status_code=404,
+                            detail="No fetched transcripts on that creator yet — run \"Fetch "
+                                   "missing\" on it in Atrium first.")
+    mentor = (payload.mentor_name or "").strip() or "Unknown mentor"
+    existing = db.execute(
+        select(MentorTranscript.source_url, MentorTranscript.title)
+        .where(MentorTranscript.user_id == user.id)
+    ).all()
+    seen_urls = {u for (u, _t) in existing if u}
+    seen_titles = {t for (u, t) in existing if not u}
+    imported = 0
+    for it in items:
+        url = (it.get("url") or "").strip()
+        title = (it.get("title") or "").strip() or "Untitled"
+        text = it.get("transcript") or ""
+        if not text:
+            continue
+        if (url and url in seen_urls) or (not url and title in seen_titles):
+            continue
+        db.add(MentorTranscript(user_id=user.id, mentor_name=mentor, title=title[:300],
+                                source_url=url[:500] or None, transcript_text=text))
+        # Track within this run too, so a channel that lists the same video twice can't double-add.
+        (seen_urls.add(url) if url else seen_titles.add(title))
+        imported += 1
+    db.commit()
+    return {"imported": imported, "skipped": len(items) - imported, "available": len(items)}
 
 
 # --- Reading & philosophy ---------------------------------------------------

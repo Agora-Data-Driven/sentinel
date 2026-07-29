@@ -10,6 +10,7 @@ Plus can_view(viewer, target): owner, admins, and the target's team lead may rea
 """
 from __future__ import annotations
 
+from collections import Counter
 from datetime import timedelta
 
 from sqlalchemy import func, select
@@ -310,5 +311,18 @@ def holistic_digest(db: Session, user: User) -> dict:
         # Titles only — a mentor transcript can be a whole video's worth of text, so the
         # digest lists what's available rather than dumping it into every prompt.
         "mentor_library": [f"{t.mentor_name} — {t.title}" for t in transcripts[:40]],
+        # The ROSTER: who this worker can actually be coached by, and how deep each library runs.
+        # The titles above are capped at 40, so with a big library they silently stop naming some
+        # mentors entirely — the coach then can't know it's allowed to channel them. This is the
+        # authoritative list, and it is what the coach checks before speaking AS someone (it must
+        # never invent a position for a mentor there is nothing from). The actual passages are
+        # retrieved on demand via /api/internal/mentor-search — see services/mentor_search.py.
+        "mentors": [
+            {"name": name, "transcripts": count}
+            for name, count in sorted(
+                Counter(t.mentor_name or "Unknown" for t in transcripts).items(),
+                key=lambda kv: (-kv[1], kv[0].lower()),
+            )
+        ],
         "editable": editable,
     }

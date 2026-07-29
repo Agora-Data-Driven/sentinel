@@ -151,6 +151,203 @@ def test_fetch_degrades_when_atrium_is_unreachable(monkeypatch):
     assert ok is False and err
 
 
+# --- The write half: Sentinel edits an Atrium card without leaving its own board ---------------
+# Added 2026-07-29, when the board stopped answering "open it in Atrium to view or edit". These
+# pin the two things that make editing across the bridge safe: the field translation (Sentinel's
+# names in, Atrium's names out, nothing invented) and the fail-CLOSED posture on every explicit act.
+
+
+def test_detail_and_writes_report_failure_instead_of_degrading(monkeypatch):
+    """Fail-SOFT is right for the board list and WRONG here: an empty drawer or a silently dropped
+    edit is indistinguishable from a deleted card. Every one of these must hand back a reason."""
+    monkeypatch.setattr(atrium_bridge.settings, "platform_sso_secret", "", raising=False)
+    monkeypatch.setattr(atrium_bridge.settings, "atrium_api_url", "", raising=False)
+    monkeypatch.setattr(atrium_bridge.settings, "portal_login_url", "", raising=False)
+    payload, err = atrium_tasks.fetch_task("c", "tk_1")
+    assert payload == {} and err
+    payload, err = atrium_tasks.edit_task("c", "tk_1", {"title": "x"})
+    assert payload == {} and err
+    ok, err = atrium_tasks.remove_task("c", "tk_1")
+    assert ok is False and err
+    payload, err = atrium_tasks.comment_task("c", "tk_1", "hi")
+    assert payload == {} and err
+    ok, err = atrium_tasks.resolve_change_request("c", "tk_1", "cm_1")
+    assert ok is False and err
+
+
+class _HTTPErr(Exception):
+    """Raise an urllib HTTPError whose body reads back, the way a real response does."""
+
+    @staticmethod
+    def raiser(code, body):
+        class _E(atrium_bridge.urllib.error.HTTPError):
+            def __init__(self):
+                super().__init__("u", code, "err", {}, None)
+
+            def read(self):
+                return body
+
+        def _raise(*a, **k):
+            raise _E()
+
+        return _raise
+
+
+def test_gone_is_a_distinct_answer_from_a_broken_bridge(monkeypatch):
+    """Only Atrium's own 404 may reach the user as "that card is gone" -- the router keys its 404
+    off these exact constants, so a timeout can never be reported as a deletion."""
+    monkeypatch.setattr(atrium_bridge.settings, "platform_sso_secret", "s3cret", raising=False)
+    monkeypatch.setattr(atrium_bridge.settings, "atrium_api_url", "https://portal.example",
+                        raising=False)
+
+    _404 = _HTTPErr.raiser(404, b'{"error":"not_found"}')
+    monkeypatch.setattr(atrium_bridge.urllib.request, "urlopen", _404)
+    assert atrium_tasks.fetch_task("c", "tk_1")[1] == atrium_tasks.GONE
+    assert atrium_tasks.edit_task("c", "tk_1", {"title": "x"})[1] == atrium_tasks.GONE
+    assert atrium_tasks.remove_task("c", "tk_1")[1] == atrium_tasks.GONE
+
+    def _timeout(*a, **k):
+        raise TimeoutError("slow")
+
+    monkeypatch.setattr(atrium_bridge.urllib.request, "urlopen", _timeout)
+    assert atrium_tasks.edit_task("c", "tk_1", {"title": "x"})[1] != atrium_tasks.GONE
+
+
+def test_a_404_from_an_undeployed_portal_is_not_a_deleted_card(monkeypatch):
+    """Deploy order matters: ship Sentinel before the portal and these routes don't exist yet.
+    Flask answers an unknown route with HTML (parses to nothing) while Atrium answers a real
+    missing card with {"error": "not_found"} — telling those apart is the difference between
+    "redeploy platform-dash" and someone hunting for a card nobody deleted."""
+    monkeypatch.setattr(atrium_bridge.settings, "platform_sso_secret", "s3cret", raising=False)
+    monkeypatch.setattr(atrium_bridge.settings, "atrium_api_url", "https://portal.example",
+                        raising=False)
+
+    monkeypatch.setattr(atrium_bridge.urllib.request, "urlopen",
+                        _HTTPErr.raiser(404, b"<!doctype html><h1>Not Found</h1>"))
+    assert atrium_tasks.fetch_task("c", "tk_1")[1] == atrium_tasks.NOT_DEPLOYED
+
+    monkeypatch.setattr(atrium_bridge.urllib.request, "urlopen",
+                        _HTTPErr.raiser(404, b'{"error":"not_found"}'))
+    assert atrium_tasks.fetch_task("c", "tk_1")[1] == atrium_tasks.GONE
+
+
+def test_field_translation_speaks_atriums_names_and_invents_nothing():
+    import datetime
+
+    out = atrium_tasks.to_atrium_fields({
+        "title": "Rename me",
+        "client_facing_notes": "the client reads this",
+        "atrium_visible": True,
+        "atrium_department": "acquisition",
+        "atrium_lead_id": "leo@agora.ph",
+        "due_date": datetime.date(2026, 9, 30),
+        "assigned_to_id": 7,          # Sentinel-only: Atrium has no such concept
+        "description": "ignored",      # Sentinel-only
+        "maintasks": [{"id": "mt_1", "title": "Phase 1", "assignee_id": "leo@agora.ph",
+                       "subs": [{"id": "st_1", "text": "Draft", "done": True}]}],
+    })
+    assert out["client_note"] == "the client reads this"      # the same idea under Atrium's name
+    assert out["client_facing"] is True
+    assert out["department"] == "acquisition" and out["lead_id"] == "leo@agora.ph"
+    assert out["due_date"] == "2026-09-30"                    # json can't carry a date object
+    assert "assigned_to_id" not in out and "description" not in out
+    # Atrium's main tasks are keyed `text`, Sentinel's `title` -- the wire format is Atrium's.
+    assert out["maintasks"][0]["text"] == "Phase 1"
+    assert out["maintasks"][0]["subs"][0]["text"] == "Draft"
+
+
+def test_clearing_a_field_sends_empty_not_null():
+    """A cleared date/charge must reach Atrium as "", which is how workspace.py stores 'unset'."""
+    out = atrium_tasks.to_atrium_fields({"due_date": None, "service_charge": None,
+                                         "atrium_visible": None})
+    assert out["due_date"] == "" and out["service_charge"] == ""
+    assert out["client_facing"] is False
+
+
+def test_atrium_only_update_fields_are_dropped_for_a_sentinel_row():
+    """TaskUpdateIn carries a few Atrium-only fields. The Sentinel branch of the update route pops
+    exactly this list before setattr-ing onto the model, so a new one must be added here too."""
+    from app.schemas import TaskUpdateIn
+
+    known = set(TaskUpdateIn.model_fields)
+    for name in atrium_tasks.ONLY_ATRIUM:
+        assert name in known, f"{name} is not a TaskUpdateIn field"
+        assert not hasattr(__import__("app.models", fromlist=["Task"]).Task, name), (
+            f"{name} IS a Task column — it must not be in ONLY_ATRIUM"
+        )
+
+
+def test_detail_maps_onto_the_shape_the_drawer_renders():
+    envelope = {
+        "task": {
+            "atrium_id": "riverdance-rv:tk_9", "task_id": "tk_9", "client_key": "riverdance-rv",
+            "client_name": "Riverdance RV", "title": "audit ads", "status": "In Progress",
+            "priority": "Urgent", "client_facing": True, "department": "acquisition",
+            "department_label": "Acquisition", "lead_id": "leo@agora.ph", "lead_name": "Leo",
+            "support_ids": ["ian@100.digital"], "support_names": ["Ian"],
+            "client_note": "client reads this", "internal_notes": "team only",
+            "on_hold": True, "hold_reason": "waiting on assets", "open_changes": 1,
+            "reporter": "client", "reporter_name": "Owner",
+            "maintasks": [{"id": "mt_1", "text": "Phase 1", "assignee_id": "leo@agora.ph",
+                           "assignee_name": "Leo", "subs": [
+                               {"id": "st_1", "text": "Draft", "done": False,
+                                "assignee_id": "", "assignee_name": "", "dod": "internal"}]}],
+            "comments": [{"id": "cm_1", "sender": "client", "sender_name": "Owner",
+                          "body": "please redo", "kind": "changes", "resolved": False,
+                          "created_at": "2026-07-29T01:00:00Z"}],
+            "history": [{"actor": "leo@agora.ph", "field": "created", "old": "", "new": "audit ads",
+                         "at": "2026-07-28T01:00:00Z"},
+                        {"actor": "leo@agora.ph", "field": "stage", "old": "todo",
+                         "new": "in_progress", "at": "2026-07-29T01:00:00Z"}],
+        },
+        "roster": [{"id": "leo@agora.ph", "name": "Leo"}],
+        "departments": [{"key": "acquisition", "label": "Acquisition"}],
+    }
+    d = atrium_tasks.as_task_detail(envelope)
+    assert d["id"] == "atrium:riverdance-rv:tk_9" and d["source"] == "atrium"
+    # The drawer's own field names, so one template renders both kinds of card.
+    assert d["client_facing_notes"] == "client reads this"
+    assert d["assigned_team_name"] == "Acquisition"
+    assert d["maintasks"][0]["title"] == "Phase 1"          # text -> title
+    assert d["maintasks"][0]["assignee"]["name"] == "Leo"   # resolved, not an email on screen
+    assert d["comments"][0]["author"]["name"] == "Owner"
+    assert d["comments"][0]["kind"] == "changes" and d["open_changes"] == 1
+    # Activity reads newest-first here; Atrium keeps its history oldest-first.
+    assert d["history"][0]["new_value"] == "in_progress"
+    # The pickers travel with the card: Atrium's roster + departments, not Sentinel's.
+    assert d["atrium_roster"] == [{"id": "leo@agora.ph", "name": "Leo"}]
+    assert d["atrium_lead_name"] == "Leo" and d["atrium_support_names"] == ["Ian"]
+    assert d["on_hold"] is True and d["hold_reason"] == "waiting on assets"
+    # Sentinel-only concepts stay empty rather than being faked from an Atrium value.
+    assert d["assignee"] is None and d["account_manager"] is None and d["description"] == ""
+
+
+def test_every_write_purpose_matches_the_route_it_signs(monkeypatch):
+    """The HMAC purpose is per-endpoint on Atrium's side; a mismatch is a silent 401."""
+    monkeypatch.setattr(atrium_bridge.settings, "platform_sso_secret", "s3cret", raising=False)
+    monkeypatch.setattr(atrium_bridge.settings, "atrium_api_url", "https://portal.example",
+                        raising=False)
+    seen = []
+
+    def _fake_call(purpose, path, params=None, body=None, timeout=None):
+        seen.append((purpose, path))
+        return 200, {"task": {}, "comment": {}}
+
+    monkeypatch.setattr(atrium_tasks, "_call", _fake_call)
+    atrium_tasks.fetch_task("c", "tk_1")
+    atrium_tasks.edit_task("c", "tk_1", {"title": "x"})
+    atrium_tasks.remove_task("c", "tk_1")
+    atrium_tasks.comment_task("c", "tk_1", "hi")
+    atrium_tasks.resolve_change_request("c", "tk_1", "cm_1")
+    assert seen == [
+        ("task-detail", "/api/internal/task"),
+        ("task-update", "/api/internal/task-update"),
+        ("task-delete", "/api/internal/task-delete"),
+        ("task-comment", "/api/internal/task-comment"),
+        ("task-comment", "/api/internal/task-comment"),
+    ]
+
+
 def test_signed_request_carries_the_platform_hmac_headers(monkeypatch):
     """The bridge uses the SAME scheme as the other internal endpoints -- no new secret."""
     import hashlib

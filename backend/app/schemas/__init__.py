@@ -329,6 +329,13 @@ class AtriumImportIn(BaseModel):
     mentor_name: str
 
 
+class AtriumImportAllIn(BaseModel):
+    """Import every fetched transcript on one Atrium Watcher creator in a single go."""
+
+    channel_id: str
+    mentor_name: str
+
+
 # --- Tasks -----------------------------------------------------------------
 class ChecklistItem(BaseModel):
     text: str
@@ -374,6 +381,16 @@ class TaskUpdateIn(BaseModel):
     internal_notes: str | None = None
     client_facing_notes: str | None = None
     atrium_visible: bool | None = None
+    # --- Atrium-owned cards only (board id "atrium:<client_key>:<task_id>") -------------------
+    # Atrium has no Sentinel assignee/team and stores owners as roster EMAILS, and it carries two
+    # fields Sentinel's own rows don't (its start date, and the hold switch). They are inert on a
+    # Sentinel row: services/atrium_tasks.FIELD_MAP is the only thing that reads them.
+    start_date: date | None = None
+    on_hold: bool | None = None
+    hold_reason: str | None = None
+    atrium_department: str | None = None
+    atrium_lead_id: str | None = None
+    atrium_support_ids: list[str] | None = None
 
 
 class TaskStatusIn(BaseModel):

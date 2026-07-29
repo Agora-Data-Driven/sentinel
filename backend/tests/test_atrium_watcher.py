@@ -9,18 +9,28 @@ from __future__ import annotations
 from app.services import atrium_bridge, atrium_watcher
 
 
-def _configure(monkeypatch, client_key="agora"):
+def _configure(monkeypatch, client_key=""):
     monkeypatch.setattr(atrium_bridge.settings, "platform_sso_secret", "s3cret", raising=False)
     monkeypatch.setattr(atrium_bridge.settings, "atrium_api_url", "https://portal.example",
                         raising=False)
     monkeypatch.setattr(atrium_bridge.settings, "atrium_watcher_client_key", client_key, raising=False)
 
 
-def test_not_ready_without_client_key(monkeypatch):
-    """No client_key configured => the picker stays off, even with the bridge otherwise wired."""
-    monkeypatch.setattr(atrium_bridge.settings, "platform_sso_secret", "s3cret", raising=False)
-    monkeypatch.setattr(atrium_bridge.settings, "atrium_api_url", "https://portal.example",
-                        raising=False)
+def test_ready_without_a_client_key(monkeypatch):
+    """No client_key => read EVERY workspace, not "nothing".
+
+    The key is an optional narrowing filter. It was once required and defaulted to "agora", a
+    workspace that has never existed, which made the picker permanently empty while creators sat
+    archived in four other workspaces."""
+    _configure(monkeypatch, client_key="")
+    assert atrium_watcher.ready() is True
+
+
+def test_not_ready_without_the_bridge(monkeypatch):
+    """Unset secret/URL => the picker stays off and every call degrades, never raises."""
+    monkeypatch.setattr(atrium_bridge.settings, "platform_sso_secret", "", raising=False)
+    monkeypatch.setattr(atrium_bridge.settings, "atrium_api_url", "", raising=False)
+    monkeypatch.setattr(atrium_bridge.settings, "portal_login_url", "", raising=False)
     monkeypatch.setattr(atrium_bridge.settings, "atrium_watcher_client_key", "", raising=False)
     assert atrium_watcher.ready() is False
     assert atrium_watcher.list_channels() == []
@@ -29,7 +39,7 @@ def test_not_ready_without_client_key(monkeypatch):
 
 
 def test_ready_when_bridge_and_client_key_are_both_set(monkeypatch):
-    _configure(monkeypatch)
+    _configure(monkeypatch, client_key="agora")
     assert atrium_watcher.ready() is True
 
 
@@ -94,28 +104,54 @@ def test_get_transcript_returns_the_transcript_on_success(monkeypatch):
                    "transcript": "full text here"}
 
 
-def test_signed_requests_carry_the_configured_client_key(monkeypatch):
-    """channels/videos/transcript all scope to the configured workspace, signed the same way."""
-    _configure(monkeypatch, client_key="agora")
+class _OkResp:
+    """A 200 carrying an empty channel list -- these tests assert on the URL, not the body."""
+
+    status = 200
+
+    def read(self):
+        return b'{"ok": true, "channels": []}'
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def _capture_url(monkeypatch):
     seen = {}
-
-    class _Resp:
-        status = 200
-
-        def read(self):
-            return b'{"ok": true, "channels": []}'
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            return False
 
     def _urlopen(req, timeout=None):
         seen["url"] = req.full_url
-        return _Resp()
+        return _OkResp()
 
     monkeypatch.setattr(atrium_bridge.urllib.request, "urlopen", _urlopen)
+    return seen
+
+
+def test_signed_requests_carry_the_configured_client_key(monkeypatch):
+    """A pinned workspace narrows the request to that one client."""
+    _configure(monkeypatch, client_key="agora")
+    seen = _capture_url(monkeypatch)
     atrium_watcher.list_channels()
     assert seen["url"].startswith("https://portal.example/api/internal/watcher/channels")
     assert "client=agora" in seen["url"]
+
+
+def test_no_client_key_sends_no_client_filter(monkeypatch):
+    """Unpinned => NO `client` param at all, so Atrium answers across every workspace."""
+    _configure(monkeypatch, client_key="")
+    seen = _capture_url(monkeypatch)
+    atrium_watcher.list_channels()
+    assert seen["url"] == "https://portal.example/api/internal/watcher/channels"
+
+
+def test_namespaced_channel_ids_pass_straight_through(monkeypatch):
+    """Atrium returns "<client_key>:<channel_id>"; we hand it back verbatim (url-encoded) so it can
+    locate the archive object without Sentinel tracking which workspace a channel came from."""
+    _configure(monkeypatch, client_key="")
+    seen = _capture_url(monkeypatch)
+    atrium_watcher.list_videos("ian-fernandez:wch_1a2b")
+    assert "channel=ian-fernandez%3Awch_1a2b" in seen["url"]
+    assert "client=" not in seen["url"]

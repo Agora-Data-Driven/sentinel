@@ -34,7 +34,6 @@ from ..schemas import (
 from ..security import get_current_user, is_manager, require_roles
 from ..serializers import atrium_payload, comment_dict, task_card, task_detail, user_public
 from ..services import atrium_tasks
-from ..services import atrium_tasks
 from ..services import audit
 from ..services import maintasks as maintasks_svc
 from ..services import notifications as notif
@@ -64,6 +63,23 @@ def _broadcast(action: str, task: Task, actor_id: int) -> None:
         "type": "task", "action": action, "task_id": task.id,
         "status": task.status, "actor_id": actor_id,
     })
+
+
+def _atrium_error(err: str) -> HTTPException:
+    """Turn a bridge failure into the right status. 404 ONLY when Atrium says the card is gone --
+    a timeout or an unconfigured bridge must never reach the user as "that card was deleted"."""
+    gone = err in (atrium_tasks.GONE, atrium_tasks.GONE_COMMENT)
+    return HTTPException(status_code=404 if gone else 502, detail=err)
+
+
+def _atrium_detail(db: Session, envelope: dict) -> dict:
+    """An Atrium envelope as a Sentinel task_detail, with its client resolved the same way the
+    board card resolves it (Client.atrium_client_id, then an unambiguous name match)."""
+    clients = db.execute(select(Client)).scalars().all()
+    task = envelope.get("task") or {}
+    client = atrium_tasks.resolve_client(clients, task.get("client_key", ""),
+                                         task.get("client_name", ""))
+    return atrium_tasks.as_task_detail(envelope, client)
 
 
 def _resolve_task(db: Session, task_id: str) -> Task | None:
@@ -184,6 +200,17 @@ def list_templates(user: User = Depends(get_current_user), db: Session = Depends
 
 @router.get("/{task_id}")
 def get_task(task_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    # An Atrium-owned card (id "atrium:<client_key>:<task_id>") has no local row -- its detail is
+    # read across the bridge and mapped into the same shape the drawer already renders. It used to
+    # be a dead end here ("open it in Atrium to view or edit"), which is not an answer: the team
+    # works this board, so the board edits the work. Sentinel remains the source of truth for
+    # nothing about it -- every write below goes back to Atrium.
+    a_key, a_task = atrium_tasks.split_id(str(task_id))
+    if a_key:
+        envelope, err = atrium_tasks.fetch_task(a_key, a_task)
+        if err:
+            raise _atrium_error(err)
+        return _atrium_detail(db, envelope)
     task = _resolve_task(db, task_id)
     if not task:
         raise HTTPException(status_code=404, detail=_NOT_FOUND)
@@ -260,6 +287,23 @@ def create_task(payload: TaskCreateIn, user: User = Depends(get_current_user), d
 
 @router.patch("/{task_id}")
 def update_task(task_id: str, payload: TaskUpdateIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    # Atrium-owned card: the edit is written THERE (Atrium owns client-facing work), through the
+    # same workspace helpers its own console form calls. The two field-level guards below are the
+    # same two decisions Sentinel reserves for managers -- client visibility and priority.
+    a_key, a_task = atrium_tasks.split_id(str(task_id))
+    if a_key:
+        data = payload.model_dump(exclude_unset=True)
+        if data.get("atrium_visible") is not None and not task_perms.can_bridge(user):
+            raise HTTPException(status_code=403, detail="Only managers can change what the client sees")
+        if "priority" in data and not (task_perms.can_manage_atrium(user)
+                                       and data["priority"] in task_config.priorities(db)):
+            data.pop("priority")
+        envelope, err = atrium_tasks.edit_task(a_key, a_task, atrium_tasks.to_atrium_fields(data),
+                                               actor=user.email or "")
+        if err:
+            raise _atrium_error(err)
+        return _atrium_detail(db, envelope)
+
     task = _resolve_task(db, task_id)
     if not task:
         raise HTTPException(status_code=404, detail=_NOT_FOUND)
@@ -267,6 +311,8 @@ def update_task(task_id: str, payload: TaskUpdateIn, user: User = Depends(get_cu
         raise HTTPException(status_code=403, detail=_FORBIDDEN)
 
     data = payload.model_dump(exclude_unset=True)
+    for fld in atrium_tasks.ONLY_ATRIUM:      # inert on a Sentinel row — it has no such columns
+        data.pop(fld, None)
     # Field-level guards — everything else (title, dates, breakdown, notes) is free to whoever can edit:
     #  • atrium_visible (client bridge) -> managers only, mirrors /send-to-atrium
     #  • reassigning to someone else    -> team lead+ (delegation), employees can't reassign
@@ -304,6 +350,17 @@ def update_task(task_id: str, payload: TaskUpdateIn, user: User = Depends(get_cu
 @router.delete("/{task_id}")
 def delete_task(task_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Delete a task and everything hanging off it. Team lead (own team) + AM / admin / super_admin."""
+    # An Atrium card is deleted in Atrium, where it soft-deletes into that console's Bin (30 days).
+    # Managers only: there is no creator tag on a card Sentinel doesn't own, so the "clean up your
+    # own mistake" branch of can_delete has nothing to stand on.
+    a_key, a_task = atrium_tasks.split_id(str(task_id))
+    if a_key:
+        if not task_perms.can_manage_atrium(user):
+            raise HTTPException(status_code=403, detail="Only a manager can delete a client card")
+        ok, err = atrium_tasks.remove_task(a_key, a_task, actor=user.email or "")
+        if not ok:
+            raise _atrium_error(err)
+        return {"ok": True}
     task = _resolve_task(db, task_id)
     if not task:
         raise HTTPException(status_code=404, detail=_NOT_FOUND)
@@ -362,6 +419,17 @@ def move_status(task_id: str, payload: TaskStatusIn, user: User = Depends(get_cu
 
 @router.patch("/{task_id}/priority")
 def set_priority(task_id: str, payload: TaskPriorityIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    a_key, a_task = atrium_tasks.split_id(str(task_id))
+    if a_key:
+        if not task_perms.can_manage_atrium(user):
+            raise HTTPException(status_code=403, detail="Only a team lead or manager can set task priority")
+        if payload.priority not in task_config.priorities(db):
+            raise HTTPException(status_code=400, detail="Invalid priority")
+        envelope, err = atrium_tasks.edit_task(a_key, a_task, {"priority": payload.priority},
+                                               actor=user.email or "")
+        if err:
+            raise _atrium_error(err)
+        return _atrium_detail(db, envelope)
     task = _resolve_task(db, task_id)
     if not task:
         raise HTTPException(status_code=404, detail=_NOT_FOUND)
@@ -382,6 +450,17 @@ def set_priority(task_id: str, payload: TaskPriorityIn, user: User = Depends(get
 
 @router.post("/{task_id}/comments")
 def add_comment(task_id: str, payload: CommentIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    # A comment on an Atrium card is a TEAM comment in Atrium's own thread -- on a client-facing
+    # card it reaches the client's Progress tab and notifies them, exactly as it would from Atrium's
+    # console. The author echoed back is the Sentinel user, so their avatar appears immediately.
+    a_key, a_task = atrium_tasks.split_id(str(task_id))
+    if a_key:
+        comment, err = atrium_tasks.comment_task(a_key, a_task, payload.body,
+                                                 actor=user.email or "", actor_name=user.name or "")
+        if err:
+            raise _atrium_error(err)
+        return {"id": comment.get("id"), "author": user_public(user), "body": comment.get("body", ""),
+                "attachments": [], "created_at": comment.get("created_at")}
     task = _resolve_task(db, task_id)
     if not task:
         raise HTTPException(status_code=404, detail=_NOT_FOUND)
@@ -395,6 +474,22 @@ def add_comment(task_id: str, payload: CommentIn, user: User = Depends(get_curre
     db.commit()
     _broadcast("comment", task, user.id)  # live boards refresh the comment count
     return comment_dict(c, db)
+
+
+@router.post("/{task_id}/comments/{comment_id}/resolve")
+def resolve_change_request(task_id: str, comment_id: str, user: User = Depends(get_current_user),
+                           db: Session = Depends(get_db)):
+    """Mark a client's "Request changes" comment resolved — Atrium cards only.
+
+    Raising a change request is a CLIENT power (they do it on their Progress tab); clearing it is a
+    team action, and the team works here. A Sentinel row has no such thing, so it 404s."""
+    a_key, a_task = atrium_tasks.split_id(str(task_id))
+    if not a_key:
+        raise HTTPException(status_code=404, detail="Change requests only exist on client cards")
+    ok, err = atrium_tasks.resolve_change_request(a_key, a_task, comment_id, actor=user.email or "")
+    if not ok:
+        raise _atrium_error(err)
+    return {"ok": True}
 
 
 @router.post("/{task_id}/attachments")

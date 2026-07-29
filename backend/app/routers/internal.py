@@ -23,6 +23,7 @@ from ..config import settings
 from ..database import get_db
 from ..models import User
 from ..services import development as dev_svc
+from ..services import mentor_search as mentor_svc
 
 router = APIRouter(prefix="/api/internal", tags=["internal"])
 
@@ -122,3 +123,41 @@ def internal_holistic_profile(
     if user is None or not user.is_active:
         return {"found": False, "profile": None}
     return {"found": True, "profile": dev_svc.holistic_digest(db, user)}
+
+
+@router.get("/mentor-search")
+def internal_mentor_search(
+    email: str,
+    q: str = "",
+    mentor: str = "",
+    limit: int = mentor_svc.DEFAULT_LIMIT,
+    x_academy_ts: str | None = Header(default=None),
+    x_academy_sig: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    """The passages from `email`'s Mentor Library that bear on `q` — retrieval for the AI coach.
+
+    This is what makes "what would Nick say about my plan?" and "act as Nick and mentor me"
+    answerable. The library is far too large to hand over (one creator can be ~1M words), and the
+    holistic digest could only ever list titles — so the coach asks this instead and gets back the
+    handful of relevant passages to reason from.
+
+    `mentor` narrows to one person and is matched loosely ("nick" → "Nick Saraev"), because that is
+    how people actually ask. `matched_mentor` lets the caller distinguish "that mentor isn't in
+    their library" from "that mentor never covered this" — two answers the coach must never blur.
+
+    Always the user's OWN library (the coach acts on their behalf), so no manager check applies.
+    Unknown/inactive email → an empty result and the coach simply stays ungrounded, as before.
+    """
+    _verify(x_academy_ts, x_academy_sig, "mentor-search")
+    norm = (email or "").strip().lower()
+    user = db.execute(
+        select(User).where(func.lower(User.email) == norm)
+    ).scalars().first() if norm else None
+    if user is None or not user.is_active:
+        return {"found": False, "mentors": [], "mentor": "", "matched_mentor": False,
+                "excerpts": []}
+    out = mentor_svc.search(db, user.id, q, mentor=mentor, limit=limit)
+    out["found"] = True
+    out["mentors"] = mentor_svc.roster(db, user.id)
+    return out
