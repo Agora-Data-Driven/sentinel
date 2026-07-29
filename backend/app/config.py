@@ -66,11 +66,13 @@ class Settings(BaseSettings):
     # Atrium shows up here. Unset = derived from portal_login_url; if neither resolves, the bridge
     # is simply off and the board shows Sentinel's own rows only.
     atrium_api_url: str = ""
-    # Which Atrium client workspace's Watcher archive the Growth hub's Mentor Library reads from
-    # (services/atrium_watcher.py) -- Watcher's channels are per-workspace, and mentor content
-    # (Nic Saraev, Carson Reed, ...) isn't any one client's, so it lives under Agora's own
-    # workspace. Unset = the picker is simply off; manual paste still works.
-    atrium_watcher_client_key: str = "agora"
+    # OPTIONAL: pin the Growth hub's Mentor Library to ONE Atrium workspace's Watcher archive
+    # (services/atrium_watcher.py). Unset (the default) reads EVERY workspace, which is what you
+    # want: Watcher's channels are per-client, but mentor content (Nick Saraev, Carson Reed, ...)
+    # isn't any one client's -- it lives wherever the team happened to add it.
+    # 🔴 This defaulted to "agora", a workspace that has never existed, so the picker was
+    # permanently empty. Do NOT re-pin it to a guessed key; "" is the working default.
+    atrium_watcher_client_key: str = ""
     # The host Sentinel should be reached on. The shared cookie is scoped to
     # .agoradatadriven.com, so on the raw *.run.app URL (an old bookmark, a stale link) SSO simply
     # cannot work and you get asked to sign in again for no visible reason. Set this and browsers

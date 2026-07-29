@@ -717,33 +717,112 @@ window.pageInit = async (S) => {
 
   // --- import from Atrium's Watcher archive: creator -> video -> copy the transcript in ----------
   function atriumImportPicker() {
-    const m = S.modal({ title: "Import from Atrium", body: `<div id="ax-body">${S.skeleton({ rows: 4 })}</div>`, wide: true });
+    // Deliberately NOT `wide`: this is a list to skim, not a form to fill. A compact box plus an
+    // internally-scrolling list reads better than a 920px dialog taller than the screen.
+    const m = S.modal({ title: "Import from Atrium", body: `<div id="ax-body">${S.skeleton({ rows: 4 })}</div>` });
     const body = () => S.qs("#ax-body", m.root);
 
+    // Both lists filter client-side: the whole set is already in hand, so typing stays instant and
+    // never re-hits Atrium. `hay` is prebuilt per row — matching is a substring test, not a rebuild.
+    function wireSearch(inputId, rows, onEmpty) {
+      const input = S.qs(inputId, body());
+      if (!input) return;
+      const apply = () => {
+        const q = input.value.trim().toLowerCase();
+        let shown = 0;
+        rows.forEach((r) => {
+          const hit = !q || r.hay.indexOf(q) !== -1;
+          r.el.style.display = hit ? "" : "none";
+          if (hit) shown += 1;
+        });
+        const none = S.qs(inputId + "-none", body());
+        if (none) none.style.display = shown ? "none" : "";
+        if (onEmpty) onEmpty(shown);
+      };
+      input.oninput = apply;
+      input.focus();
+    }
+
+    function searchBox(id, ph) {
+      return `<input id="${id.slice(1)}" type="search" placeholder="${esc(ph)}" autocomplete="off" style="margin-bottom:10px">
+        <div id="${id.slice(1)}-none" class="empty" style="display:none">Nothing matches that search.</div>`;
+    }
+
     function showChannels(channels) {
-      body().innerHTML = `<div class="sub" style="margin-bottom:10px">Pick a creator, then a video to pull its transcript from Atrium's Watcher archive.</div>
-        ${channels.map((c) => `<button class="card pad ax-pick" data-channel="${esc(c.id)}" data-mentor="${esc(c.title)}" style="display:block;width:100%;text-align:left;margin-bottom:8px;cursor:pointer;appearance:none;font:inherit;color:inherit">
-          <div class="row between"><strong>${esc(c.title)}</strong><span class="pill">${esc(c.kind || "creator")}</span></div>
-          <div class="sub" style="margin-top:4px">${c.transcript_count || 0}/${c.video_count || 0} transcripts fetched${c.industry ? " · " + esc(c.industry) : ""}</div>
-        </button>`).join("")}`;
-      S.qsa(".ax-pick", body()).forEach((b) => b.onclick = () => showVideos(b.dataset.channel, b.dataset.mentor));
+      body().innerHTML = `<div class="sub" style="margin-bottom:10px">Pick a creator to import <strong>every</strong> fetched transcript at once, or open it to choose a single video.</div>
+        ${searchBox("#ax-q", "Search creators — name, industry, workspace…")}
+        <div class="pick-list">${channels.map((c) => `<div class="card pad ax-row" data-channel="${esc(c.id)}" data-mentor="${esc(c.title)}" style="margin-bottom:8px">
+          <div class="row between" style="gap:10px;flex-wrap:wrap">
+            <div style="min-width:0;flex:1 1 200px">
+              <div class="row" style="gap:8px;align-items:center"><strong>${esc(c.title)}</strong><span class="pill">${esc(c.kind || "creator")}</span></div>
+              <div class="sub" style="margin-top:4px">${c.transcript_count || 0}/${c.video_count || 0} transcripts fetched${c.industry ? " · " + esc(c.industry) : ""}${c.client_name ? " · watched in " + esc(c.client_name) : ""}</div>
+            </div>
+            <div class="row" style="gap:8px;flex:none">
+              <button class="btn sm primary ax-all" ${c.transcript_count ? "" : "disabled"}>Import all ${c.transcript_count || 0}</button>
+              <button class="btn sm ghost ax-one">Pick one</button>
+            </div>
+          </div>
+        </div>`).join("")}</div>`;
+      const rows = S.qsa(".ax-row", body()).map((el) => ({
+        el,
+        hay: (el.dataset.mentor + " " + el.textContent).toLowerCase(),
+      }));
+      wireSearch("#ax-q", rows);
+      S.qsa(".ax-row", body()).forEach((el) => {
+        const go = () => showVideos(el.dataset.channel, el.dataset.mentor);
+        S.qs(".ax-one", el).onclick = () => go();
+        const all = S.qs(".ax-all", el);
+        if (!all.disabled) all.onclick = () => importAll(el.dataset.channel, el.dataset.mentor);
+      });
     }
 
     async function showVideos(channelId, mentorName) {
       body().innerHTML = S.skeleton({ rows: 4 });
       let videos = [];
-      try { videos = (await api(`/api/development/atrium/channels/${channelId}/videos`)).videos || []; }
+      // The id is namespaced "<client_key>:<channel_id>" (Atrium needs the workspace to find the
+      // archive), so it MUST be encoded — a raw ":" in a path segment is not ours to gamble on.
+      try { videos = (await api(`/api/development/atrium/channels/${encodeURIComponent(channelId)}/videos`)).videos || []; }
       catch (e) { videos = []; }
       const withText = videos.filter((v) => v.has_transcript);
-      body().innerHTML = `<a href="#" class="linky" id="ax-back">&larr; Creators</a>
+      body().innerHTML = `<div class="row between" style="gap:12px;margin-bottom:8px">
+          <a href="#" class="linky" id="ax-back">&larr; Creators</a>
+          ${withText.length ? `<button class="btn sm primary" id="ax-all-here">Import all ${withText.length}</button>` : ""}
+        </div>
         <div class="sub" style="margin:8px 0">${esc(mentorName)} — pick a video that already has a transcript fetched.</div>
-        ${withText.length ? withText.map((v) => `<button class="card pad ax-pick" data-video="${esc(v.id)}" style="display:block;width:100%;text-align:left;margin-bottom:8px;cursor:pointer;appearance:none;font:inherit;color:inherit">
+        ${withText.length ? searchBox("#ax-vq", "Search this creator’s videos…") + `<div class="pick-list">` + withText.map((v) => `<button class="card pad ax-pick" data-video="${esc(v.id)}" style="display:block;width:100%;text-align:left;margin-bottom:8px;cursor:pointer;appearance:none;font:inherit;color:inherit">
             <strong>${esc(v.title)}</strong>
             <div class="sub" style="margin-top:4px">${v.words} words</div>
-          </button>`).join("")
+          </button>`).join("") + `</div>`
           : '<div class="empty">No fetched transcripts on this creator yet — run "Fetch missing" on it in Atrium first.</div>'}`;
       S.qs("#ax-back", body()).onclick = (e) => { e.preventDefault(); loadChannels(); };
+      const allBtn = S.qs("#ax-all-here", body());
+      if (allBtn) allBtn.onclick = () => importAll(channelId, mentorName);
+      wireSearch("#ax-vq", S.qsa(".ax-pick", body()).map((el) => ({
+        el, hay: el.textContent.toLowerCase(),
+      })));
       S.qsa(".ax-pick", body()).forEach((b) => b.onclick = () => doImport(channelId, b.dataset.video, mentorName));
+    }
+
+    // Bulk import. One request moves the whole creator (Atrium hands its archive over in a few
+    // budgeted pages), so this can legitimately run for a while — say so instead of looking hung.
+    async function importAll(channelId, mentorName) {
+      body().innerHTML = `<div class="empty">${S.skeleton({ rows: 2 })}
+        <div style="margin-top:10px">Importing every transcript for <strong>${esc(mentorName)}</strong> — this can take a minute for a big creator. Leave this open.</div>
+      </div>`;
+      try {
+        const r = await api("/api/development/atrium/import-all", {
+          method: "POST",
+          body: { channel_id: channelId, mentor_name: mentorName },
+        });
+        m.close();
+        S.toast(r.imported
+          ? `Imported ${r.imported} transcript${r.imported === 1 ? "" : "s"} from ${mentorName}${r.skipped ? ` · ${r.skipped} already in your library` : ""}`
+          : `Already up to date — all ${r.available} of ${mentorName}'s transcripts are in your library`, "ok");
+        load();
+      } catch (e) {
+        S.toast(e.detail || "Couldn't import that creator", "err");
+        loadChannels();
+      }
     }
 
     async function doImport(channelId, videoId, mentorName) {

@@ -403,12 +403,25 @@ textarea { resize: vertical; min-height: 78px; }
 /* ---------- Modal / drawer ---------- */
 .overlay { position: fixed; inset: 0; background: rgba(14,15,18,.45); z-index: 100; display: none; align-items: flex-start; justify-content: center; padding: 40px 16px; overflow-y: auto; }
 .overlay.open { display: flex; }
-.modal { background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow-lg); width: 100%; max-width: 520px; }
+/* Capped flex column: the head and foot stay put and only .modal-body scrolls. Without this a long
+   modal (the Atrium creator picker, a 15-row list) grows past the viewport and pushes its own title
+   off the top of the screen — the dialog becomes a full-page column you can't see the top of. */
+.modal {
+  background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow-lg);
+  width: 100%; max-width: 520px;
+  max-height: calc(100vh - 80px); display: flex; flex-direction: column;
+}
 .modal.wide { max-width: 920px; }
+.modal-head, .modal-foot { flex: none; }
+/* A long list INSIDE a modal body scrolls on its own, so anything above it (a search box) stays
+   pinned while the list moves under it. */
+.pick-list { max-height: 46vh; overflow-y: auto; margin: 0 -4px; padding: 0 4px; }
 /* Right-side slide-in drawer (task detail). Anchored right, full height, scrolls internally. */
 .overlay.drawer-ov { justify-content: flex-end; align-items: stretch; padding: 0; overflow: hidden; }
 .modal.as-drawer {
   max-width: min(560px, 96vw); width: min(560px, 96vw); height: 100vh; border-radius: 0;
+  /* Overrides the base cap above — a drawer is deliberately full-height, edge to edge. */
+  max-height: 100vh;
   display: flex; flex-direction: column; box-shadow: -8px 0 40px rgba(16,24,40,.18);
   animation: drawer-in .2s ease-out;
 }
@@ -419,7 +432,7 @@ textarea { resize: vertical; min-height: 78px; }
 @media (prefers-reduced-motion: reduce) { .modal.as-drawer { animation: none; } }
 .modal-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid var(--line); }
 .modal-head h3 { font-size: 16px; }
-.modal-body { padding: 20px; }
+.modal-body { padding: 20px; overflow-y: auto; }
 .modal-foot { display: flex; justify-content: flex-end; gap: 10px; padding: 14px 20px; border-top: 1px solid var(--line); }
 .x-close { cursor: pointer; color: var(--muted); }
 .x-close:hover { color: var(--ink); }

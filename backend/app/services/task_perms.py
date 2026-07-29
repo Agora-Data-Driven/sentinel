@@ -84,3 +84,27 @@ def can_delete(user: User, task: Task) -> bool:
 def can_bridge(user: User) -> bool:
     """Share a task's client-safe fields to Atrium."""
     return user.role in BRIDGE
+
+
+# --- Atrium-owned cards ----------------------------------------------------
+# A card Atrium owns (board id "atrium:<client_key>:<task_id>") has no local Task row: no assignee,
+# no team, no creator tag. Every rule above is written in terms of those three, so none of them can
+# apply — these two are the whole model for that kind of card.
+#
+# Everyone who loads the board already SEES every Atrium card (list_tasks appends them unfiltered),
+# so hiding the editor behind a role would only mean "you may look at client work but not fix it" —
+# which is what the old "open it in Atrium" dead end amounted to. Editing content is therefore open
+# to any staff member, exactly like `can_edit` on a Sentinel task you can see.
+#
+# The three decisions that are not the editor's to make stay with managers, mirroring
+# can_prioritize / can_bridge / can_delete for work nobody on the team owns.
+
+
+def can_edit_atrium(user: User) -> bool:
+    """Edit an Atrium card's content (title, dates, breakdown, notes, comments) — any staff."""
+    return True
+
+
+def can_manage_atrium(user: User) -> bool:
+    """Priority, client visibility and deletion on an Atrium card — AM / admin / super_admin."""
+    return user.role in FULL

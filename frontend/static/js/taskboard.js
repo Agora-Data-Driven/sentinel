@@ -10,9 +10,10 @@ window.TaskBoard = {
   const isAM = canManage;   // priority is settable by AM + admin + super_admin (not team leads/staff)
   // Mirrors task_perms.can_delete (the server enforces it): AM+ anywhere, team lead in their
   // team, and the creator for their own tasks. Drives the ✕ on cards + Delete in the drawer.
-  // Atrium-bridged cards (t.source === "atrium") are never deletable here -- they have no local
-  // Task row, Atrium owns them, and Sentinel's task_id-keyed endpoints can't act on their string id.
-  const canDelete = (t) => t.source !== "atrium" && (canManage
+  // An Atrium-owned card (t.source === "atrium") has no assignee, team or creator tag to test, so
+  // it follows task_perms.can_manage_atrium instead: managers only, since deleting it removes a
+  // client's card (into Atrium's Bin, restorable for 30 days).
+  const canDelete = (t) => t.source === "atrium" ? canManage : (canManage
     || (canMonitor && t.assigned_team_id != null && t.assigned_team_id === S.user.team_id)
     || (t.created_by_id != null && t.created_by_id === S.user.id));
 
@@ -79,7 +80,7 @@ window.TaskBoard = {
 
   const LEADS = {
     board: canMonitor
-      ? "Drag cards across columns. Client-safe fields sync to Atrium; internal fields stay here."
+      ? "Drag cards across columns. Client cards from Atrium are editable here too — every edit writes straight back to Atrium."
       : "Your tasks — assigned to you or created by you. Drag cards across columns to update status.",
     employee: "Every teammate's tasks, grouped by person. Drag a card between columns to change its status.",
     monitor: "Team workload at a glance: open work, what's overdue, and what shipped this week. Click a row to see that person's tasks.",
@@ -220,12 +221,12 @@ window.TaskBoard = {
     lane.classList.remove("flash"); requestAnimationFrame(() => lane.classList.add("flash"));
   }
 
-  // Atrium-bridged cards (t.source === "atrium") have no local Task row -- their id is a string
-  // like "atrium:client_key:task_id", not a Sentinel primary key, so the detail drawer (which
-  // fetches /api/tasks/{id}) can't open them. Point the user at the system that actually owns them.
+  // Atrium-bridged cards (t.source === "atrium") have no local Task row -- their id is the string
+  // "atrium:<client_key>:<task_id>". They open in the SAME drawer: /api/tasks/{id} reads them back
+  // across the bridge and every write from the drawer is routed to Atrium. (Until 2026-07-29 this
+  // showed "open it in Atrium to view or edit", which is a dead end, not an answer -- the team
+  // works this board, so the board has to edit the work.)
   function openTask(id) {
-    const t = allTasks.find((x) => String(x.id) === String(id));
-    if (t && t.source === "atrium") { S.toast("Card details live in Atrium — open it there to view or edit. Drag still works here to change its status.", "err"); return; }
     openDetail(id);
   }
 
@@ -233,8 +234,7 @@ window.TaskBoard = {
     // Some browsers still dispatch a click on the source element right after a completed native
     // drag (the "dragging" class is already gone by then, since dragend clears it synchronously) --
     // wireDnD also stamps a short-lived data-just-dragged flag so that trailing click is swallowed
-    // instead of reopening the card it was just moved from (which, for an Atrium card, would wrongly
-    // show the "open it in Atrium" block on what was really just a move).
+    // instead of reopening the drawer on the card that was just moved.
     S.qsa(".tcard").forEach((c) => c.onclick = () => { if (!c.classList.contains("dragging") && !c.dataset.justDragged) openTask(c.dataset.id); });
     // The hover ✕ deletes in place (confirm first — deletion is irreversible). stopPropagation
     // so the click doesn't also open the detail drawer.
@@ -341,29 +341,54 @@ window.TaskBoard = {
     try { t = await S.api("/api/tasks/" + id); }
     catch (err) { S.toast(err.detail || "Couldn't open that task", "err"); return; }
     if (!Array.isArray(t.maintasks)) t.maintasks = [];
+    // An Atrium-owned card opens in this SAME drawer, with Atrium's vocabulary: its owners come
+    // from ATRIUM's roster (ids are login emails, not Sentinel user ids) and it has fields Sentinel
+    // rows don't (department, lead/support, start date, hold, client visibility), so those render
+    // from the atrium_* values the bridge sent. Every write below is routed back to Atrium by
+    // /api/tasks/{id} — nothing about the card is stored here.
+    const isAtrium = t.source === "atrium";
+    const owners = isAtrium ? (t.atrium_roster || []) : people;
+    const ownerId = (v) => (isAtrium ? (v || "") : (v ? +v : null));
+    const prioritySelect = isAM
+      ? `<select id="d-priority" style="margin-top:6px">${vocab.priorities.map((p) => `<option ${p === t.priority ? "selected" : ""}>${p}</option>`).join("")}</select>`
+      : `<div style="margin-top:6px">${S.priorityDot(t.priority)} ${S.esc(t.priority)}</div>`;
+    const chips = [
+      isAtrium ? `<span class="pill blue">Client card · ${S.esc(t.client_name || "Atrium")}</span>` : "",
+      t.on_hold ? `<span class="pill amber">On hold</span>` : "",
+      t.open_changes ? `<span class="pill red">${t.open_changes} change request${t.open_changes > 1 ? "s" : ""}</span>` : "",
+      (isAtrium && t.reporter === "client") ? `<span class="pill violet">Requested by ${S.esc(t.reporter_name || "the client")}</span>` : "",
+    ].join("");
     const body = `<div class="stack" style="gap:22px">
       <div>
-        <div class="labels" style="margin-bottom:8px">${S.labelPills(t.labels)}</div>
+        <div class="labels" style="margin-bottom:8px">${S.labelPills(t.labels)}${chips}</div>
         <h2 style="margin-bottom:6px">${S.esc(t.title)}</h2>
         <div class="sub">${S.esc(t.description || "")}</div>
         <div class="spread" style="margin-top:16px">
           ${field("Client", t.client_name)}${field("Campaign", t.campaign)}
-          ${field("Content type", t.content_type)}${field("Due date", t.due_date ? S.fmtDateFull(t.due_date + "T00:00:00+08:00") : "—")}
+          ${field("Content type", t.content_type)}
+          ${field(isAtrium ? "Launch date" : "Due date", t.due_date ? S.fmtDateFull(t.due_date + "T00:00:00+08:00") : "—")}
+          ${isAtrium ? field("Started", t.start_date ? S.fmtDateFull(t.start_date + "T00:00:00+08:00") : "—") : ""}
           ${t.service_charge_label ? field("Service charge", t.service_charge_label) : ""}
         </div>
         ${t.deliverable_url ? `<div style="margin-top:12px"><div class="section-label">Deliverable</div><a href="${S.esc(t.deliverable_url)}" target="_blank" class="btn sm ghost" style="margin-top:6px">Open deliverable →</a></div>` : ""}
-        ${t.client_facing_notes ? `<div style="margin-top:12px"><div class="section-label">Client notes</div><div class="sub">${S.esc(t.client_facing_notes)}</div></div>` : ""}
+        ${t.client_facing_notes ? `<div style="margin-top:12px"><div class="section-label">${isAtrium ? "Client note" : "Client notes"}</div><div class="sub">${S.esc(t.client_facing_notes)}</div></div>` : ""}
         <div style="margin-top:18px;padding-top:14px;border-top:1px dashed var(--line)">
           <div class="section-label" style="color:var(--sentinel-2)">${S.ICON.lock}Internal, not visible to clients</div>
           <div class="spread" style="margin-top:10px">
-            ${field("Account Manager", t.account_manager ? t.account_manager.name : "—")}
-            ${field("Created by", t.created_by ? t.created_by.name : "—")}
-            ${field("Assigned team", t.assigned_team_name)}
-            ${field("Assigned to", t.assignee ? t.assignee.name : "Unassigned")}
-            <div><div class="section-label">Priority</div>
-              ${isAM ? `<select id="d-priority" style="margin-top:6px">${vocab.priorities.map((p) => `<option ${p === t.priority ? "selected" : ""}>${p}</option>`).join("")}</select>`
-                : `<div style="margin-top:6px">${S.priorityDot(t.priority)} ${S.esc(t.priority)}</div>`}</div>
+            ${isAtrium ? `
+              ${field("Department", t.assigned_team_name)}
+              ${field("Lead", t.atrium_lead_name || t.atrium_lead_id)}
+              ${field("Support", (t.atrium_support_names || []).join(", "))}
+              ${field("Shared with client", t.atrium_visible ? "Yes — on their Progress tab" : "No — internal only")}
+            ` : `
+              ${field("Account Manager", t.account_manager ? t.account_manager.name : "—")}
+              ${field("Created by", t.created_by ? t.created_by.name : "—")}
+              ${field("Assigned team", t.assigned_team_name)}
+              ${field("Assigned to", t.assignee ? t.assignee.name : "Unassigned")}
+            `}
+            <div><div class="section-label">Priority</div>${prioritySelect}</div>
           </div>
+          ${(isAtrium && t.on_hold && t.hold_reason) ? `<div style="margin-top:12px"><div class="section-label">On hold because</div><div class="sub">${S.esc(t.hold_reason)}</div></div>` : ""}
           ${t.internal_notes ? `<div style="margin-top:12px"><div class="section-label">Internal notes</div><div class="sub">${S.esc(t.internal_notes)}</div></div>` : ""}
         </div>
       </div>
@@ -372,18 +397,26 @@ window.TaskBoard = {
         <div class="progress" style="margin:8px 0 12px"><i id="d-bd-bar" style="width:0%"></i></div>
         <div id="d-breakdown"></div>
         <button class="btn sm ghost" id="d-bd-addmain" style="margin-top:10px">${S.ICON.plus}Add main task</button>
-        <div class="section-label" style="margin-top:18px">Comments</div>
+        <div class="section-label" style="margin-top:18px">Comments${(isAtrium && t.atrium_visible) ? ' <span class="muted" style="font-weight:400">· this card is shared, so the client sees these</span>' : ""}</div>
         <div class="thread" id="d-thread" style="margin:10px 0">${t.comments.map(cmt).join("") || '<div class="muted">No comments yet.</div>'}</div>
         <div class="row" style="gap:8px"><input id="d-comment" placeholder="Write a comment… use @name to mention"><button class="btn primary sm" id="d-send">Send</button></div>
         <div class="section-label" style="margin-top:18px">Activity</div>
         <ul class="activity">${t.history.map((h) => `<li><span>${h.actor ? S.esc(h.actor.name) : "System"}</span> ${S.esc(h.field)} ${h.old_value ? `<span class="muted">${S.esc(h.old_value)} → </span>` : ""}<strong>${S.esc(h.new_value || "")}</strong> <span class="muted">· ${S.timeAgo(h.changed_at)}</span></li>`).join("")}</ul>
       </div></div>`;
+    // The bridge button means the opposite thing on each kind of card: a Sentinel row is PUSHED to
+    // Atrium (one-way, client-safe fields only), while an Atrium card is already there — the toggle
+    // just decides whether the client can see it.
     const footer = `${t.status !== "For Review" ? `<button class="btn ghost" id="d-review">Move to Review</button>` : ""}
       <button class="btn ghost" id="d-edit">Edit</button>
-      ${canManage ? `<button class="btn ghost" id="d-atrium">${t.atrium_visible ? "✓ In Atrium" : "Send to Atrium"}</button>` : ""}
+      ${canManage ? `<button class="btn ghost" id="d-atrium">${isAtrium
+          ? (t.atrium_visible ? "✓ Client can see this" : "Share with client")
+          : (t.atrium_visible ? "✓ In Atrium" : "Send to Atrium")}</button>` : ""}
       ${canDelete(t) ? `<button class="btn danger" id="d-delete">Delete</button>` : ""}
       <button class="btn primary" id="d-close">Close</button>`;
-    const m = S.modal({ title: "Task #" + t.id, body, footer, drawer: true });
+    const m = S.modal({
+      title: isAtrium ? "Client card · " + (t.client_name || "Atrium") : "Task #" + t.id,
+      body, footer, drawer: true,
+    });
     S.qs("#d-close").onclick = m.close;
 
     // ---- Two-level work breakdown (main tasks -> sub-tasks, each optionally assigned) ----
@@ -395,10 +428,12 @@ window.TaskBoard = {
       subs: m.subs.map((s) => ({ id: s.id, text: s.text, done: s.done, assignee_id: s.assignee_id })),
     }));
 
+    // `owners` is Sentinel's people list, or Atrium's roster on an Atrium card — same widget, one
+    // vocabulary each, so the ids that go back are always the ones that system understands.
     const assigneeSelect = (act, mid, sid, current, placeholder) =>
       `<select class="bd-assignee" data-act="${act}" data-mid="${mid}"${sid ? ` data-sid="${sid}"` : ""}>
         <option value="">${placeholder}</option>
-        ${people.map((p) => `<option value="${p.id}" ${p.id === current ? "selected" : ""}>${S.esc(p.name)}</option>`).join("")}
+        ${owners.map((p) => `<option value="${S.esc(p.id)}" ${p.id === current ? "selected" : ""}>${S.esc(p.name)}</option>`).join("")}
       </select>`;
 
     function renderBreakdown() {
@@ -448,16 +483,17 @@ window.TaskBoard = {
     function wireBreakdown() {
       const q = (act) => S.qsa(`#d-breakdown [data-act="${act}"]`);
       q("mt-title").forEach((el) => el.onchange = () => { const m = mById(el.dataset.mid); if (m) { m.title = el.value.trim() || "Untitled"; commit(); } });
-      q("mt-assignee").forEach((el) => el.onchange = () => { const m = mById(el.dataset.mid); if (m) { m.assignee_id = el.value ? +el.value : null; commit(); } });
+      q("mt-assignee").forEach((el) => el.onchange = () => { const m = mById(el.dataset.mid); if (m) { m.assignee_id = ownerId(el.value); commit(); } });
       q("mt-del").forEach((el) => el.onclick = () => { t.maintasks = t.maintasks.filter((m) => m.id !== el.dataset.mid); commit(); });
       q("sub-toggle").forEach((el) => el.onchange = () => { const s = sById(mById(el.dataset.mid), el.dataset.sid); if (s) { s.done = el.checked; commit(); } });
       q("sub-text").forEach((el) => el.onchange = () => { const s = sById(mById(el.dataset.mid), el.dataset.sid); if (s) { s.text = el.value.trim(); commit(); } });
-      q("sub-assignee").forEach((el) => el.onchange = () => { const s = sById(mById(el.dataset.mid), el.dataset.sid); if (s) { s.assignee_id = el.value ? +el.value : null; commit(); } });
+      q("sub-assignee").forEach((el) => el.onchange = () => { const s = sById(mById(el.dataset.mid), el.dataset.sid); if (s) { s.assignee_id = ownerId(el.value); commit(); } });
       q("sub-del").forEach((el) => el.onclick = () => { const m = mById(el.dataset.mid); if (m) { m.subs = m.subs.filter((s) => s.id !== el.dataset.sid); commit(); } });
       q("sub-add-input").forEach((el) => el.onkeydown = (e) => {
         if (e.key !== "Enter") return;
         const m = mById(el.dataset.mid); const text = el.value.trim();
-        if (m && text) { m.subs.push({ id: "st_new_" + Date.now(), text, done: false, assignee_id: null }); commit(); }
+        // The placeholder id is replaced by a real one on save (both systems mint their own).
+        if (m && text) { m.subs.push({ id: "st_new_" + Date.now(), text, done: false, assignee_id: ownerId("") }); commit(); }
       });
     }
 
@@ -475,6 +511,19 @@ window.TaskBoard = {
         thr.insertAdjacentHTML("beforeend", cmt(c)); S.qs("#d-comment").value = "";
       } catch (err) { S.toast(err.detail || "Couldn't post that comment", "err"); }
     };
+    // A client's "Request changes" (Atrium cards only — clients raise them on their Progress tab).
+    // Clearing one is a team action, so it belongs wherever the team is working: here too.
+    wireResolve();
+    function wireResolve() {
+      S.qsa("[data-resolve]").forEach((b) => b.onclick = async () => {
+        b.disabled = true;
+        try {
+          await S.api(`/api/tasks/${id}/comments/${b.dataset.resolve}/resolve`, { method: "POST" });
+          S.toast("Change request resolved", "ok");
+          m.close(); load(); openDetail(id);
+        } catch (err) { b.disabled = false; S.toast(err.detail || "Couldn't resolve that", "err"); }
+      });
+    }
     // Priority (AM only)
     if (isAM && S.qs("#d-priority")) S.qs("#d-priority").onchange = async (e) => {
       try { await S.api(`/api/tasks/${id}/priority`, { method: "PATCH", body: { priority: e.target.value } }); S.toast("Priority updated", "ok"); }
@@ -485,19 +534,31 @@ window.TaskBoard = {
       catch (err) { S.toast(err.detail, "err"); }
     };
     if (S.qs("#d-atrium")) S.qs("#d-atrium").onclick = async () => {
-      try { await S.api(`/api/tasks/${id}/send-to-atrium`, { method: "POST" }); S.toast("Client-safe fields sent to Atrium", "ok"); m.close(); load(); }
-      catch (err) { S.toast(err.detail, "err"); }
+      try {
+        if (isAtrium) {
+          // Already in Atrium — this only flips whether the client sees it on their Progress tab.
+          await S.api(`/api/tasks/${id}`, { method: "PATCH", body: { atrium_visible: !t.atrium_visible } });
+          S.toast(t.atrium_visible ? "Hidden from the client" : "Shared with the client", "ok");
+        } else {
+          await S.api(`/api/tasks/${id}/send-to-atrium`, { method: "POST" });
+          S.toast("Client-safe fields sent to Atrium", "ok");
+        }
+        m.close(); load();
+      } catch (err) { S.toast(err.detail, "err"); }
     };
     if (S.qs("#d-edit")) S.qs("#d-edit").onclick = () => { m.close(); taskForm(t); };
     if (S.qs("#d-delete")) S.qs("#d-delete").onclick = () => confirmDelete(t, m);
   }
 
-  // Confirm-then-delete. Deletion is irreversible (no bin), so we always ask first.
+  // Confirm-then-delete. A Sentinel row is gone for good (no bin); an Atrium card soft-deletes into
+  // Atrium's own Bin, so say so rather than warning about something irreversible that isn't.
   function confirmDelete(t, parent) {
     const cm = S.modal({
-      title: "Delete task?",
+      title: t.source === "atrium" ? "Delete this client card?" : "Delete task?",
       body: `<p style="line-height:1.5">Delete <strong>${S.esc(t.title)}</strong>?<br>
-        <span class="muted">This also removes its checklist, comments, and activity. This can't be undone.</span></p>`,
+        <span class="muted">${t.source === "atrium"
+          ? "It leaves this board and the client's Progress tab, and goes to Atrium's Bin — restorable there for 30 days."
+          : "This also removes its checklist, comments, and activity. This can't be undone."}</span></p>`,
       footer: `<button class="btn ghost" id="cd-cancel">Cancel</button><button class="btn danger" id="cd-yes">Delete task</button>`,
     });
     S.qs("#cd-cancel").onclick = cm.close;
@@ -511,9 +572,98 @@ window.TaskBoard = {
   }
 
   const field = (label, val) => `<div><div class="section-label">${label}</div><div style="margin-top:4px">${S.esc(val || "—")}</div></div>`;
-  const cmt = (c) => `<div class="cmt">${S.avatar(c.author, "sm")}<div class="body"><strong>${S.esc(c.author ? c.author.name : "?")}</strong><div>${S.esc(c.body)}</div><div class="meta">${S.timeAgo(c.created_at)}</div></div></div>`;
+  // Atrium cards carry one comment kind Sentinel rows don't: a client's "Request changes", which
+  // stays flagged until someone on the team clears it (see wireResolve in the drawer).
+  const cmt = (c) => `<div class="cmt">${S.avatar(c.author, "sm")}<div class="body">
+      <strong>${S.esc(c.author ? c.author.name : "?")}</strong>${c.kind === "changes"
+        ? `<span class="pill ${c.resolved ? "green" : "red"}" style="margin-left:6px">${c.resolved ? "Resolved" : "Changes requested"}</span>` : ""}
+      <div>${S.esc(c.body)}</div>
+      <div class="meta">${S.timeAgo(c.created_at)}</div>
+      ${(c.kind === "changes" && !c.resolved) ? `<button class="btn sm ghost" style="margin-top:6px" data-resolve="${S.esc(c.id)}">Mark resolved</button>` : ""}
+    </div></div>`;
+
+  // The Edit form for an Atrium-owned card. A SEPARATE form from taskForm on purpose: it edits
+  // Atrium's own fields (its department vocabulary, roster owners as emails, launch + start dates,
+  // the hold switch, client visibility) and Sentinel's field names would either be ignored or mean
+  // something subtly different. Both forms save through the same PATCH /api/tasks/{id}; the router
+  // routes by id, and the bridge translates (services/atrium_tasks.FIELD_MAP).
+  function atriumTaskForm(t) {
+    const depts = t.atrium_departments || [];
+    const roster = t.atrium_roster || [];
+    const support = t.atrium_support_ids || [];
+    const extrasOpen = !!(t.atrium_department || t.atrium_lead_id || support.length || t.content_type
+      || t.service_charge || t.deliverable_url || t.internal_notes || t.on_hold
+      || (t.priority && t.priority !== "Medium"));
+    const m = S.modal({
+      title: "Edit client card",
+      wide: true,
+      body: `<div class="grid" style="grid-template-columns:1fr 1fr;gap:16px">
+        <div class="form-hint" style="grid-column:1/-1">This card lives in ${S.esc(t.client_name || "Atrium")}'s workspace — saving writes straight back to Atrium.</div>
+        <label class="field" style="grid-column:1/-1"><span>Task name</span><input id="a-title" value="${S.esc(t.title || "")}" placeholder="What needs doing?"></label>
+        <label class="field" style="grid-column:1/-1"><span>Client note — the client reads this</span><textarea id="a-cnote" rows="3" placeholder="Optional">${S.esc(t.client_facing_notes || "")}</textarea></label>
+        <label class="field"><span>Launch date</span><input type="date" id="a-due" value="${t.due_date || ""}"></label>
+        <label class="field"><span>Start date</span><input type="date" id="a-start" value="${t.start_date || ""}"></label>
+        <div class="field" style="grid-column:1/-1">
+          <details class="tk-extra"${extrasOpen ? " open" : ""}>
+            <summary>More options${extrasOpen ? "" : " — department, lead, priority, visibility…"}</summary>
+            <div class="grid" style="grid-template-columns:1fr 1fr;gap:16px;margin-top:12px">
+              <label class="field"><span>Department</span><select id="a-dept"><option value="">—</option>${depts.map((d) => `<option value="${S.esc(d.key)}" ${d.key === t.atrium_department ? "selected" : ""}>${S.esc(d.label)}</option>`).join("")}</select></label>
+              <label class="field"><span>Lead</span><select id="a-lead"><option value="">Unassigned</option>${roster.map((p) => `<option value="${S.esc(p.id)}" ${p.id === t.atrium_lead_id ? "selected" : ""}>${S.esc(p.name)}</option>`).join("")}</select></label>
+              <label class="field" style="grid-column:1/-1"><span>Support — pick as many as you need</span><select id="a-support" multiple size="4">${roster.map((p) => `<option value="${S.esc(p.id)}" ${support.indexOf(p.id) >= 0 ? "selected" : ""}>${S.esc(p.name)}</option>`).join("")}</select></label>
+              ${isAM ? `<label class="field"><span>Priority</span><select id="a-priority">${vocab.priorities.map((p) => `<option ${p === (t.priority || "Medium") ? "selected" : ""}>${p}</option>`).join("")}</select></label>` : ""}
+              <label class="field"><span>Status</span><select id="a-status">${STATUSES.map((s) => `<option ${s === t.status ? "selected" : ""}>${s}</option>`).join("")}</select></label>
+              <label class="field"><span>Content type</span><input id="a-ctype" value="${S.esc(t.content_type || "")}"></label>
+              <label class="field"><span>Service charge ($)</span><input id="a-charge" inputmode="decimal" value="${S.esc(t.service_charge || "")}" placeholder="0" pattern="[0-9]*[.]?[0-9]*" title="Optional — numbers only (e.g. 4200 or 4200.50)"></label>
+              <label class="field" style="grid-column:1/-1"><span>Deliverable URL (client-safe)</span><input id="a-deliv" value="${S.esc(t.deliverable_url || "")}"></label>
+              <label class="field" style="grid-column:1/-1"><span>${S.ICON.lock}Internal notes</span><textarea id="a-inotes">${S.esc(t.internal_notes || "")}</textarea></label>
+              ${canManage ? `<div class="field" style="grid-column:1/-1"><span>Client visibility</span>
+                <label class="row" style="gap:8px;margin-top:6px"><input type="checkbox" id="a-visible" ${t.atrium_visible ? "checked" : ""}><span class="sub">Show this card on the client's Progress tab</span></label></div>` : ""}
+              <div class="field" style="grid-column:1/-1"><span>On hold</span>
+                <label class="row" style="gap:8px;margin-top:6px"><input type="checkbox" id="a-hold" ${t.on_hold ? "checked" : ""}><span class="sub">Paused — the client only ever sees "Paused", never the reason</span></label></div>
+              <label class="field" style="grid-column:1/-1"><span>${S.ICON.lock}Hold reason</span><input id="a-holdwhy" value="${S.esc(t.hold_reason || "")}" placeholder="Internal — why it's paused"></label>
+            </div>
+          </details>
+        </div>`,
+      footer: `<button class="btn ghost" id="a-cancel">Cancel</button><button class="btn primary" id="a-save">Save changes</button>`,
+    });
+    S.qs("#a-cancel").onclick = m.close;
+    S.qs("#a-title").focus();
+
+    S.qs("#a-save").onclick = async () => {
+      const body = {
+        title: S.qs("#a-title").value.trim() || "Untitled task",
+        client_facing_notes: S.qs("#a-cnote").value,
+        due_date: S.qs("#a-due").value || null,
+        start_date: S.qs("#a-start").value || null,
+        atrium_department: S.qs("#a-dept").value,
+        atrium_lead_id: S.qs("#a-lead").value,
+        atrium_support_ids: Array.from(S.qs("#a-support").options).filter((o) => o.selected).map((o) => o.value),
+        content_type: S.qs("#a-ctype").value,
+        service_charge: S.qs("#a-charge").value || null,
+        deliverable_url: S.qs("#a-deliv").value,
+        internal_notes: S.qs("#a-inotes").value,
+        on_hold: S.qs("#a-hold").checked,
+        hold_reason: S.qs("#a-holdwhy").value,
+      };
+      if (isAM) body.priority = S.qs("#a-priority").value;
+      // Only send client visibility when this user may set it — the server 403s anyone else, and a
+      // form that can't change it shouldn't be able to fail because of it.
+      if (canManage && S.qs("#a-visible")) body.atrium_visible = S.qs("#a-visible").checked;
+      const status = S.qs("#a-status").value;
+      const btn = S.qs("#a-save");
+      btn.disabled = true;
+      try {
+        await S.api("/api/tasks/" + t.id, { method: "PATCH", body });
+        // Status is not one of those fields: in Atrium it is a stage MOVE, with its own history
+        // entry and its own endpoint. Send it separately, and only when the form changed it.
+        if (status !== t.status) await S.api(`/api/tasks/${t.id}/status`, { method: "PATCH", body: { status } });
+        S.toast("Card updated", "ok"); m.close(); load();
+      } catch (err) { btn.disabled = false; S.toast(err.detail || "Couldn't save that card", "err"); }
+    };
+  }
 
   function taskForm(existing, presetStatus) {
+    if (existing && existing.source === "atrium") return atriumTaskForm(existing);
     const e = existing || {};
     if (presetStatus && !e.status) e.status = presetStatus;  // column "Add card" pre-picks the status
     // Only spring the advanced block open when an EXISTING task already carries one of those

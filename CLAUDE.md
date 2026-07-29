@@ -26,7 +26,10 @@ leave, payroll, reporting, and a "holistic development" hub (learning + reading 
 
 **Hard product rule:** clients never see internal fields (assignee, team, priority, internal
 notes, attendance, gym). The Account Manager bridges Sentinel → Atrium via **Send to Atrium**,
-which shares only client-safe fields.
+which shares only client-safe fields. The reverse — a card Atrium owns, shown on this board — is
+**fully editable here**, writing straight back to Atrium (§2, "The task board holds TWO kinds of
+card"). Nothing internal crosses in that direction either: Atrium's own internal fields stay in
+Atrium's team surfaces.
 
 ---
 
@@ -103,7 +106,7 @@ deploy/            deploy.ps1, seed-job.ps1, DEPLOY.md
 | `auth.py` | Login (dev/password/Google/SSO), session, `/api/auth/me` |
 | `attendance.py` | Kiosk scan, punches, offline sync, approvals |
 | `gym.py` | Workouts, exercise library, schedule/overrides, cardio |
-| `tasks.py` | Kanban board, priority (AM-only), Send to Atrium |
+| `tasks.py` | Kanban board, priority (AM-only), Send to Atrium, **editing Atrium's own cards** |
 | `people.py` | Directory, profiles, QR badges |
 | `leave.py` | Requests, approvals, balances |
 | `development.py` | Holistic development hub — learning, reading, growth |
@@ -118,6 +121,37 @@ deploy/            deploy.ps1, seed-job.ps1, DEPLOY.md
 | `internal.py` | **HMAC-signed** service-to-service (Mastery Engine ↔ Sentinel) |
 
 Adding a router? Register it in the tuple at [main.py:205](backend/app/main.py#L205).
+
+### The task board holds TWO kinds of card
+
+| | Sentinel row | Atrium-owned card |
+|---|---|---|
+| id | an integer PK | the string `atrium:<client_key>:<task_id>` |
+| stored in | Postgres `tasks` | that client's Atrium workspace JSON — **Atrium is the source of truth** |
+| reaches the board via | `task_card` | `atrium_tasks.fetch_tasks()` → `as_board_card` (fail-soft: an Atrium outage just hides them) |
+
+**Both are fully editable here** (since 2026-07-29 — before that, opening an Atrium card said "open
+it in Atrium to view or edit", which is a dead end, not an answer). Every route in `tasks.py` looks
+for the prefix first (`atrium_tasks.split_id`) and, when it matches, writes across the bridge
+instead of to Postgres: `GET /{id}`, `PATCH /{id}`, `DELETE /{id}`, `PATCH /{id}/status`,
+`PATCH /{id}/priority`, `POST /{id}/comments`, `POST /{id}/comments/{cid}/resolve`.
+
+- **`services/atrium_tasks.py` is the whole translation layer.** `FIELD_MAP` + `to_atrium_fields`
+  turn Sentinel's field names into Atrium's on the way out (`client_facing_notes` → `client_note`,
+  `atrium_visible` → `client_facing`, main-task `title` → `text`, `date` → ISO string);
+  `as_task_detail` maps the answer back into the shape the drawer already renders. Anything the
+  other side has no equivalent for is **absent, never faked** — an Atrium card has no Sentinel
+  assignee, team or description, and its owners are roster **emails**, not user ids.
+- **Signing purposes** (HMAC, shared `platform-sso-key`, same scheme as everything else):
+  `tasks`, `task-detail`, `task-update`, `task-delete`, `task-move`, `task-add`, `task-comment`.
+- **Permissions** live in `task_perms.can_edit_atrium` / `can_manage_atrium`: content is editable by
+  any staff member (everyone already sees every Atrium card on the board), while priority, client
+  visibility and deletion stay AM+ — the same three decisions Sentinel reserves for managers.
+- 🔴 **Only Atrium's own 404 may surface as "that card is gone."** The board LIST is fail-soft, but
+  every explicit act (open / edit / delete / comment) reports its failure — the router keys its 404
+  off `atrium_tasks.GONE`/`GONE_COMMENT` and answers **502** for anything else, so a timeout is
+  never shown as a deletion. (The Watcher bridge's empty state hid two real bugs exactly this way;
+  see §5.)
 
 ---
 
@@ -273,6 +307,79 @@ driven by `CSP_FRAME_ANCESTORS`.
 
 Store UTC, always. Use `app/utils/time.py` (`utcnow()`) — never `datetime.now()`. Business rules
 (late/grace, "today") apply in Asia/Manila.
+
+### 🔴 "Import from Atrium" says there are no creators when there obviously are
+
+The Growth hub's Mentor Library imports transcripts from Atrium's Watcher archive over the HMAC
+bridge (`services/atrium_bridge.py` → `services/atrium_watcher.py`). **Every leg of that bridge is
+fail-SOFT by design** — an unset secret, a 404, a timeout and a malformed body all degrade to `[]`.
+That is correct (an Atrium outage must not break the page) but it means *a broken bridge and an
+empty archive look identical in the UI*. Two real failures hid behind that one empty state:
+
+1. **Atrium never exposed `/api/internal/watcher/*` at all** — the Sentinel half shipped complete
+   and tested against endpoints that did not exist. Every call 404'd into the empty list.
+2. **`atrium_watcher_client_key` defaulted to `"agora"`**, a workspace that has never existed, so
+   even a working bridge would have scoped every query to nothing.
+
+It now reads **every** workspace (the key is an optional filter, `""` = all — don't re-pin it to a
+guessed key), and channel ids arrive namespaced `"<client_key>:<channel_id>"`. **When this picker
+is empty, curl the bridge before believing the UI** — the fail-soft path never surfaces the reason:
+
+```powershell
+# See the real status code instead of the swallowed one.
+# 🔴 Use a UTC epoch. PowerShell 5.1's `Get-Date -UFormat %s` returns a LOCAL-time epoch, which is
+# 8h off in Manila -- past the gate's 300s skew window, so you get a 401 and misread it as a bad
+# secret. (This cost a debugging round.)
+$ts  = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+$key = (gcloud secrets versions access latest --secret=platform-sso-key --project agora-data-driven | Out-String).Trim()
+$h = New-Object System.Security.Cryptography.HMACSHA256
+$h.Key = [Text.Encoding]::UTF8.GetBytes($key)
+$sig = ($h.ComputeHash([Text.Encoding]::UTF8.GetBytes("watcher-channels:$ts")) |
+        ForEach-Object { $_.ToString("x2") }) -join ""
+curl.exe -s -o NUL -w "%{http_code}`n" -H "X-Academy-Ts: $ts" -H "X-Academy-Sig: $sig" `
+  https://portal.agoradatadriven.com/api/internal/watcher/channels
+```
+
+**Reading the result:** `200` = bridge healthy (an empty `channels` list then really means an empty
+archive). `404` = the route doesn't exist in the deployed Atrium — what caused this bug. `401` =
+signature/skew (check the UTC epoch above first). Signing purposes are `watcher-channels`,
+`watcher-videos`, `watcher-transcript`, `watcher-transcripts`. Swap in `/api/internal/tasks` (purpose
+`tasks`) as a control: if tasks answers `200` and watcher `404`, the transport is fine and Atrium is
+missing the endpoint.
+
+**Bulk import** (`POST /api/development/atrium/import-all` → `atrium_watcher.list_transcripts`):
+pulls a whole creator in one go, because doing it one video at a time was unusable at 200 videos.
+Atrium hands over the entire archive in a byte-budgeted response, so this is a couple of round trips
+(measured: 104 transcripts / 6.3 MB → 2.1 MB gzipped, ~4 s), not one per video — hence the separate
+`BULK_TIMEOUT` (180 s) instead of the 10 s used for the light listings. It is **idempotent** — rows
+are matched on `source_url` (falling back to title), per user — so the button doubles as "catch me
+up since Atrium fetched more", and a mid-way failure returns what was already collected rather than
+discarding megabytes. Covered by `tests/test_atrium_import_all.py`.
+
+### 🟡 The coach answers "what would Nick say?" by RETRIEVAL, not a bigger prompt
+
+`services/mentor_search.py` + `GET /api/internal/mentor-search` (purpose `mentor-search`) are what
+let the Mastery Engine coach speak from an imported mentor's material — and act as them when asked.
+Design constraints worth knowing before changing it:
+
+- **The library cannot be prompted.** One creator is ~104 transcripts / ~1M words, which is why
+  `holistic_digest` could only ever send TITLES (`mentor_library`). The coach retrieves the handful
+  of passages that bear on the question instead.
+- **No new table, no migration** — deliberately. Prod has a history of not running Alembic, so a
+  schema change here would be a silent no-op. Everything derives from `mentor_transcripts` rows and
+  a per-user in-process index, invalidated by a `(count, max id, total length)` signature.
+- **Chunks are indexed by mentor + title + body.** A transcript body almost never says its own
+  mentor's name, so without this "what does Nick say about offers" retrieves nothing from Nick.
+  (Atrium's assistant learned this the hard way — see its `assistant_ai.py`.)
+- **`matched_mentor` is load-bearing.** It separates "that mentor isn't in your library" from "that
+  mentor never covered this". Blur the two and the coach invents a real person's opinion — the one
+  failure that makes the feature worse than not having it. The prompt in `mastery-engine`'s
+  `lib/gemini.js` (`mentorGroundBlock`) depends on this distinction.
+- Mentor names are matched loosely (`resolve_mentor`): people type "Nick", not "Nick Saraev".
+- `holistic_digest.mentors` is the authoritative roster — `mentor_library` is capped at 40 titles
+  and stops naming some mentors entirely once a library is large.
+
+Covered by `tests/test_mentor_search.py`.
 
 ### 🟡 A `/go` from another machine can clobber this repo
 
