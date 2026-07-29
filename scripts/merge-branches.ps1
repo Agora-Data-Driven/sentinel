@@ -140,10 +140,12 @@ function Test-ReversionRisk([string]$mainRef, [string]$intgRef) {
 }
 
 function Get-MergedDevBranches([string[]]$Skip) {
+    # wip/* is PARKED work (agora-park.ps1): never integrated, and never pruned
+    # here either -- a fully-merged park is deleted by its owner (start-day nags).
     git branch -r --merged origin/main --format='%(refname:short)' |
         Where-Object { $_ -and $_ -like 'origin/*' -and $_ -ne 'origin/HEAD' -and $_ -ne 'origin/main' -and $_ -notlike '*->*' } |
         ForEach-Object { ($_ -replace '^origin/', '').Trim() } |
-        Where-Object { $_ -and ($Skip -notcontains $_) -and ($_ -notlike 'integration/*') }
+        Where-Object { $_ -and ($Skip -notcontains $_) -and ($_ -notlike 'integration/*') -and ($_ -notlike 'wip/*') }
 }
 function Remove-RemoteBranches([string[]]$Branches) {
     foreach ($b in $Branches) {
@@ -193,10 +195,18 @@ if ($Resume) {
     $baseMain = "$(git rev-parse origin/main)".Trim(); Must "resolve origin/main"
 }
 
-$branches = git branch -r --format='%(refname:short)' |
+# PARKED branches (wip/*, pushed by agora-park.ps1) are EXPLICITLY skipped: ship
+# integrates every dev branch it finds, so without this rule parking would ship
+# unfinished work. Skipped loudly, never silently.
+$allRemote = @(git branch -r --format='%(refname:short)' |
     ForEach-Object { $_.Trim() } | Where-Object { $_ -like 'origin/*' } |
     ForEach-Object { $_ -replace '^origin/', '' } |
-    Where-Object { $_ -and ($skip -notcontains $_) -and ($_ -notlike 'integration/*') -and ($_ -ne 'HEAD') }
+    Where-Object { $_ -and ($skip -notcontains $_) -and ($_ -notlike 'integration/*') -and ($_ -ne 'HEAD') })
+$parkedBranches = @($allRemote | Where-Object { $_ -like 'wip/*' })
+$branches = @($allRemote | Where-Object { $_ -notlike 'wip/*' })
+if ($parkedBranches.Count -gt 0) {
+    Write-Host "[PARKED] $($parkedBranches.Count) parked branch(es) ignored (wip/* never ships): $($parkedBranches -join ', ')" -ForegroundColor Yellow
+}
 
 if (-not $branches) {
     Write-Host "[OK] no dev branches to merge -- origin/main is already current." -ForegroundColor Green
