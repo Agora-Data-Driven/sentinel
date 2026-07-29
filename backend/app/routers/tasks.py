@@ -65,6 +65,14 @@ def _broadcast(action: str, task: Task, actor_id: int) -> None:
     })
 
 
+def _require_atrium(user: User) -> None:
+    """Guard every Atrium-card branch. Scoping the board LIST (task_perms.can_view_atrium) would be
+    theatre if the id still opened and edited the card for someone the board hides it from — RBAC
+    belongs on the endpoint, not in the rendering (AGENTS.md §3)."""
+    if not task_perms.can_view_atrium(user):
+        raise HTTPException(status_code=403, detail=_FORBIDDEN)
+
+
 def _atrium_error(err: str) -> HTTPException:
     """Turn a bridge failure into the right status. 404 ONLY when Atrium says the card is gone --
     a timeout or an unconfigured bridge must never reach the user as "that card was deleted"."""
@@ -99,6 +107,8 @@ def list_tasks(
     client_id: int | None = Query(None),
     team_id: int | None = Query(None),
     assignee_id: int | None = Query(None),
+    unassigned: bool = Query(False, description="Only cards with no assignee (the board's "
+                                                "'Unassigned' choice in the assignee filter)."),
     status: str | None = Query(None),
     priority: str | None = Query(None),
     user: User = Depends(get_current_user),
@@ -111,6 +121,11 @@ def list_tasks(
         q = q.where(Task.assigned_team_id == team_id)
     if assignee_id:
         q = q.where(Task.assigned_to_id == assignee_id)
+    # "Unassigned" is a real answer to "who is this on?", and it cannot be expressed as an id --
+    # a manager triaging the board needs it more than any single name. Ignored when an actual
+    # assignee was named (a card can't be both).
+    if unassigned and not assignee_id:
+        q = q.where(Task.assigned_to_id.is_(None))
     if status:
         q = q.where(Task.status == status)
     if priority:
@@ -121,7 +136,9 @@ def list_tasks(
     # typed into a client's Atrium board must appear here too -- this board is the team's
     # cross-client window onto the same work, not a second system. Best-effort: if the bridge is
     # off or Atrium is unreachable, the board still renders Sentinel's own rows.
-    if atrium_tasks.enabled():
+    # MANAGERS ONLY (task_perms.can_view_atrium): these cards belong to no Sentinel user, so on an
+    # employee's/intern's board -- which shows the work assigned to them -- they are pure noise.
+    if atrium_tasks.enabled() and task_perms.can_view_atrium(user):
         # Resolve each Atrium workspace to its Sentinel Client so the board's client filter and
         # client name work on Atrium cards too: Client.atrium_client_id is the explicit bridge,
         # with an unambiguous name match as a fallback while those links are still unset.
@@ -137,6 +154,8 @@ def list_tasks(
             if client_id and card["client_id"] != client_id:
                 continue
             # Atrium tasks carry no Sentinel assignee/team, so those two filters exclude them.
+            # "Unassigned" is the one assignee choice they DO answer -- the card says Unassigned,
+            # so hiding it from that filter would contradict what the board renders.
             if assignee_id or team_id:
                 continue
             cards.append(card)
@@ -207,6 +226,7 @@ def get_task(task_id: str, user: User = Depends(get_current_user), db: Session =
     # nothing about it -- every write below goes back to Atrium.
     a_key, a_task = atrium_tasks.split_id(str(task_id))
     if a_key:
+        _require_atrium(user)
         envelope, err = atrium_tasks.fetch_task(a_key, a_task)
         if err:
             raise _atrium_error(err)
@@ -292,6 +312,7 @@ def update_task(task_id: str, payload: TaskUpdateIn, user: User = Depends(get_cu
     # same two decisions Sentinel reserves for managers -- client visibility and priority.
     a_key, a_task = atrium_tasks.split_id(str(task_id))
     if a_key:
+        _require_atrium(user)
         data = payload.model_dump(exclude_unset=True)
         if data.get("atrium_visible") is not None and not task_perms.can_bridge(user):
             raise HTTPException(status_code=403, detail="Only managers can change what the client sees")
@@ -384,6 +405,7 @@ def move_status(task_id: str, payload: TaskStatusIn, user: User = Depends(get_cu
     # (open sub-tasks / unresolved change requests block completion) are surfaced verbatim.
     a_key, a_task = atrium_tasks.split_id(str(task_id))
     if a_key:
+        _require_atrium(user)
         stage = atrium_tasks.STAGE_BY_STATUS.get(payload.status)
         if not stage:
             raise HTTPException(status_code=400, detail="Invalid status")
@@ -455,6 +477,7 @@ def add_comment(task_id: str, payload: CommentIn, user: User = Depends(get_curre
     # console. The author echoed back is the Sentinel user, so their avatar appears immediately.
     a_key, a_task = atrium_tasks.split_id(str(task_id))
     if a_key:
+        _require_atrium(user)
         comment, err = atrium_tasks.comment_task(a_key, a_task, payload.body,
                                                  actor=user.email or "", actor_name=user.name or "")
         if err:
@@ -486,6 +509,7 @@ def resolve_change_request(task_id: str, comment_id: str, user: User = Depends(g
     a_key, a_task = atrium_tasks.split_id(str(task_id))
     if not a_key:
         raise HTTPException(status_code=404, detail="Change requests only exist on client cards")
+    _require_atrium(user)
     ok, err = atrium_tasks.resolve_change_request(a_key, a_task, comment_id, actor=user.email or "")
     if not ok:
         raise _atrium_error(err)

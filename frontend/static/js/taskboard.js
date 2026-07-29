@@ -53,9 +53,9 @@ window.TaskBoard = {
   let mode = params0.get("view") || "board";
   if ((mode === "monitor") && !canMonitor) mode = "board";
   if (!["board", "employee", "monitor"].includes(mode)) mode = "board";
-  // Employees/interns see only their own tasks (assigned to them or created by them — the server
-  // enforces this in task_perms.can_view), so the multi-person views and assignee filter are noise:
-  // they get the plain board only.
+  // Employees/interns see only the tasks ASSIGNED to them — including no Atrium client card, which
+  // is assigned to nobody here (the server enforces both in task_perms.can_view /
+  // can_view_atrium). So the multi-person views and the assignee filter are noise: plain board only.
   if (!canMonitor) mode = "board";
 
   // Section-style header (h3) so the board reads as a dashboard section, not a second page title.
@@ -74,14 +74,14 @@ window.TaskBoard = {
       <select id="f-client"><option value="">All Clients</option>${clients.map((c) => `<option value="${c.id}">${S.esc(c.name)}</option>`).join("")}</select>
       <select id="f-team"><option value="">All Departments</option>${teams.map((t) => `<option value="${t.id}">${S.esc(t.name)}</option>`).join("")}</select>
       <select id="f-priority"><option value="">All Priority</option>${vocab.priorities.map((p) => `<option>${p}</option>`).join("")}</select>
-      ${canMonitor ? `<select id="f-assignee"><option value="">All Assignees</option>${people.map((p) => `<option value="${p.id}">${S.esc(p.name)}</option>`).join("")}</select>` : ""}
+      ${canMonitor ? `<select id="f-assignee"><option value="">All Assignees</option><option value="none">Unassigned</option>${people.map((p) => `<option value="${p.id}">${S.esc(p.name)}</option>`).join("")}</select>` : ""}
     </div>
     <div id="board"></div>`;
 
   const LEADS = {
     board: canMonitor
       ? "Drag cards across columns. Client cards from Atrium are editable here too — every edit writes straight back to Atrium."
-      : "Your tasks — assigned to you or created by you. Drag cards across columns to update status.",
+      : "Your tasks — the work assigned to you. Drag cards across columns to update status.",
     employee: "Every teammate's tasks, grouped by person. Drag a card between columns to change its status.",
     monitor: "Team workload at a glance: open work, what's overdue, and what shipped this week. Click a row to see that person's tasks.",
   };
@@ -107,6 +107,9 @@ window.TaskBoard = {
   async function load() {
     const q = new URLSearchParams();
     Object.entries(filters).forEach(([k, v]) => { if (v) q.set(k, v); });
+    // "Unassigned" is a choice, not an id: it becomes its own flag so assignee_id stays an int
+    // server-side (?unassigned=1 — see list_tasks).
+    if (filters.assignee_id === "none") { q.delete("assignee_id"); q.set("unassigned", "1"); }
     allTasks = await S.api("/api/tasks?" + q);
     render();
   }

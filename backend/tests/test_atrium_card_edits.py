@@ -7,6 +7,10 @@ routes the write to Atrium, with the two manager-only decisions still gated, and
 never disguised as a missing card.
 
 The bridge itself is stubbed here (test_atrium_bridge.py covers the transport + the mapping).
+
+An Atrium card is a MANAGER surface since 2026-07-30 (task_perms.can_view_atrium — it belongs to no
+Sentinel user, so it has no place on an intern's "assigned to me" board), which is why the actors
+below start at team lead. test_task_visibility.py pins that scoping itself.
 """
 from __future__ import annotations
 
@@ -30,7 +34,7 @@ def _envelope(**over):
 
 
 def test_opening_a_client_card_returns_a_drawer_shaped_detail(client, auth, make_user, monkeypatch):
-    auth(make_user(C.ROLE_EMPLOYEE))
+    auth(make_user(C.ROLE_TEAM_LEAD))
     monkeypatch.setattr(atrium_tasks, "fetch_task", lambda k, t: (_envelope(), ""))
     r = client.get(f"/api/tasks/{CARD}")
     assert r.status_code == 200
@@ -71,8 +75,9 @@ def test_an_edit_is_translated_and_written_to_atrium(client, auth, make_user, mo
 
 
 def test_client_visibility_and_priority_stay_manager_decisions(client, auth, make_user, monkeypatch):
-    """Everyone who sees the board may edit a card's content; these two are management calls, the
-    same way they are on a Sentinel row (can_bridge / can_prioritize)."""
+    """Everyone who SEES the card may edit its content; these two are management calls, the same way
+    they are on a Sentinel row (can_bridge / can_prioritize). A team lead is the test's non-manager:
+    they see client cards, but neither of these two decisions is theirs."""
     seen = {}
 
     def _edit(key, tid, fields, actor=""):
@@ -81,8 +86,7 @@ def test_client_visibility_and_priority_stay_manager_decisions(client, auth, mak
 
     monkeypatch.setattr(atrium_tasks, "edit_task", _edit)
 
-    employee = make_user(C.ROLE_EMPLOYEE)
-    auth(employee)
+    auth(make_user(C.ROLE_TEAM_LEAD))
     assert client.patch(f"/api/tasks/{CARD}", json={"atrium_visible": True}).status_code == 403
     # A priority they may not set is dropped, not an error — the rest of the edit still saves.
     r = client.patch(f"/api/tasks/{CARD}", json={"title": "still fine", "priority": "Urgent"})
@@ -108,7 +112,7 @@ def test_only_a_manager_may_delete_a_client_card(client, auth, make_user, monkey
 
 
 def test_a_comment_goes_to_atriums_thread_under_the_sentinel_author(client, auth, make_user, monkeypatch):
-    user = auth(make_user(C.ROLE_EMPLOYEE, name="Ana Cruz"))
+    user = auth(make_user(C.ROLE_TEAM_LEAD, name="Ana Cruz"))
     seen = {}
 
     def _comment(key, tid, body, actor="", actor_name=""):
