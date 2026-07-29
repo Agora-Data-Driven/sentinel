@@ -416,6 +416,24 @@ textarea { resize: vertical; min-height: 78px; }
 /* A long list INSIDE a modal body scrolls on its own, so anything above it (a search box) stays
    pinned while the list moves under it. */
 .pick-list { max-height: 46vh; overflow-y: auto; margin: 0 -4px; padding: 0 4px; }
+
+/* ---------- Mentor library (Growth) ----------
+   Grouped by mentor, Atrium-Watcher style. A flat list of transcripts stopped working the moment a
+   bulk import landed — one creator can be 100+ imports, which rendered as an endless column of
+   near-identical full-width rows. Each mentor is now one tile that expands in place. */
+.mx-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; align-items: start; }
+.mx-card { min-width: 0; }
+/* An expanded card takes the full row — a long transcript list inside one narrow column is unreadable. */
+.mx-card.expanded { grid-column: 1 / -1; }
+.mx-preview { margin-top: 6px; display: grid; gap: 2px; }
+/* Titles are long and uniform; clipping to one line is what keeps the tiles scannable. */
+.mx-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mx-full { margin-top: 8px; }
+.mx-rows { max-height: 420px; overflow-y: auto; }
+.mx-row { padding: 8px 0; border-top: 1px solid var(--line); }
+.mx-row:first-child { border-top: 0; }
+.mx-row .mx-title { font-weight: 600; }
+.mx-body { margin-top: 8px; max-height: 320px; overflow-y: auto; padding-top: 8px; border-top: 1px dashed var(--line); }
 /* Right-side slide-in drawer (task detail). Anchored right, full height, scrolls internally. */
 .overlay.drawer-ov { justify-content: flex-end; align-items: stretch; padding: 0; overflow: hidden; }
 .modal.as-drawer {
