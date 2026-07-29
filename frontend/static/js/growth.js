@@ -27,7 +27,8 @@ window.pageInit = async (S) => {
   // UI state that must survive the full re-render load() does after every save.
   const openDims = new Set();      // expanded dimension boxes
   const openSubs = new Set();      // expanded <details> — "dim:sub" and "goal:<id>" keys
-  const openTranscripts = new Set();  // expanded mentor-library rows (by transcript id)
+  // Mentor-library open/closed state lives in the DOM, not here: expanding a card or a transcript
+  // never re-renders, so there is nothing to restore afterwards.
   const transcriptText = {};          // id -> fetched transcript_text, cached across re-renders
 
   const SKILL_LEVELS = ["Beginner", "Intermediate", "Advanced"];
@@ -460,26 +461,69 @@ window.pageInit = async (S) => {
   // like Nic Saraev or Carson Reed) — a bottom-up knowledge base so the coach can draw on
   // someone else's playbook. Sits at the bottom of the page, below the four dimensions;
   // transcript_text is fetched lazily per row (the /me payload only carries the light fields).
+  /** One transcript inside a mentor card. Compact by design — the body only appears on demand
+   *  (the /me payload carries light fields; the text is fetched per row and cached). */
   function transcriptRow(t) {
-    const open = openTranscripts.has(String(t.id));
-    const text = transcriptText[t.id];
-    return `<div class="card pad" style="margin-bottom:10px">
+    return `<div class="mx-row" data-hay="${esc((t.title || "").toLowerCase())}">
       <div class="row between" style="gap:10px;align-items:flex-start">
         <div style="min-width:0">
-          <div>${S.ICON.doc}<strong>${esc(t.title)}</strong></div>
-          <div class="sub" style="margin-top:2px">${esc(t.mentor_name)}${t.source_url ? ` · <a href="${esc(t.source_url)}" target="_blank" rel="noopener" class="linky">source</a>` : ""}</div>
+          <div class="mx-title">${esc(t.title)}</div>
+          ${t.source_url ? `<a href="${esc(t.source_url)}" target="_blank" rel="noopener" class="linky sub">source</a>` : ""}
         </div>
         <div class="row" style="gap:8px;flex:none">
-          <a href="#" class="linky" data-view-transcript="${t.id}">${open ? "hide" : "view"}</a>
+          <a href="#" class="linky" data-view-transcript="${t.id}">view</a>
           ${readOnly ? "" : `<a href="#" class="linky danger" data-del-transcript="${t.id}">delete</a>`}
         </div>
       </div>
-      ${open ? `<div class="prewrap" style="margin-top:10px;max-height:340px;overflow:auto;padding-top:10px;border-top:1px solid var(--line)">${text != null ? esc(text) : "Loading…"}</div>` : ""}
+      <div class="prewrap mx-body" hidden></div>
     </div>`;
   }
 
+  /** Transcripts grouped by mentor, biggest library first — the unit the UI is built around. */
+  function mentorGroups() {
+    const by = new Map();
+    for (const t of data.transcripts || []) {
+      const name = t.mentor_name || "Unknown";
+      if (!by.has(name)) by.set(name, []);
+      by.get(name).push(t);
+    }
+    return [...by.entries()]
+      .map(([name, items]) => ({ name, items }))
+      .sort((a, b) => b.items.length - a.items.length || a.name.localeCompare(b.name));
+  }
+
+  /** One mentor, collapsed to a tile: name, count, and the newest few titles. */
+  function mentorCard(g) {
+    const preview = g.items.slice(0, 4);
+    const hay = (g.name + " " + g.items.map((t) => t.title || "").join(" ")).toLowerCase();
+    return `<div class="mx-card card pad" data-hay="${esc(hay)}">
+      <div class="row between" style="gap:8px;align-items:center">
+        <div class="row" style="gap:8px;align-items:center;min-width:0">
+          ${S.ICON.doc}<strong class="mx-title">${esc(g.name)}</strong>
+        </div>
+        <span class="pill" style="flex:none">${g.items.length}</span>
+      </div>
+      <div class="mx-preview sub">${preview.map((t) => `<div class="mx-title">${esc(t.title)}</div>`).join("")}${
+        g.items.length > preview.length ? `<div style="margin-top:4px">+ ${g.items.length - preview.length} more</div>` : ""}</div>
+      <div class="mx-full" hidden>
+        ${g.items.length > 6 ? `<input type="search" class="mx-q" placeholder="Search these transcripts…" autocomplete="off">` : ""}
+        <div class="mx-rows">${g.items.map(transcriptRow).join("")}</div>
+        <div class="empty mx-nohit" hidden>Nothing matches that search.</div>
+      </div>
+      <div style="margin-top:8px">
+        <a href="#" class="linky mx-toggle">Show all ${g.items.length}</a>
+      </div>
+    </div>`;
+  }
+
+  // Grouped by MENTOR rather than listed flat, mirroring Atrium's Watcher tab. A flat list was
+  // unusable the moment a bulk import landed: one creator alone can be 100+ transcripts, so the
+  // page became an endless column of near-identical full-width rows. Now each mentor is one tile
+  // that expands in place. All of it (expand, search, viewing a body) is DOM-only — no re-render,
+  // so scroll position, open cards and typed searches survive every interaction.
   function libraryBlock() {
-    const items = data.transcripts || [];
+    const groups = mentorGroups();
+    const total = (data.transcripts || []).length;
     return `<div class="card" style="margin-top:16px">
       <div class="card-head">
         <h3>${S.ICON.book}Mentor library</h3>
@@ -489,8 +533,11 @@ window.pageInit = async (S) => {
         </div>`}
       </div>
       <div class="card-body">
-        <div class="sub" style="margin-bottom:12px">Full video/lesson transcripts from outside mentors (e.g. Atrium Watcher creators like Nic Saraev or Carson Reed) — a pseudo-mentor knowledge base your coach can draw on.</div>
-        ${items.length ? items.map(transcriptRow).join("") : '<div class="empty">No transcripts imported yet.</div>'}
+        <div class="sub" style="margin-bottom:12px">Full video/lesson transcripts from outside mentors (e.g. Atrium Watcher creators like Nick Saraev or Carson Reed) — a pseudo-mentor knowledge base your coach can draw on.${total ? ` <strong>${total}</strong> transcript${total === 1 ? "" : "s"} from <strong>${groups.length}</strong> mentor${groups.length === 1 ? "" : "s"}.` : ""}</div>
+        ${total ? `<input id="mx-search" type="search" placeholder="Search mentors and titles…" autocomplete="off" style="margin-bottom:10px">
+          <div id="mx-none" class="empty" hidden>Nothing matches that search.</div>
+          <div class="mx-grid">${groups.map(mentorCard).join("")}</div>`
+          : '<div class="empty">No transcripts imported yet.</div>'}
       </div>
     </div>`;
   }
@@ -560,18 +607,65 @@ window.pageInit = async (S) => {
       if (dt.open) openSubs.add(dt.dataset.ui); else openSubs.delete(dt.dataset.ui);
     }));
 
+    // --- mentor library: expand / search / read, all without a re-render ------------------------
+    // Deliberately DOM-only. Re-rendering the page to open a card would drop scroll position, close
+    // every other card and wipe whatever the user had typed into a search box.
+    S.qsa(".mx-card").forEach((card) => {
+      const toggle = S.qs(".mx-toggle", card);
+      const full = S.qs(".mx-full", card);
+      const preview = S.qs(".mx-preview", card);
+      const count = S.qsa(".mx-row", card).length;
+      if (toggle) toggle.onclick = (e) => {
+        e.preventDefault();
+        const open = full.hidden;
+        full.hidden = !open;
+        if (preview) preview.hidden = open;
+        // An expanded card spans the whole grid — a long list in one narrow column is unreadable.
+        card.classList.toggle("expanded", open);
+        toggle.textContent = open ? "Show less" : `Show all ${count}`;
+        if (open) { const q = S.qs(".mx-q", card); if (q) q.focus(); }
+      };
+      // Per-mentor title filter (only rendered once a mentor has enough transcripts to need it).
+      const q = S.qs(".mx-q", card);
+      if (q) q.oninput = () => {
+        const term = q.value.trim().toLowerCase();
+        let shown = 0;
+        S.qsa(".mx-row", card).forEach((row) => {
+          const hit = !term || row.dataset.hay.indexOf(term) !== -1;
+          row.hidden = !hit;
+          if (hit) shown += 1;
+        });
+        const none = S.qs(".mx-nohit", card); if (none) none.hidden = shown > 0;
+      };
+    });
+
+    // Top-level search across mentor names AND every title they hold.
+    const mxs = S.qs("#mx-search");
+    if (mxs) mxs.oninput = () => {
+      const term = mxs.value.trim().toLowerCase();
+      let shown = 0;
+      S.qsa(".mx-card").forEach((card) => {
+        const hit = !term || card.dataset.hay.indexOf(term) !== -1;
+        card.hidden = !hit;
+        if (hit) shown += 1;
+      });
+      const none = S.qs("#mx-none"); if (none) none.hidden = shown > 0;
+    };
+
     // Viewing a transcript is read-only in both modes; fetch its text once and cache it.
     S.qsa("[data-view-transcript]").forEach((a) => a.onclick = async (e) => {
       e.preventDefault();
       const id = a.dataset.viewTranscript;
-      if (openTranscripts.has(id)) { openTranscripts.delete(id); render(); return; }
-      openTranscripts.add(id);
-      render();
+      const body = S.qs(".mx-body", a.closest(".mx-row"));
+      if (!body.hidden) { body.hidden = true; a.textContent = "view"; return; }
+      body.hidden = false;
+      a.textContent = "hide";
       if (transcriptText[id] == null) {
+        body.textContent = "Loading…";
         try { const t = await api(`/api/development/transcripts/${id}`); transcriptText[id] = t.transcript_text; }
-        catch (e) { transcriptText[id] = "(couldn't load this transcript)"; }
-        render();
+        catch (err) { transcriptText[id] = "(couldn't load this transcript)"; }
       }
+      body.textContent = transcriptText[id];
     });
 
     if (readOnly) return;
