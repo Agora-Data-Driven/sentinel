@@ -26,7 +26,7 @@ python -m venv .venv
 # macOS/Linux:         source .venv/bin/activate
 pip install -r requirements.txt
 
-python seed.py                        # builds all 19 tables + realistic sample data
+python seed.py                        # builds all 38 model tables + realistic sample data
 uvicorn app.main:app --reload         # serves API + frontend on http://localhost:8000
 ```
 
@@ -119,13 +119,16 @@ sentinel/
 │   │   ├── constants.py       # roles, statuses, enums
 │   │   ├── security.py        # JWT cookie auth + RBAC guards
 │   │   ├── serializers.py     # model → dict (controls field exposure)
-│   │   ├── models/            # 19 tables, grouped by domain
+│   │   ├── models/            # 38 tables, grouped by domain
 │   │   ├── schemas/           # Pydantic request models
-│   │   ├── routers/           # auth, attendance, gym, tasks, people, leave, notifications, reports, admin, meta
-│   │   ├── services/          # attendance engine, leave, gym, notifications, settings, audit
+│   │   ├── routers/           # 16: auth, attendance, gym, tasks, people, leave, development,
+│   │   │                      #     payroll, reports, admin, manage, notifications, meta, cron,
+│   │   │                      #     stream, internal
+│   │   ├── services/          # attendance engine, leave, gym, notifications, settings, audit,
+│   │   │                      #     atrium bridges, mentor search, payroll, task config/templates
 │   │   └── utils/             # timezone, qr, csv
-│   ├── alembic/               # migrations (optional; app auto-creates tables for MVP)
-│   ├── seed.py                # populates all 19 tables
+│   ├── alembic/               # migrations — production truth (run at startup via entrypoint.sh)
+│   ├── seed.py                # populates the 38 model tables
 │   ├── make_badges.py         # writes printable QR badges to ../badges/
 │   └── requirements.txt
 ├── deploy/                    # Cloud Run deploy.ps1 + seed-job.ps1 + DEPLOY.md
@@ -133,7 +136,9 @@ sentinel/
 ├── frontend/
 │   ├── static/css/styles.css  # Atrium-matched design system
 │   ├── static/js/             # app.js (shell) + one file per page + kiosk.js
-│   ├── pages/                 # dashboard, attendance, gym, tasks, people, leave, reports, settings, login, kiosk, scanner
+│   ├── pages/                 # 19 shells: dashboard, attendance, approvals, gym, growth, reading,
+│   │                          #   academy, philosophical, spiritual, people, leave, north-star,
+│   │                          #   reports, settings, manage, payroll, login, kiosk, scanner
 │   ├── manifest.json          # PWA
 │   └── sw.js                  # service worker (offline kiosk)
 ├── .env.example
