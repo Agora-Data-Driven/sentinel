@@ -69,6 +69,9 @@ unit map + cookbook.
    adding anything client-visible (internal fields must never cross to Atrium).
 6. **Add a vocab/enum the frontend needs** — `routers/meta.py` (`GET /api/vocab`) or, for the
    board, a `task_vocab` row via `services/task_config.py`.
+7. **RETIRE a board status** — a `task_config.RETIRED_STATUSES` entry (`{"Old": SURVIVING}`), not
+   just a `constants.TASK_STATUSES` edit. The seeded DB row outranks the code defaults, and
+   deleting it while a task still holds the name drops that card off the board. See AGENTS.md §5.
 
 Verify commands (from `backend/`): `.\.venv\Scripts\Activate.ps1; pytest` — or, when
 `backend/.venv` doesn't exist on this machine, `..\..\.venv\Scripts\python.exe -m pytest`

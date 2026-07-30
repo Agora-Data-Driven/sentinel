@@ -107,6 +107,31 @@ def test_delete_status_in_use_is_blocked(client, db, make_user, auth):
     assert client.delete(f"/api/manage/task-vocab/{blocked['id']}").status_code == 409  # in use
 
 
+def test_retired_statuses_are_gone_and_their_tasks_moved(client, db, make_user, auth):
+    """Retiring a status has to do BOTH halves, or work disappears.
+
+    Dropping the name from the code defaults leaves the seeded `task_vocab` row in charge, so the
+    column keeps rendering; deleting the row while a task still holds the name drops that task off
+    the board entirely (renderBoard groups by the current status list). `retire_statuses` moves
+    first, then deletes — and it runs on every boot, which is how this lands in prod.
+    """
+    from app.services import task_config
+
+    auth(make_user(C.ROLE_SUPER_ADMIN))
+    stranded = _task(db, status="For Review")
+    # The retired names are re-created here to simulate a DB seeded before the removal.
+    for name in task_config.RETIRED_STATUSES:
+        client.post("/api/manage/task-vocab", json={"kind": "status", "name": name})
+
+    task_config.retire_statuses(db)
+
+    live = client.get("/api/vocab").json()["task_statuses"]
+    assert not (set(task_config.RETIRED_STATUSES) & set(live))
+    db.expire_all()
+    assert db.get(Task, stranded.id).status == C.TASK_BLOCKED     # moved, not stranded
+    assert db.get(Task, stranded.id).status in live               # ...onto a column that exists
+
+
 def test_add_custom_priority_then_use_it(client, make_user, auth):
     auth(make_user(C.ROLE_SUPER_ADMIN))
     client.post("/api/manage/task-vocab", json={"kind": "priority", "name": "Critical", "color": "#B91C1C"})

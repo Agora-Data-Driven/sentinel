@@ -10,12 +10,11 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..constants import PRIORITIES, TASK_LABELS, TASK_STATUSES
-from ..models import TaskVocabItem
+from ..constants import PRIORITIES, TASK_BLOCKED, TASK_LABELS, TASK_STATUSES
+from ..models import Task, TaskVocabItem
 
 DEFAULT_STATUS_COLORS = {
-    "To Do": "#6B7280", "In Progress": "#3B82F6", "For Review": "#9484FB",
-    "Waiting for Client": "#F59E0B", "Revision Needed": "#F97316",
+    "To Do": "#6B7280", "In Progress": "#3B82F6", "Revision Needed": "#F97316",
     "Completed": "#54B948", "Blocked": "#EF4444",
 }
 DEFAULT_LABEL_COLORS = {"Design": "#EC4899", "Copy": "#8B5CF6", "Ads": "#F97316", "SEO": "#06B6D4", "Dev": "#3B82F6"}
@@ -59,3 +58,40 @@ def labels(db: Session) -> list[str]:
 
 def priorities(db: Session) -> list[str]:
     return names(db, "priority")
+
+
+# --- Retired statuses -------------------------------------------------------------------------
+# Dropping a name from `constants.TASK_STATUSES` is NOT enough to remove a board column: the DB row
+# in `task_vocab` was seeded on first boot and overrides the code defaults from then on, so the
+# column keeps rendering. Worse, a task still holding a retired status disappears from the board
+# entirely — `renderBoard` groups by the CURRENT status list and drops anything outside it.
+# So a retirement is two moves, and this map drives both: move the tasks, then delete the row.
+RETIRED_STATUSES = {
+    # Removed 2026-07-30. Both only meant "blocked on someone", the same call Atrium made a day
+    # earlier for its matching stages (workspace._STAGE_ALIASES -> "blocked").
+    "For Review": TASK_BLOCKED,
+    "Waiting for Client": TASK_BLOCKED,
+}
+
+
+def retire_statuses(db: Session) -> list[str]:
+    """Move every task off a retired status, then delete its vocab row. Returns what it retired.
+
+    Idempotent and safe to run on every boot — this is how the change reaches PRODUCTION, where
+    deploys don't run Alembic (same reason `main._ensure_columns` carries the 'mental' data fix).
+    Order matters: the tasks move FIRST, so the delete can never strand a card off the board.
+    """
+    retired: list[str] = []
+    for old, new in RETIRED_STATUSES.items():
+        moved = db.query(Task).filter(Task.status == old).update(
+            {Task.status: new}, synchronize_session=False)
+        row = db.execute(
+            select(TaskVocabItem).where(TaskVocabItem.kind == "status", TaskVocabItem.name == old)
+        ).scalar_one_or_none()
+        if row is not None:
+            db.delete(row)
+        if moved or row is not None:
+            retired.append(f"{old} -> {new} ({moved} task(s))")
+    if retired:
+        db.commit()
+    return retired

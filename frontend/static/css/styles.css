@@ -579,7 +579,6 @@ textarea { resize: vertical; min-height: 78px; }
 .wl-bar { display: flex; height: 12px; border-radius: var(--pill); overflow: hidden; background: var(--input); }
 .wl-bar i { display: block; }
 .wl-bar .s-todo { background: var(--muted); } .wl-bar .s-prog { background: var(--info); }
-.wl-bar .s-review { background: var(--violet); } .wl-bar .s-wait { background: var(--pull); }
 .wl-bar .s-rev { background: var(--warn); } .wl-bar .s-block { background: var(--danger); }
 .wl-bar .s-none { background: transparent; }
 .skeleton-row { color: var(--muted); padding: 28px 20px; text-align: center; }

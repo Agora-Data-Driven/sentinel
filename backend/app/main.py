@@ -171,6 +171,11 @@ def _seed_config() -> None:
                 db.add(ServiceTemplate(**row))
             db.commit()
             print("[sentinel] seeded service templates")
+        # A status removed from the code defaults still has a seeded DB row overriding them, so it
+        # keeps its board column until that row goes. Idempotent; this is what lands the change in
+        # prod, where deploys don't run Alembic. See task_config.RETIRED_STATUSES.
+        for line in task_config.retire_statuses(db):
+            print(f"[sentinel] retired task status: {line}")
     except Exception as exc:  # never let seeding crash startup
         print(f"[sentinel] config seed skipped: {exc}")
     finally:
