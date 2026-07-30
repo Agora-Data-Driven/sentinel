@@ -325,6 +325,28 @@ validate a new migration by replaying history from scratch — test the single r
 isolation: `alembic stamp <parent>` on an existing (seeded) DB, then `alembic upgrade head`.
 That is how `a9c4e7f2d5b8` was verified.
 
+### 🔴 Removing a board column is TWO moves — deleting the status name alone hides work
+
+Statuses are DB-backed (`task_vocab`, seeded on first boot from `constants.TASK_STATUSES`), and
+`renderBoard` builds the columns from `/api/vocab` and groups tasks by that exact list. So:
+
+1. Dropping the name from `constants.py` changes **nothing** on any existing deploy — the seeded
+   row still wins, and the column keeps rendering.
+2. Deleting the row while a task still holds that status makes the task **vanish** — it groups
+   under a key no column exists for. No error, no empty state; the card is just gone.
+
+`task_config.RETIRED_STATUSES` + `retire_statuses(db)` do both halves in the right order (move the
+tasks, then delete the row) and run from `main._seed_config` on every boot — which is how the
+change reaches **prod, where deploys don't run Alembic**. Retire a status by adding a
+`{"Old Name": SURVIVING_STATUS}` entry there, never by editing the list alone. The manual path
+(Manage → Task Fields → Statuses) is guarded for the same reason: a delete 409s while in use.
+
+**For Review + Waiting for Client were removed this way on 2026-07-30** (both folded into Blocked),
+a day after Atrium retired the matching stages — so `atrium_tasks.STAGE_BY_STATUS` is 5 entries now.
+Leaving them mapped after Atrium dropped them was a quiet lie: `for_review` still POSTed 200 while
+Atrium's `_STAGE_ALIASES` filed the card under Blocked, so the two boards disagreed about where the
+client's card actually was.
+
 ### 🟡 A board scoped by role still showed other people's work
 
 An intern's Task Board showed seven cards, none of them theirs (2026-07-30). Two independent

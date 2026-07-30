@@ -194,8 +194,8 @@ window.TaskBoard = {
     try { rows = await S.api("/api/tasks/summary"); }
     catch (err) { board.innerHTML = `<div class="empty">${S.esc(err.detail || "Couldn't load the team summary.")}</div>`; return; }
     if (!rows.length) { board.innerHTML = `<div class="empty">No teammates to show.</div>`; return; }
-    const barSegs = ["To Do", "In Progress", "For Review", "Waiting for Client", "Revision Needed", "Blocked"];
-    const segCls = { "To Do": "s-todo", "In Progress": "s-prog", "For Review": "s-review", "Waiting for Client": "s-wait", "Revision Needed": "s-rev", "Blocked": "s-block" };
+    const barSegs = ["To Do", "In Progress", "Revision Needed", "Blocked"];
+    const segCls = { "To Do": "s-todo", "In Progress": "s-prog", "Revision Needed": "s-rev", "Blocked": "s-block" };
     board.innerHTML = `<table class="mon-tbl">
       <thead><tr><th>Teammate</th><th>Workload</th><th class="num">Open</th><th class="num">Overdue</th><th class="num">Done · 7d</th></tr></thead>
       <tbody>${rows.map((r) => {
@@ -409,8 +409,9 @@ window.TaskBoard = {
     // The bridge button means the opposite thing on each kind of card: a Sentinel row is PUSHED to
     // Atrium (one-way, client-safe fields only), while an Atrium card is already there — the toggle
     // just decides whether the client can see it.
-    const footer = `${t.status !== "For Review" ? `<button class="btn ghost" id="d-review">Move to Review</button>` : ""}
-      <button class="btn ghost" id="d-edit">Edit</button>
+    // No "Move to Review" shortcut — the For Review column was removed 2026-07-30 (statuses live in
+    // task_vocab; a hardcoded status here would be a name the board no longer has a column for).
+    const footer = `<button class="btn ghost" id="d-edit">Edit</button>
       ${canManage ? `<button class="btn ghost" id="d-atrium">${isAtrium
           ? (t.atrium_visible ? "✓ Client can see this" : "Share with client")
           : (t.atrium_visible ? "✓ In Atrium" : "Send to Atrium")}</button>` : ""}
@@ -530,10 +531,6 @@ window.TaskBoard = {
     // Priority (AM only)
     if (isAM && S.qs("#d-priority")) S.qs("#d-priority").onchange = async (e) => {
       try { await S.api(`/api/tasks/${id}/priority`, { method: "PATCH", body: { priority: e.target.value } }); S.toast("Priority updated", "ok"); }
-      catch (err) { S.toast(err.detail, "err"); }
-    };
-    if (S.qs("#d-review")) S.qs("#d-review").onclick = async () => {
-      try { await S.api(`/api/tasks/${id}/status`, { method: "PATCH", body: { status: "For Review" } }); S.toast("Sent to review", "ok"); m.close(); load(); }
       catch (err) { S.toast(err.detail, "err"); }
     };
     if (S.qs("#d-atrium")) S.qs("#d-atrium").onclick = async () => {

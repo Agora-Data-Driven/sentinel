@@ -17,10 +17,8 @@ from ..events import broker
 
 from ..constants import (
     NOTIF_TASK_ASSIGNED,
-    NOTIF_TASK_REVIEW,
     ROLE_TEAM_LEAD,
     TASK_COMPLETED,
-    TASK_FOR_REVIEW,
 )
 from ..database import get_db
 from ..models import AtriumApproval, Client, Task, TaskComment, TaskHistory, User
@@ -431,10 +429,8 @@ def move_status(task_id: str, payload: TaskStatusIn, user: User = Depends(get_cu
     db.commit()
     audit.record(db, actor_id=user.id, table_name="tasks", record_id=task.id, action="move",
                  old={"status": old}, new={"status": payload.status})
-    # Moving into review pings the AM / admins.
-    if payload.status == TASK_FOR_REVIEW and task.account_manager_id:
-        notif.notify(db, user_id=task.account_manager_id, type=NOTIF_TASK_REVIEW,
-                     title=f"Task ready for review: {task.title}", link=f"/dashboard?open={task.id}")
+    # (The "moving into review pings the AM" notification retired with the "For Review" status on
+    # 2026-07-30 — there is no review column left to move into.)
     _broadcast("moved", task, user.id)
     return task_detail(task, db)
 

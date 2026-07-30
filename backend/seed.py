@@ -48,11 +48,9 @@ from app.constants import (  # noqa: E402
     ROLE_TEAM_LEAD,
     TASK_BLOCKED,
     TASK_COMPLETED,
-    TASK_FOR_REVIEW,
     TASK_IN_PROGRESS,
     TASK_REVISION,
     TASK_TODO,
-    TASK_WAITING_CLIENT,
 )
 from app.database import Base, SessionLocal, engine  # noqa: E402
 from app import models  # noqa: E402  (registers mappers)
@@ -319,7 +317,7 @@ def _seed_attendance(db, users) -> None:
     handover_pool = [
         "Handed off the Acme creatives to review; awaiting client font files.",
         "NovaCorp report is 80% done — pick up the paid-social section tomorrow.",
-        "Left BrandCo ad copy in For Review. Blocker: legal sign-off pending.",
+        "Left BrandCo ad copy in Blocked. Blocker: legal sign-off pending.",
         "Data pull for Riverdance finished; dashboards refreshed.",
     ]
     for di, day in enumerate(days):
@@ -467,7 +465,7 @@ def _seed_tasks(db, users, teams, clients) -> None:
          [{"text": "Wireframe", "done": True}, {"text": "Build component", "done": False}],
          "Site Refresh", "Web", None, False, None, "Use the new design tokens."),
         ("Blog: 'Attribution 101'", "NovaCorp", "Data Analyst", "Ana Reyes", PRIORITY_MEDIUM,
-         TASK_FOR_REVIEW, ["Copy", "SEO"], 1, "1,500-word explainer on marketing attribution.",
+         TASK_BLOCKED, ["Copy", "SEO"], 1, "1,500-word explainer on marketing attribution.",
          [{"text": "Outline", "done": True}, {"text": "Draft", "done": True}, {"text": "Edit", "done": False}],
          "Content Engine", "Blog", "https://docs.example/nova-attribution", False, "Keep it beginner-friendly."),
         ("Lifecycle Email Flow — Welcome", "BrandCo", "Lifecycle", "Dana Lim", PRIORITY_LOW,
@@ -479,7 +477,7 @@ def _seed_tasks(db, users, teams, clients) -> None:
          TASK_REVISION, ["Ads"], 0, "Restructure into SKAG → SPAG.", [{"text": "Export current", "done": True}],
          "Q3 Growth", "Paid Search", None, False, "Client wants ROAS focus.", "Prev agency left a mess."),
         ("Landing Page Copy — RV Summer", "Riverdance RV", "Lifecycle", "Dana Lim", PRIORITY_MEDIUM,
-         TASK_WAITING_CLIENT, ["Copy"], 3, "Summer promo landing page copy.", [],
+         TASK_BLOCKED, ["Copy"], 3, "Summer promo landing page copy.", [],
          "Summer Sale", "Landing", "https://docs.example/rv-summer", True, "Awaiting client's promo dates.", None),
         ("Monthly Report — Acme (June)", "Acme Corp", "Data Analyst", "Ana Reyes", PRIORITY_LOW,
          TASK_COMPLETED, ["SEO", "Ads"], -2, "June performance report.",
@@ -498,7 +496,7 @@ def _seed_tasks(db, users, teams, clients) -> None:
          [{"text": "Pixel base", "done": True}, {"text": "CAPI gateway", "done": False}],
          "Q3 Growth", "Tech", None, False, None, None),
         ("Keyword Map — RV", "Riverdance RV", "Data Analyst", "Faye Torres", PRIORITY_MEDIUM,
-         TASK_FOR_REVIEW, ["SEO"], 1, "Keyword map for the RV rental category.", [],
+         TASK_REVISION, ["SEO"], 1, "Keyword map for the RV rental category.", [],
          "Organic", "Report", None, False, None, None),
         ("Newsletter — July", "BrandCo", "Lifecycle", "Dana Lim", PRIORITY_LOW, TASK_TODO,
          ["Copy", "Design"], 8, "July newsletter.", [], "Retention", "Email", None, False, None, None),

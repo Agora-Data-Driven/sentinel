@@ -61,11 +61,13 @@ def _gone_or_missing_route(body: dict, message: str = GONE) -> str:
 
 # Sentinel status label -> Atrium stage key. Atrium deliberately adopted Sentinel's status set
 # (constants.TASK_STATUSES) so the two boards speak the same language; this is the key mapping.
+# For Review / Waiting for Client are gone from BOTH sides now (Atrium 2026-07-29, here 2026-07-30
+# — see task_config.RETIRED_STATUSES). Keeping them here after Atrium retired them was a quiet
+# lie: `for_review` still POSTed fine, but Atrium's _STAGE_ALIASES landed the card on Blocked, so
+# the two boards disagreed about where the client's card was.
 STAGE_BY_STATUS = {
     "To Do": "todo",
     "In Progress": "in_progress",
-    "For Review": "for_review",
-    "Waiting for Client": "waiting_client",
     "Revision Needed": "revision",
     "Completed": "completed",
     "Blocked": "blocked",

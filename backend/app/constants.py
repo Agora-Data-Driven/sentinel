@@ -106,16 +106,17 @@ SET_TYPES = [SET_NORMAL, SET_WARMUP, SET_DROP, SET_FAILURE]
 # --- Tasks -----------------------------------------------------------------
 TASK_TODO = "To Do"
 TASK_IN_PROGRESS = "In Progress"
-TASK_FOR_REVIEW = "For Review"
-TASK_WAITING_CLIENT = "Waiting for Client"
 TASK_REVISION = "Revision Needed"
 TASK_COMPLETED = "Completed"
 TASK_BLOCKED = "Blocked"
+# "For Review" and "Waiting for Client" were REMOVED 2026-07-30 at the user's request — both only
+# ever meant "blocked on someone", so they fold into Blocked. Atrium retired the matching stages
+# first (2026-07-29, workspace._STAGE_ALIASES maps for_review/waiting_client -> blocked), so the two
+# boards are back in step: a drag to "For Review" here used to land the client's card on Blocked
+# there. Retiring one is not just a list edit — see task_config.RETIRED_STATUSES.
 TASK_STATUSES = [
     TASK_TODO,
     TASK_IN_PROGRESS,
-    TASK_FOR_REVIEW,
-    TASK_WAITING_CLIENT,
     TASK_REVISION,
     TASK_COMPLETED,
     TASK_BLOCKED,
@@ -143,7 +144,8 @@ REQ_REJECTED = "Rejected"
 # --- Notifications ---------------------------------------------------------
 NOTIF_APPROVAL = "approval"
 NOTIF_TASK_ASSIGNED = "task_assigned"
-NOTIF_TASK_REVIEW = "task_review"
+# NOTIF_TASK_REVIEW ("task_review") retired with the "For Review" status (2026-07-30). Rows already
+# in `notifications` keep that type string — it is only ever displayed, never matched on.
 NOTIF_TASK_OVERDUE = "task_overdue"
 NOTIF_GYM_MISSING = "gym_missing"
 NOTIF_ANNOUNCEMENT = "announcement"
