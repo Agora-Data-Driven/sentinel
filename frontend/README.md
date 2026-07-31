@@ -14,7 +14,7 @@ kiosk. Operating rules (CSP, cache bumping, `api()`-only fetches) live in
 | `static/js/taskboard.js` | Mountable Kanban embedded in the dashboard (no /tasks page — the URL 307s to /dashboard). Optimistic DnD (native HTML5 — deliberate, see AGENTS.md §9), SSE reload, quick-add, Atrium-card editing |
 | `static/js/dashboard.js` | KPIs, self clock-in card, hosts the task board |
 | `static/js/attendance.js` · `approvals.js` | Time page · combined attendance+leave approvals inbox (team_lead+) |
-| `static/js/gym.js` | Calendar, no-lock day editor, history |
+| `static/js/gym.js` | Calendar, no-lock day editor, saved routines (one-tap workout templates), history |
 | `static/js/growth.js` · `reading.js` | Development hub (4 dimensions, Mentor Library import) · reading canon |
 | `static/js/academy.js` | Mastery Engine iframe (Professional tab) |
 | `static/js/engine-tab.js` | ONE controller for the Philosophical + Spiritual tabs — each shell pins a program via `<body data-program>` → iframe `?program=` |
@@ -35,7 +35,7 @@ kiosk. Operating rules (CSP, cache bumping, `api()`-only fetches) live in
 |---|---|---|
 | `taskboard.js` | `/api/tasks*` | `task_card` / `task_detail` (+ Atrium cards via `as_board_card` — string ids `atrium:<client>:<id>`) |
 | `attendance.js`, `approvals.js` | `/api/attendance/*` | `summary_dict`, `attendance_request_dict` |
-| `gym.js` | `/api/gym/*` | `gym_log_dict`, `body_metric_dict`, `personal_record_dict` |
+| `gym.js` | `/api/gym/*` | `gym_log_dict`, `gym_routine_dict`, `body_metric_dict`, `personal_record_dict` |
 | `leave.js`, `approvals.js` | `/api/leave/*` | `leave_type_dict`, `leave_balance_dict`, `leave_request_dict` |
 | `growth.js`, `reading.js` | `/api/development/*` | `development_profile_dict`, `physical_goal_dict`, `growth_item_dict`, `reading_item_dict`, `mentor_transcript_dict` |
 
@@ -67,6 +67,12 @@ Deploy: `..\deploy\deploy.ps1` (Cloud Run `sentinel`, asia-southeast1).
 - **No inline `<script>`** — CSP `script-src 'self'`; `who-we-are.js` exists precisely because an
   inline block was silently blocked and blanked the page.
 - **`element.onclick = handler` passes the Event as arg 1** — always `() => handler()`.
+- **`modal()` reuses ONE `#modal-ov` node, so modals cannot stack** — opening a second one replaces
+  the first. Anything that needs a picker *inside* an editor must render the editor inline (that is
+  why `gym.js`'s routine editor lives in `#tabc`, not a dialog) and keep the modal for the picker.
+- **Two renderers must never share a host element.** `renderGoals` and `renderBodyStats` both wrote
+  `#gym-body` and each set `innerHTML`, so whichever fetch resolved last silently erased the other
+  card. They own `#gym-goals` / `#gym-body` now — give every async renderer its own node.
 - Forgetting the `CACHE` bump ships stale assets to everyone (AGENTS.md §5 has the full two-layer
   cache story; the server's `Cache-Control: no-cache` half is pinned by backend tests).
 - No React, no bundler, no TypeScript — keep matching what's here.

@@ -19,7 +19,7 @@ unit map + cookbook.
 | `app/serializers.py` | **The field-exposure boundary.** `user_public`/`user_full`, `task_card`/`task_detail`/`atrium_payload`, `summary_dict`/`attendance_request_dict`, `gym_log_dict`, `leave_*_dict`, `*_goal_dict`, `mentor_transcript_dict`, `notification_dict`, … |
 | `app/events.py` | In-process SSE event broker (consumed by `routers/stream.py`) |
 | `app/observability.py` | JSON logs in prod, `ExceptionLoggingMiddleware`, optional Sentry |
-| `app/models/` | 38 tables: `user.py` (shift_templates, teams, users, qr_tokens) · `attendance.py` (3) · `gym.py` (5) · `task.py` (tasks, task_comments, task_history, service_templates, task_vocab, atrium_approvals) · `development.py` (12 incl. physical_goals, development_areas, mentor_transcripts) · `leave.py` (3) · `client.py`, `system.py` (2), `notification.py`, `payroll.py` |
+| `app/models/` | 39 tables: `user.py` (shift_templates, teams, users, qr_tokens) · `attendance.py` (3) · `gym.py` (6, incl. gym_routines) · `task.py` (tasks, task_comments, task_history, service_templates, task_vocab, atrium_approvals) · `development.py` (12 incl. physical_goals, development_areas, mentor_transcripts) · `leave.py` (3) · `client.py`, `system.py` (2), `notification.py`, `payroll.py` |
 | `app/schemas/__init__.py` | All Pydantic request bodies (single file) |
 | `app/routers/` | 16 modules — prefixes: `/api/auth`, `/api/attendance`, `/api/gym`, `/api/tasks`, `/api/people`, `/api/leave`, `/api/development`, `/api/payroll`, `/api/reports`, `/api/notifications`, `/api/cron`, `/api/internal`, `/api/manage` (whole router super_admin-gated), and bare `/api` for `admin`, `meta`, `stream` |
 | `app/services/attendance.py` | The attendance engine (punch state machine, late/grace in Manila) |
@@ -43,7 +43,7 @@ unit map + cookbook.
 |---|---|---|---|
 | Tasks | `routers/tasks.py` | `task_card`, `task_detail`, `comment_dict`, `history_dict`, `atrium_payload` | `taskboard.js` (embedded in dashboard) |
 | Attendance | `routers/attendance.py` | `summary_dict`, `attendance_request_dict` | `attendance.js`, `dashboard.js`, `approvals.js`, `kiosk.js` |
-| Gym | `routers/gym.py` | `gym_log_dict`, `body_metric_dict`, `personal_record_dict` | `gym.js` |
+| Gym | `routers/gym.py` | `gym_log_dict`, `gym_routine_dict`, `body_metric_dict`, `personal_record_dict` | `gym.js` |
 | Leave | `routers/leave.py` | `leave_type_dict`, `leave_balance_dict`, `leave_request_dict` | `leave.js`, `approvals.js` |
 | Development | `routers/development.py` | `development_profile_dict`, `goal_dict`, `physical_goal_dict`, `development_area_dict`, `growth_item_dict`, `skill_dict`, `reading_item_dict`, `mentor_transcript_dict` | `growth.js`, `reading.js` |
 
@@ -81,6 +81,9 @@ Verify commands (from `backend/`): `.\.venv\Scripts\Activate.ps1; pytest` — or
 
 - **`serializers.py` is a security boundary** — every response goes through it; never return an
   ORM object.
+- **Literal paths must be registered BEFORE `/{id}` paths in the same router.** FastAPI matches in
+  declaration order, so a `GET /api/gym/routines` written below `GET /api/gym/{log_id}` is swallowed
+  and answers **422** (int parse), not a list. `tests/test_gym_routines.py` pins that ordering.
 - **The no-cache middleware is pinned by `tests/test_security_headers.py`** — `Cache-Control:
   no-cache` on non-API responses fixed the 2026-07-27 stale-asset incident; don't "optimize" it.
 - **Alembic history is append-only** — never edit a shipped revision; `d8f4b2c6a9e3` failing in

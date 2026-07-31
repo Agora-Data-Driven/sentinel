@@ -20,6 +20,7 @@ from .models import (
     DevelopmentProfile,
     GrowthItem,
     GymLog,
+    GymRoutine,
     LeaveBalance,
     LeaveRequest,
     LeaveType,
@@ -322,6 +323,23 @@ def gym_log_dict(g: GymLog, db: Session, with_exercises: bool = False) -> dict:
             for e in g.exercises
         ]
     return d
+
+
+def gym_routine_dict(r: GymRoutine) -> dict:
+    """A saved workout template. ``total_sets`` is precomputed so the routine list can show the
+    shape of a session without the frontend re-walking every set."""
+    exercises = _loads(r.exercises_json, [])
+    return {
+        "id": r.id,
+        "name": r.name,
+        "day_type": r.day_type,
+        "weekdays": _loads(r.weekdays_json, []),
+        "exercises": exercises,
+        "exercise_count": len(exercises),
+        "total_sets": sum(len(e.get("sets") or []) for e in exercises if isinstance(e, dict)),
+        "notes": r.notes,
+        "updated_at": _iso(r.updated_at),
+    }
 
 
 # --- Development (holistic) -------------------------------------------------

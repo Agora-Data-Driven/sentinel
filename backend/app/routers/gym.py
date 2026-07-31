@@ -1,5 +1,5 @@
 """Gym Tracker: always-editable sessions, Hevy-style exercise logging, the weekly plan +
-calendar, exercise library, and compliance."""
+calendar, saved routines (one-tap workout templates), exercise library, and compliance."""
 from __future__ import annotations
 
 import calendar as _calendar
@@ -19,17 +19,19 @@ from ..constants import (
     ROLE_TEAM_LEAD,
 )
 from ..database import get_db
-from ..models import ExerciseLibrary, GymExercise, GymLog, User
+from ..models import ExerciseLibrary, GymExercise, GymLog, GymRoutine, User
 from ..schemas import (
     GymAdminEditIn,
+    GymApplyRoutineIn,
     GymDayOpenIn,
     GymExerciseIn,
     GymPlanDayIn,
     GymPlanWeekIn,
+    GymRoutineIn,
     GymSessionEditIn,
 )
 from ..security import get_current_user, require_min_role, require_roles
-from ..serializers import gym_log_dict
+from ..serializers import gym_log_dict, gym_routine_dict
 from ..services import audit
 from ..services import gym as gym_svc
 from ..services import settings as settings_svc
@@ -226,6 +228,127 @@ def set_plan_day(payload: GymPlanDayIn, user: User = Depends(get_current_user), 
 def clear_plan_day(on: date, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Drop a date's override — it reverts to whatever the weekly split says."""
     gym_svc.clear_override(db, user.id, on)
+
+
+# --- Routines (saved workout templates) -------------------------------------
+#
+# 🔴 These routes MUST stay above the `/{log_id}` ones at the bottom of this module. FastAPI matches
+# in registration order, so a later `/routines` would be swallowed by `GET /{log_id}` and answer 422.
+
+
+def _own_routine(db: Session, user: User, routine_id: int) -> GymRoutine:
+    r = gym_svc.get_routine(db, user.id, routine_id)
+    if not r:
+        raise HTTPException(status_code=404, detail="Routine not found")
+    return r
+
+
+def _own_log(db: Session, user: User, log_id: int) -> GymLog:
+    log = db.get(GymLog, log_id)
+    if not log or log.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return log
+
+
+@router.get("/routines")
+def list_routines(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Every saved template, plus the weekday → routine defaults the Today tab pre-loads from."""
+    rows = gym_svc.list_routines(db, user.id)
+    return {
+        "routines": [gym_routine_dict(r) for r in rows],
+        "by_weekday": gym_svc.routine_weekday_map(db, user.id),
+        "day_types": GYM_DAY_TYPES,
+        "weekdays": GYM_WEEKDAYS,
+    }
+
+
+@router.post("/routines", status_code=201)
+def create_routine(payload: GymRoutineIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Create a routine — from a submitted exercise list, or straight from a logged session
+    (`from_log_id`), which is how you turn "what I just did" into "what I always do"."""
+    day_type = payload.day_type or "Custom"
+    if day_type not in GYM_DAY_TYPES:
+        raise HTTPException(status_code=400, detail="Invalid day type")
+    if payload.from_log_id:
+        log = _own_log(db, user, payload.from_log_id)
+        items = gym_svc.exercises_from_log(log)
+        if not payload.day_type and log.day_type in GYM_DAY_TYPES:
+            day_type = log.day_type
+    else:
+        items = gym_svc.normalize_routine_exercises(
+            [e.model_dump() for e in (payload.exercises or [])]
+        )
+    name = (payload.name or "").strip()[:60] or gym_svc.suggest_routine_name(db, user.id, day_type)
+    routine = GymRoutine(
+        user_id=user.id, name=name, day_type=day_type,
+        exercises_json=json.dumps(items), notes=(payload.notes or None),
+        sort_order=len(gym_svc.list_routines(db, user.id)),
+    )
+    db.add(routine)
+    db.flush()
+    gym_svc.set_routine_weekdays(db, user.id, routine, payload.weekdays or [])
+    db.commit()
+    return gym_routine_dict(routine)
+
+
+@router.patch("/routines/{routine_id}")
+def update_routine(
+    routine_id: int,
+    payload: GymRoutineIn,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Partial edit. `from_log_id` refreshes the exercises from a session — the one-tap way to push
+    a bumped weight (that slowly-climbing squat) back into the template you load every week."""
+    routine = _own_routine(db, user, routine_id)
+    if payload.name is not None:
+        name = payload.name.strip()[:60]
+        if not name:
+            raise HTTPException(status_code=400, detail="Name is required")
+        routine.name = name
+    if payload.day_type is not None:
+        if payload.day_type not in GYM_DAY_TYPES:
+            raise HTTPException(status_code=400, detail="Invalid day type")
+        routine.day_type = payload.day_type
+    if payload.from_log_id:
+        routine.exercises_json = json.dumps(gym_svc.exercises_from_log(_own_log(db, user, payload.from_log_id)))
+    elif payload.exercises is not None:
+        routine.exercises_json = json.dumps(
+            gym_svc.normalize_routine_exercises([e.model_dump() for e in payload.exercises])
+        )
+    if payload.notes is not None:
+        routine.notes = payload.notes or None
+    if payload.weekdays is not None:
+        gym_svc.set_routine_weekdays(db, user.id, routine, payload.weekdays)
+    db.commit()
+    return gym_routine_dict(routine)
+
+
+@router.delete("/routines/{routine_id}", status_code=204)
+def delete_routine(routine_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Delete a template. Sessions already logged from it are untouched — a routine is a stamp,
+    not a parent."""
+    db.delete(_own_routine(db, user, routine_id))
+    db.commit()
+
+
+@router.post("/{log_id}/apply-routine")
+def apply_routine(
+    log_id: int,
+    payload: GymApplyRoutineIn,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Load a routine into a day's session — the whole point of the feature."""
+    if payload.mode not in {"replace", "append"}:
+        raise HTTPException(status_code=400, detail="Mode must be replace or append")
+    log = _own_log(db, user, log_id)
+    routine = _own_routine(db, user, payload.routine_id)
+    gym_svc.apply_routine(db, log, routine, payload.mode)
+    _recompute(log, db)
+    db.commit()
+    db.refresh(log)
+    return gym_log_dict(log, db, with_exercises=True)
 
 
 @router.get("/calendar")
