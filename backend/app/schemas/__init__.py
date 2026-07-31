@@ -157,6 +157,42 @@ class GymPlanDayIn(BaseModel):
     cardio: str | None = None
 
 
+class GymRoutineSetIn(BaseModel):
+    """One planned set in a routine. No ``done`` flag — a template holds sets to DO, not sets done."""
+    kg: float = 0
+    reps: int = 0
+    type: str = "Normal"
+
+
+class GymRoutineExerciseIn(BaseModel):
+    exercise_name: str
+    muscle_group: str | None = None
+    sets: list[GymRoutineSetIn] = Field(default_factory=list)
+    notes: str | None = None
+
+
+class GymRoutineIn(BaseModel):
+    """Create/update a saved workout template ("Push A").
+
+    Every field is optional so a PATCH can touch one thing. ``from_log_id`` copies the exercises out
+    of a logged session instead of sending them — that's both "save today's workout as a routine"
+    and "my squat went up, refresh the template from today's numbers".
+    """
+    name: str | None = None
+    day_type: str | None = None
+    exercises: list[GymRoutineExerciseIn] | None = None
+    weekdays: list[str] | None = None
+    notes: str | None = None
+    from_log_id: int | None = None
+
+
+class GymApplyRoutineIn(BaseModel):
+    """Drop a routine onto a session. ``replace`` swaps the whole workout in (and adopts its
+    split); ``append`` adds it to whatever is already logged."""
+    routine_id: int
+    mode: str = "replace"
+
+
 # --- Development (holistic) ------------------------------------------------
 class BodyMetricIn(BaseModel):
     """A body-composition snapshot. Date defaults to today (PH) when omitted.

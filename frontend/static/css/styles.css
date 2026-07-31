@@ -362,6 +362,10 @@ h2 { letter-spacing: -0.6px; } h1 { letter-spacing: -0.5px; }
 .wk-row .wd { font-weight: 700; color: var(--sub); }
 .save-tag { font-size: 12px; color: var(--muted); display: inline-flex; align-items: center; gap: 5px; min-width: 62px; }
 .save-tag.ok { color: var(--green-d); }
+/* One exercise line inside a saved routine card: name left, "4 × 8 @ 60kg" right. */
+.rt-line { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 13.5px; }
+.rt-line:last-child { border-bottom: 0; }
+.rt-line .muted { font-variant-numeric: tabular-nums; white-space: nowrap; }
 @media (max-width: 640px) {
   .cal-grid { gap: 5px; }
   .cal-cell { min-height: 62px; padding: 5px; gap: 3px; }

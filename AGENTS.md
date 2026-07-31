@@ -107,7 +107,7 @@ deploy/            deploy.ps1, seed-job.ps1, DEPLOY.md
 |---|---|
 | `auth.py` | Login (dev/password/Google/SSO), session, `/api/auth/me` |
 | `attendance.py` | Kiosk scan, punches, offline sync, approvals |
-| `gym.py` | Workouts, exercise library, schedule/overrides, cardio |
+| `gym.py` | Workouts, exercise library, schedule/overrides, cardio, **saved routines** |
 | `tasks.py` | Kanban board, priority (AM-only), Send to Atrium, **editing Atrium's own cards** |
 | `people.py` | Directory, profiles, QR badges |
 | `leave.py` | Requests, approvals, balances |
@@ -233,7 +233,7 @@ alembic revision -m "add cardio to gym schedule"   # then hand-write the upgrade
 alembic upgrade head
 ```
 
-Existing migrations are in `backend/alembic/versions/` — **17 revisions** as of 2026-07-29
+Existing migrations are in `backend/alembic/versions/` — **18 revisions** as of 2026-07-31
 (e.g. `a1c7e93f5b60_gym_cardio.py`) — copy their style. If prod's `create_all` safety net
 already built your table, the migration must be **existence-guarded** — copy
 `a9c4e7f2d5b8_service_templates_task_vocab.py` (added 2026-07-29 for exactly that case).
@@ -435,6 +435,28 @@ Design constraints worth knowing before changing it:
   and stops naming some mentors entirely once a library is large.
 
 Covered by `tests/test_mentor_search.py`.
+
+### 🟡 Gym routines: two constraints that shaped the design
+
+Saved routines (`gym_routines`, added 2026-07-31) are named workout templates — "Push A", "Push B" —
+that `services/gym.apply_routine` stamps onto a day's session in one call. Two things to know before
+extending them:
+
+1. 🔴 **Every `/api/gym/routines*` route must stay ABOVE the `/{log_id}` routes** at the bottom of
+   `routers/gym.py`. FastAPI matches in registration order, so a `/routines` declared later is
+   swallowed by `GET /{log_id}` and answers **422** (int parse) rather than listing anything.
+   `tests/test_gym_routines.py` pins this.
+2. **The weekday→routine binding lives on `gym_routines.weekdays_json`, not on `gym_schedules`.**
+   That keeps the whole feature to ONE new table, and a new table is the only schema change
+   `create_all` lands by itself. A new *column* on an existing table reaches an un-migrated DB only
+   via `main._ensure_columns`. Given the split between "which kind of day" (the weekly plan) and
+   "which routine", hanging it off the routine was also the better model — and
+   `set_routine_weekdays` moves a weekday rather than duplicating it, so "what am I doing today?"
+   always has exactly one answer.
+
+Applying with `mode="replace"` also sets the session's `day_type` from the routine (loading a Push
+template over a whole day means the day IS a push day); `append` leaves the split alone. Sets arrive
+with `done: false` — a template holds sets to *do*, and pre-ticking them would log work never done.
 
 ### 🟡 A `/go` from another machine can clobber this repo
 

@@ -1,4 +1,4 @@
-"""SQLAlchemy models for all 19 Sentinel tables, grouped by domain.
+"""SQLAlchemy models for every Sentinel table, grouped by domain.
 
 Importing this package registers every mapper on ``Base.metadata`` so ``create_all`` builds the
 full schema. The tables:
@@ -10,7 +10,8 @@ full schema. The tables:
     attendance_events, daily_attendance_summary,
     attendance_requests                              -> attendance.py
     leave_types, leave_balances, leave_requests      -> leave.py
-    gym_logs, gym_exercises, exercise_library        -> gym.py
+    gym_logs, gym_exercises, gym_routines,
+    exercise_library                                 -> gym.py
     body_metrics, personal_records,
     development_profiles, career_achievements,
     professional_goals, growth_items,
@@ -35,7 +36,7 @@ from .development import (
     ReadingProgress,
     Skill,
 )
-from .gym import ExerciseLibrary, GymExercise, GymLog, GymPlanOverride, GymSchedule
+from .gym import ExerciseLibrary, GymExercise, GymLog, GymPlanOverride, GymRoutine, GymSchedule
 from .leave import LeaveBalance, LeaveRequest, LeaveType
 from .notification import Notification
 from .payroll import PayrollEntry
@@ -65,6 +66,7 @@ __all__ = [
     "GymExercise",
     "GymSchedule",
     "GymPlanOverride",
+    "GymRoutine",
     "ExerciseLibrary",
     "BodyMetric",
     "PersonalRecord",

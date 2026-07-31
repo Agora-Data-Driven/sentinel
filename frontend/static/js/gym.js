@@ -15,17 +15,20 @@ window.pageInit = async (S) => {
   };
 
   // day: the session currently open in the editor; dayOpts.back: tab to return to (null = inline).
+  // routines: saved workout templates; routineBy: {weekday -> routine id} defaults.
   let state = { tab: "Calendar", cal: null, calY: 0, calM: 0, plan: null, day: null, dayOpts: null,
-    exercises: [], library: [], timer: null, saveT: null };
+    exercises: [], library: [], allLib: null, routines: [], routineBy: {}, timer: null, saveT: null };
 
-  const tabs = isMgr ? ["Calendar", "Today", "History", "Team compliance"] : ["Calendar", "Today", "History"];
+  const tabs = isMgr ? ["Calendar", "Today", "Routines", "History", "Team compliance"]
+    : ["Calendar", "Today", "Routines", "History"];
   view.innerHTML = `<div class="dev">
     <div class="dev-mast"><div>
       <div class="dev-eyebrow">Growth · Physical</div>
       <h1>Physical</h1>
-      <div class="lede">Plan your week, log a workout on any day, and edit sets & reps whenever, nothing gets locked. Your body fat and PRs live here too.</div>
+      <div class="lede">Plan your week, save your usual workouts as routines you can load in one tap, and edit sets & reps whenever — nothing gets locked. Your body fat and PRs live here too.</div>
     </div><div class="dev-mast-right"><div class="dev-mast-meta">${isMgr ? "TEAM VIEW" : "PUSH · PULL · LEGS"}</div></div></div>
     <div id="gym-body"></div>
+    <div id="gym-goals"></div>
     <div class="tabs" id="tabs">${tabs.map((t, i) => `<button class="${i ? "" : "active"}" data-tab="${t}">${t}</button>`).join("")}</div>
     <div id="tabc"></div>
     </div>`;
@@ -37,6 +40,7 @@ window.pageInit = async (S) => {
     stopTimer();
     if (name === "Calendar") return renderCalendar();
     if (name === "Today") return renderToday();
+    if (name === "Routines") return renderRoutines();
     if (name === "History") return renderHistory();
     if (name === "Team compliance") return renderCompliance();
   }
@@ -44,6 +48,7 @@ window.pageInit = async (S) => {
   // Let the Coach (or any page action) refresh the plan + current tab after an edit.
   window.SentinelReloadGym = async () => {
     try { state.plan = await S.api("/api/gym/plan"); } catch (e) { /* keep old */ }
+    await loadRoutines();
     switchTab(state.tab);
     renderGoals();
   };
@@ -54,7 +59,7 @@ window.pageInit = async (S) => {
   // the Overview, and by the Coach (add/update/delete_physical_goal).
   let pgoals = [];
   async function renderGoals() {
-    const host = S.qs("#gym-body");
+    const host = S.qs("#gym-goals");   // its own host: #gym-body belongs to renderBodyStats
     if (!host) return;
     try { pgoals = (await S.api("/api/development/physical-goals")).goals || []; }
     catch (e) { host.innerHTML = ""; return; }
@@ -185,6 +190,7 @@ window.pageInit = async (S) => {
     const weekly = state.plan.week[cell.weekday];
     const weeklyCardio = (state.plan.cardio || {})[cell.weekday] || "";
     const isOverride = cell.planned !== weekly || (cell.cardio || "") !== weeklyCardio;
+    const wdRoutine = routineById(state.routineBy[cell.weekday]);
     const log = cell.log;
     let chosen = cell.planned;
     const m = S.modal({
@@ -197,7 +203,8 @@ window.pageInit = async (S) => {
           <input id="dm-cardio" placeholder="e.g. 5k run, intervals" value="${S.esc(cell.cardio || "")}"></label>
         <div class="sub" style="font-size:12px">${isOverride
           ? `Custom for this day. <a href="#" class="linky" id="dm-revert">Revert to your weekly ${cell.weekday} (${weekly}${weeklyCardio ? " + " + S.esc(weeklyCardio) : ""})</a>`
-          : `Matches your weekly ${cell.weekday} plan.`}</div>
+          : `Matches your weekly ${cell.weekday} plan.`}${
+          wdRoutine ? ` Routine: <strong>${S.esc(wdRoutine.name)}</strong>, offered the moment you open the day.` : ""}</div>
         <hr style="border:0;border-top:1px solid var(--line);margin:16px 0">
         ${log
           ? `<div class="row between"><div>${planPill(log.day_type)} ${S.statusPill(log.status)}
@@ -251,23 +258,330 @@ window.pageInit = async (S) => {
     };
   }
 
+  // ============================ ROUTINES (saved workout templates) ============================
+  // Maintenance training is the same exercises at the same weights, week after week — and typing
+  // them in one at a time is the entire cost of logging. A routine holds that list once and stamps
+  // it onto any day in a tap.
+  //
+  // Names are free text ("Push A", "Push B") rather than weekday-bound: the same split gets run more
+  // than one way, and WHICH day it lands on is the schedule's business — that's the weekday chips,
+  // a separate, optional convenience.
+
+  async function loadRoutines() {
+    try {
+      const d = await S.api("/api/gym/routines");
+      state.routines = d.routines || [];
+      state.routineBy = d.by_weekday || {};
+    } catch (e) { state.routines = []; state.routineBy = {}; }
+  }
+
+  const routineById = (id) => state.routines.find((r) => r.id == id) || null;
+  // Pure calendar arithmetic via UTC — a local-time Date on a "YYYY-MM-DD" string lands on the
+  // previous day for any browser west of Manila, which would read the wrong weekday's routine.
+  const weekdayOf = (iso) => {
+    const [y, m, d] = iso.split("-").map(Number);
+    return DOW[(new Date(Date.UTC(y, m - 1, d)).getUTCDay() + 6) % 7];
+  };
+
+  // Routines offered for a day, best first: that weekday's default, then the same split, then the rest.
+  function routinesFor(dayType, weekday) {
+    const def = weekday ? state.routineBy[weekday] : null;
+    const rank = (r) => (def && r.id === def ? 0 : r.day_type === dayType ? 1 : 2);
+    return state.routines.slice().sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
+  }
+
+  // "4 × 8 @ 60kg" when every set matches; ranges when they don't.
+  function setsLabel(sets) {
+    if (!sets || !sets.length) return "—";
+    const reps = [...new Set(sets.map((s) => +s.reps || 0))];
+    const kg = [...new Set(sets.map((s) => +s.kg || 0))];
+    const r = reps.length === 1 ? `${reps[0]}` : `${Math.min(...reps)}–${Math.max(...reps)}`;
+    const w = kg.length === 1
+      ? (kg[0] ? `${kg[0]}kg` : "bodyweight")
+      : `${Math.min(...kg)}–${Math.max(...kg)}kg`;
+    return `${sets.length} × ${r} @ ${w}`;
+  }
+  const routineMeta = (r) => `${r.exercise_count} exercise${r.exercise_count === 1 ? "" : "s"} · ${r.total_sets} sets`;
+
+  // Mirrors the server's fallback naming so the placeholder shows the name you'd actually get.
+  function suggestName(dayType) {
+    const taken = new Set(state.routines.map((r) => (r.name || "").trim().toLowerCase()));
+    for (const s of "ABCDEFGHIJKLMNOPQRSTUVWXYZ") {
+      if (!taken.has(`${dayType} ${s}`.toLowerCase())) return `${dayType} ${s}`;
+    }
+    return dayType;
+  }
+
+  async function renderRoutines() {
+    S.qs("#tabc").innerHTML = '<div class="skeleton" style="height:240px"></div>';
+    await loadRoutines();
+    const head = `<div class="gym-cal-head">
+      <div><b>Your routines</b>
+        <div class="sub" style="font-size:12px">Load one onto any day and every exercise, set, rep and weight is already filled in.</div></div>
+      <button class="btn sm primary" id="rt-new">${S.ICON.plus}New routine</button></div>`;
+    if (!state.routines.length) {
+      S.qs("#tabc").innerHTML = `${head}
+        <div class="empty card pad">No routines yet. Build one here, or open a workout you've already
+        logged and hit <strong>Save as routine</strong> — that's the no-typing way to get your first one.</div>`;
+      S.qs("#rt-new").onclick = () => routineEditor(null);
+      return;
+    }
+    const groups = GYM_DAYS.filter((d) => state.routines.some((r) => r.day_type === d));
+    S.qs("#tabc").innerHTML = head + groups.map((d) => `
+      <div class="section-label" style="margin:16px 0 8px">${d}</div>
+      ${state.routines.filter((r) => r.day_type === d).map(routineCard).join("")}`).join("");
+    S.qs("#rt-new").onclick = () => routineEditor(null);
+    S.qsa("[data-rt-edit]").forEach((b) => b.onclick = () => routineEditor(routineById(b.dataset.rtEdit)));
+    S.qsa("[data-rt-use]").forEach((b) => b.onclick = () => useRoutineToday(routineById(b.dataset.rtUse)));
+    S.qsa("[data-rt-dup]").forEach((b) => b.onclick = () => duplicateRoutine(routineById(b.dataset.rtDup)));
+    S.qsa("[data-rt-del]").forEach((b) => b.onclick = async () => {
+      const r = routineById(b.dataset.rtDel);
+      if (!confirm(`Delete the routine “${r.name}”? Workouts you already logged from it are untouched.`)) return;
+      try { await S.api(`/api/gym/routines/${r.id}`, { method: "DELETE" }); S.toast("Routine deleted", "ok"); renderRoutines(); }
+      catch (e) { S.toast(e.detail || "Couldn't delete", "err"); }
+    });
+  }
+
+  function routineCard(r) {
+    const days = (r.weekdays || []).map((d) => `<span class="chip">${d}</span>`).join("");
+    const lines = (r.exercises || []).map((e) => `<div class="rt-line">
+      <span>${S.esc(e.exercise_name)}${e.muscle_group ? ` <span class="muted">· ${S.esc(e.muscle_group)}</span>` : ""}</span>
+      <span class="muted">${setsLabel(e.sets)}</span></div>`).join("");
+    return `<div class="card" style="margin-bottom:12px">
+      <div class="card-head"><h3>${S.esc(r.name)} ${planPill(r.day_type)} ${days}</h3>
+        <span class="sub" style="font-size:12px">${routineMeta(r)}</span></div>
+      <div class="card-body">
+        ${lines || '<div class="empty" style="padding:10px">No exercises in this routine yet.</div>'}
+        <div class="row" style="gap:8px;margin-top:12px;flex-wrap:wrap">
+          <button class="btn sm success" data-rt-use="${r.id}">${S.ICON.plus}Use today</button>
+          <button class="btn sm ghost" data-rt-edit="${r.id}">Edit</button>
+          <button class="btn sm ghost" data-rt-dup="${r.id}">Duplicate</button>
+          <button class="btn sm ghost" data-rt-del="${r.id}" style="color:var(--danger)">Delete</button>
+        </div>
+      </div></div>`;
+  }
+
+  // "Use today" from the Routines tab: open today's session and load the routine into it.
+  async function useRoutineToday(r, backTab) {
+    if (!r) return;
+    let session;
+    try { session = await S.api("/api/gym/day", { method: "POST", body: { date: state.plan.today.date, day_type: r.day_type } }); }
+    catch (e) { return S.toast(e.detail || "Couldn't open today's session", "err"); }
+    const go = (mode) => applyRoutineTo(session.id, r, mode, backTab || "Routines");
+    if ((session.exercises || []).length) chooseApplyMode(r, session.exercises.length, go); else go("replace");
+  }
+
+  // Stamp a routine onto a session server-side, then drop straight into the day editor.
+  async function applyRoutineTo(logId, r, mode, backTab) {
+    try {
+      const upd = await S.api(`/api/gym/${logId}/apply-routine`, { method: "POST", body: { routine_id: r.id, mode } });
+      S.toast(`${r.name} loaded`, "ok");
+      loadDayEditor(upd, backTab);
+    } catch (e) { S.toast(e.detail || "Couldn't load that routine", "err"); }
+  }
+
+  async function duplicateRoutine(r) {
+    if (!r) return;
+    try {
+      await S.api("/api/gym/routines", { method: "POST", body: {
+        name: "", day_type: r.day_type, exercises: r.exercises, notes: r.notes, weekdays: [],
+      } });
+      S.toast("Routine duplicated", "ok"); renderRoutines();
+    } catch (e) { S.toast(e.detail || "Couldn't duplicate", "err"); }
+  }
+
+  // Replace-or-add — asked only when the session already has work in it, so the common case
+  // (an empty day) stays a single tap. Callback, not a promise: closing with Esc must simply do
+  // nothing, and S.modal's Esc path can't resolve one.
+  function chooseApplyMode(r, count, onChoose) {
+    const m = S.modal({
+      title: `Load ${r.name}`,
+      body: `<div class="sub">This day already has ${count} exercise${count === 1 ? "" : "s"} logged.
+        Add the routine after them, or replace them with it?</div>`,
+      footer: `<button class="btn ghost" id="am-x">Cancel</button>
+        <button class="btn ghost" id="am-replace">Replace them</button>
+        <button class="btn primary" id="am-append">Add to them</button>`,
+    });
+    S.qs("#am-x").onclick = m.close;
+    S.qs("#am-append").onclick = () => { m.close(); onChoose("append"); };
+    S.qs("#am-replace").onclick = () => { m.close(); onChoose("replace"); };
+  }
+
+  // --- routine editor (inline, like the day editor — NOT a modal) ---------------
+  // S.modal reuses one overlay node, so a modal can't open over a modal; the exercise picker needs
+  // to be that modal. Editing 11 exercises in a dialog would be miserable anyway.
+  function routineEditor(routine) {
+    // A working copy: nothing is written until Save, so backing out changes nothing.
+    const draft = routine
+      ? { id: routine.id, name: routine.name, day_type: routine.day_type,
+          weekdays: (routine.weekdays || []).slice(), notes: routine.notes || "",
+          exercises: JSON.parse(JSON.stringify(routine.exercises || [])) }
+      : { id: null, name: "", day_type: state.plan ? planSplitToday() : "Push", weekdays: [], notes: "", exercises: [] };
+
+    S.qs("#tabc").innerHTML = `
+      <div class="card pad" style="margin-bottom:16px">
+        <div class="row between" style="align-items:flex-start;flex-wrap:wrap;gap:12px">
+          <div class="row" style="gap:12px;align-items:center">
+            <button class="btn sm ghost" id="rt-back">‹ Routines</button>
+            <div class="section-label">${draft.id ? "Edit routine" : "New routine"}</div>
+          </div>
+          <div class="row" style="gap:8px;flex-wrap:wrap">
+            <button class="btn sm ghost" id="rt-add">${S.ICON.plus}Add exercise</button>
+            <button class="btn sm primary" id="rt-save">Save routine</button>
+          </div>
+        </div>
+        <div class="row" style="gap:20px;margin-top:14px;flex-wrap:wrap;align-items:flex-end">
+          <label class="field" style="margin:0;flex:1;min-width:220px"><span>Name</span>
+            <input id="rt-name" value="${S.esc(draft.name)}" maxlength="60" placeholder="${S.esc(suggestName(draft.day_type))}"></label>
+          <label class="field" style="margin:0"><span>Split</span>
+            <select id="rt-split">${GYM_DAYS.map((d) => `<option ${d === draft.day_type ? "selected" : ""}>${d}</option>`).join("")}</select></label>
+        </div>
+        <div style="margin-top:14px">
+          <div class="section-label">Default for these days <span class="muted" style="text-transform:none;letter-spacing:0">(optional — the Today tab offers it first)</span></div>
+          <div class="row" id="rt-days" style="gap:6px;margin-top:8px;flex-wrap:wrap">
+            ${DOW.map((d) => `<button class="btn sm ${draft.weekdays.includes(d) ? "primary" : "ghost"}" data-wd="${d}">${d}</button>`).join("")}
+          </div>
+        </div>
+        <label class="field" style="margin:14px 0 0"><span>Notes (optional)</span>
+          <input id="rt-notes" value="${S.esc(draft.notes)}" placeholder="e.g. keep rest to 90s"></label>
+      </div>
+      <div id="rt-ex"></div>`;
+
+    S.qs("#rt-back").onclick = () => renderRoutines();
+    S.qs("#rt-add").onclick = () => pickExercise(draft.day_type, (choice) => {
+      draft.exercises.push({ exercise_name: choice.name, muscle_group: choice.muscle,
+        sets: [{ kg: 0, reps: 0, type: "Normal" }], notes: "" });
+      paintExercises();
+    });
+    S.qs("#rt-name").onchange = (e) => draft.name = e.target.value;
+    S.qs("#rt-notes").onchange = (e) => draft.notes = e.target.value;
+    S.qs("#rt-split").onchange = (e) => {
+      draft.day_type = e.target.value;
+      S.qs("#rt-name").placeholder = suggestName(draft.day_type);
+    };
+    S.qsa("#rt-days [data-wd]").forEach((b) => b.onclick = () => {
+      const d = b.dataset.wd;
+      draft.weekdays = draft.weekdays.includes(d) ? draft.weekdays.filter((x) => x !== d) : draft.weekdays.concat(d);
+      b.className = "btn sm " + (draft.weekdays.includes(d) ? "primary" : "ghost");
+    });
+    S.qs("#rt-save").onclick = save;
+    paintExercises();
+
+    function paintExercises() {
+      const box = S.qs("#rt-ex");
+      if (!draft.exercises.length) {
+        box.innerHTML = '<div class="empty card pad">No exercises yet. Tap “Add exercise” to build the routine.</div>';
+        return;
+      }
+      box.innerHTML = draft.exercises.map((ex, i) => `
+        <div class="card" style="margin-bottom:12px">
+          <div class="card-head"><h3>${S.esc(ex.exercise_name)} ${ex.muscle_group ? `<span class="chip">${S.esc(ex.muscle_group)}</span>` : ""}</h3>
+            <span class="x-close" data-rx-del="${i}">${S.ICON.x}</span></div>
+          <div class="card-body">
+            <div class="table-wrap" style="border:none">
+              <table><thead><tr><th>Set</th><th>KG</th><th>Reps</th><th>Type</th><th></th></tr></thead>
+              <tbody>${ex.sets.map((s, si) => `<tr>
+                <td><strong>${si + 1}</strong></td>
+                <td><input style="width:70px" type="number" step="0.5" value="${s.kg || ""}" data-rx="${i}" data-si="${si}" data-rf="kg"></td>
+                <td><input style="width:64px" type="number" value="${s.reps || ""}" data-rx="${i}" data-si="${si}" data-rf="reps"></td>
+                <td><select data-rx="${i}" data-si="${si}" data-rf="type">${SET_TYPES.map((t) => `<option ${t === s.type ? "selected" : ""}>${t}</option>`).join("")}</select></td>
+                <td><span class="x-close" data-rs-del="${i}:${si}">${S.ICON.x}</span></td></tr>`).join("")}</tbody></table>
+            </div>
+            <div class="row between" style="margin-top:8px">
+              <button class="btn sm ghost" data-rs-add="${i}">${S.ICON.plus}Add set</button>
+              <input placeholder="Notes for ${S.esc(ex.exercise_name)}…" value="${S.esc(ex.notes || "")}" data-rx="${i}" data-rf="notes" style="max-width:320px">
+            </div>
+          </div></div>`).join("");
+
+      // Field edits mutate the draft in place (no repaint — that would eat focus mid-typing).
+      box.querySelectorAll("[data-rf]").forEach((inp) => inp.onchange = () => {
+        const i = +inp.dataset.rx, f = inp.dataset.rf;
+        if (f === "notes") { draft.exercises[i].notes = inp.value; return; }
+        const si = +inp.dataset.si;
+        draft.exercises[i].sets[si][f] = f === "type" ? inp.value : Number(inp.value);
+      });
+      box.querySelectorAll("[data-rs-add]").forEach((b) => b.onclick = () => {
+        const i = +b.dataset.rsAdd, last = draft.exercises[i].sets.slice(-1)[0] || {};
+        draft.exercises[i].sets.push({ kg: last.kg || 0, reps: last.reps || 0, type: "Normal" });
+        paintExercises();
+      });
+      box.querySelectorAll("[data-rs-del]").forEach((b) => b.onclick = () => {
+        const [i, si] = b.dataset.rsDel.split(":").map(Number);
+        draft.exercises[i].sets.splice(si, 1);
+        if (!draft.exercises[i].sets.length) draft.exercises.splice(i, 1);
+        paintExercises();
+      });
+      box.querySelectorAll("[data-rx-del]").forEach((b) => b.onclick = () => {
+        draft.exercises.splice(+b.dataset.rxDel, 1); paintExercises();
+      });
+    }
+
+    async function save() {
+      if (!draft.exercises.length) return S.toast("Add at least one exercise first", "err");
+      const body = {
+        name: draft.name.trim(), day_type: draft.day_type, weekdays: draft.weekdays,
+        notes: draft.notes.trim() || null, exercises: draft.exercises,
+      };
+      try {
+        await (draft.id
+          ? S.api(`/api/gym/routines/${draft.id}`, { method: "PATCH", body })
+          : S.api("/api/gym/routines", { method: "POST", body }));
+        S.toast("Routine saved", "ok");
+        renderRoutines();
+      } catch (e) { S.toast(e.detail || "Couldn't save", "err"); }
+    }
+  }
+
+  function planSplitToday() {
+    const d = state.plan.today.day_type;
+    return GYM_DAYS.includes(d) ? d : "Push";
+  }
+
+  // The full exercise library, ranked so the routine's own split floats to the top.
+  async function pickExercise(dayType, onPick) {
+    if (!state.allLib) {
+      try { state.allLib = await S.api("/api/gym/library"); }
+      catch (e) { return S.toast(e.detail || "Couldn't load the exercise library", "err"); }
+    }
+    const items = state.allLib.slice().sort((a, b) => {
+      const rank = (x) => ((x.day_types || []).includes(dayType) ? 0 : 1);
+      return rank(a) - rank(b) || a.name.localeCompare(b.name);
+    });
+    exercisePicker(items, `Add exercise to this ${dayType} routine`, (e) => onPick({ name: e.name, muscle: e.muscle_group || "" }));
+  }
+
   // ============================ TODAY ============================
   async function renderToday() {
     const today = await S.api("/api/gym/today");
     if (today) return loadDayEditor(today, null);
     const planned = state.plan.today.day_type;
+    // The routine pinned to this weekday becomes the hero button: one tap and the whole session is
+    // filled in. Everything else (empty session, other routines, another split) stays one tap away.
+    const hero = routineById(state.routineBy[weekdayOf(state.plan.today.date)]);
+    const others = routinesFor(planned, weekdayOf(state.plan.today.date))
+      .filter((r) => !hero || r.id !== hero.id).slice(0, 4);
+    const emptyBtn = `<button class="btn ${hero ? "ghost" : "success"}" id="td-start">${S.ICON.plus}Start ${planned === "Rest" ? "an empty" : planned} workout</button>`;
     S.qs("#tabc").innerHTML = `<div class="card pad" style="text-align:center">
       <div class="section-label">Today's plan</div>
       <h2 style="margin:8px 0">${planPill(planned)}</h2>
       <div class="sub">${DAY_DESC[planned] || ""}</div>
       <div class="row" style="justify-content:center;gap:8px;margin-top:18px;flex-wrap:wrap">
-        <button class="btn success" id="td-start">${S.ICON.plus}Start ${planned === "Rest" ? "a" : planned} workout</button>
+        ${hero ? `<button class="btn success" id="td-hero">${S.ICON.plus}Start ${S.esc(hero.name)}</button>` : ""}
+        ${emptyBtn}
       </div>
+      ${hero ? `<div class="sub" style="font-size:12px;margin-top:8px">${routineMeta(hero)}, pre-filled — just tick them off.${
+        hero.day_type !== planned ? ` It's a ${hero.day_type} routine, so loading it makes today a ${hero.day_type} day.` : ""}</div>` : ""}
+      ${others.length ? `<div style="margin-top:18px"><div class="section-label">Or load a routine</div>
+        <div class="row" style="justify-content:center;gap:8px;margin-top:8px;flex-wrap:wrap">
+          ${others.map((r) => `<button class="btn sm ghost" data-rq="${r.id}">${S.esc(r.name)} <span class="muted">· ${r.exercise_count} ex</span></button>`).join("")}
+        </div></div>` : ""}
       <div class="sub" style="font-size:12px;margin-top:14px">Or log a different split:
         ${GYM_DAYS.filter((d) => d !== planned).map((d) => `<a href="#" class="linky" data-alt="${d}" style="margin:0 5px">${d}</a>`).join("")}</div>
     </div>`;
     const start = (dt) => openDay(state.plan.today.date, null, dt);
     S.qs("#td-start").onclick = () => start(planned === "Rest" ? "Custom" : planned);
+    if (hero) S.qs("#td-hero").onclick = () => useRoutineToday(hero, "Today");
+    S.qsa("[data-rq]").forEach((b) => b.onclick = () => useRoutineToday(routineById(b.dataset.rq), "Today"));
     S.qsa("[data-alt]").forEach((a) => a.onclick = (e) => { e.preventDefault(); start(a.dataset.alt); });
   }
 
@@ -313,7 +627,9 @@ window.pageInit = async (S) => {
           </div>
           <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap">
             <span class="save-tag" id="save-tag"></span>
+            <button class="btn sm ghost" id="day-routine" title="Fill this day from a saved routine">${S.ICON.doc}Load routine</button>
             <button class="btn sm ghost" id="day-add">${S.ICON.plus}Add exercise</button>
+            <button class="btn sm ghost" id="day-saveroutine" title="Reuse this workout later">Save as routine</button>
             <button class="btn sm ${isDone() ? "success" : "ghost"}" id="day-done">${S.ICON.check}${isDone() ? "Done" : "Mark done"}</button>
             <button class="btn sm ghost" id="day-del" title="Delete this workout" style="color:var(--danger)">${S.ICON.x}Delete</button>
           </div>
@@ -331,6 +647,8 @@ window.pageInit = async (S) => {
 
     if (back) S.qs("#day-back").onclick = () => switchTab(state.dayOpts.backTab);
     S.qs("#day-add").onclick = openLibrary;
+    S.qs("#day-routine").onclick = loadRoutineIntoDay;
+    S.qs("#day-saveroutine").onclick = saveDayAsRoutine;
     S.qs("#day-done").onclick = toggleDone;
     S.qs("#day-del").onclick = deleteDay;
     S.qs("#day-split").onchange = (e) => changeSplit(e.target.value);
@@ -349,7 +667,21 @@ window.pageInit = async (S) => {
 
   function renderExercises() {
     const box = S.qs("#ex-list");
-    if (!state.exercises.length) { box.innerHTML = '<div class="empty card pad">No exercises yet. Tap “Add exercise”.</div>'; return; }
+    if (!state.exercises.length) {
+      // An empty day is exactly where a routine saves the most typing — offer them here, not just
+      // behind the toolbar button.
+      const picks = routinesFor(state.day.day_type, weekdayOf(state.day.date)).slice(0, 4);
+      box.innerHTML = `<div class="empty card pad">${picks.length
+        ? `<div style="margin-bottom:12px">Load one of your routines — every exercise, set, rep and weight comes pre-filled:</div>
+           <div class="row" style="gap:8px;justify-content:center;flex-wrap:wrap">${picks.map((r) => `
+             <button class="btn sm success" data-quick="${r.id}">${S.esc(r.name)} <span style="opacity:.8">· ${r.exercise_count} ex</span></button>`).join("")}</div>
+           <div style="font-size:12px;margin-top:12px">…or tap “Add exercise” to build it by hand.</div>`
+        : `No exercises yet. Tap “Add exercise” — then “Save as routine” when you're done, and next
+           week's identical session is one tap.`}</div>`;
+      S.qsa("[data-quick]", box).forEach((b) => b.onclick = () =>
+        applyRoutineTo(state.day.id, routineById(b.dataset.quick), "replace", state.dayOpts.backTab));
+      return;
+    }
     box.innerHTML = state.exercises.map((ex, i) => {
       const prev = (state.library.find((l) => l.name === ex.name) || {}).previous;
       return `<div class="card" style="margin-bottom:12px">
@@ -416,10 +748,19 @@ window.pageInit = async (S) => {
   }
 
   function openLibrary() {
-    const items = state.library;
+    exercisePicker(state.library, "Add exercise", (e) => {
+      state.exercises.push({ name: e.name, muscle: e.muscle_group || "", sets: [{ set: 1, kg: 0, reps: 0, type: "Warm-up", done: false }], notes: "" });
+      renderExercises(); updateSummary(); scheduleSave();
+    });
+  }
+
+  // The shared library picker — both the day editor and the routine editor add exercises through it.
+  // `onPick` receives the whole library row (names are unique in exercise_library, so the button
+  // carries the name and the row is resolved from it).
+  function exercisePicker(items, title, onPick) {
     const muscles = [...new Set(items.map((e) => e.muscle_group).filter(Boolean))].sort();
     const m = S.modal({
-      title: "Add exercise",
+      title,
       body: `<div class="row" style="gap:8px;margin-bottom:12px">
           <input id="lib-search" placeholder="Search exercises…" style="flex:1">
           <select id="lib-muscle" style="max-width:170px"><option value="">All muscles</option>${muscles.map((mg) => `<option value="${S.esc(mg)}">${S.esc(mg)}</option>`).join("")}</select>
@@ -434,11 +775,12 @@ window.pageInit = async (S) => {
         <div class="row between" style="padding:9px 4px;border-bottom:1px solid var(--line)">
           <div><strong>${S.esc(e.name)}</strong> <span class="chip">${S.esc(e.muscle_group || "")}</span>
             <div class="muted" style="font-size:12px">${e.previous ? "Last: " + S.esc(e.previous.display) : "No history"}</div></div>
-          <button class="btn sm success" data-add="${S.esc(e.name)}" data-m="${S.esc(e.muscle_group || "")}">Add</button></div>`).join("")
+          <button class="btn sm success" data-add="${S.esc(e.name)}">Add</button></div>`).join("")
         : '<div class="empty" style="padding:20px">No matching exercises.</div>';
       S.qsa("[data-add]", S.qs("#lib-list")).forEach((b) => b.onclick = () => {
-        state.exercises.push({ name: b.dataset.add, muscle: b.dataset.m, sets: [{ set: 1, kg: 0, reps: 0, type: "Warm-up", done: false }], notes: "" });
-        m.close(); renderExercises(); updateSummary(); scheduleSave();
+        const row = items.find((e) => e.name === b.dataset.add);
+        if (!row) return;
+        m.close(); onPick(row);
       });
     };
     S.qs("#lib-search").oninput = draw;
@@ -504,6 +846,89 @@ window.pageInit = async (S) => {
     await saveSession(patch);
     stopTimer(); renderDayEditor();
     if (willBeDone) S.toast("Nice work", "ok");
+  }
+
+  // --- routines ↔ the open session --------------------------------------------
+  function loadRoutineIntoDay() {
+    if (!state.routines.length) {
+      S.toast("No routines yet — build one here first", "err");
+      return switchTab("Routines");
+    }
+    const list = routinesFor(state.day.day_type, weekdayOf(state.day.date));
+    const hasWork = state.exercises.length > 0;
+    let mode = hasWork ? "append" : "replace";   // never silently bin logged work
+    const m = S.modal({
+      title: "Load a routine",
+      body: `${hasWork ? `<div class="sub" style="font-size:13px">This day already has ${state.exercises.length} exercise${state.exercises.length === 1 ? "" : "s"} logged.</div>
+          <div class="row" id="lr-mode" style="gap:8px;margin:10px 0 14px">
+            <button class="btn sm primary" data-mode="append">Add to them</button>
+            <button class="btn sm ghost" data-mode="replace">Replace them</button></div>` : ""}
+        <div id="lr-list">${list.map((r) => `
+          <div class="row between" style="padding:10px 4px;border-bottom:1px solid var(--line)">
+            <div><strong>${S.esc(r.name)}</strong> ${planPill(r.day_type)}
+              <div class="muted" style="font-size:12px">${routineMeta(r)}${(r.weekdays || []).length ? " · default for " + r.weekdays.join(", ") : ""}</div></div>
+            <button class="btn sm success" data-load="${r.id}">Load</button></div>`).join("")}</div>`,
+    });
+    S.qsa("#lr-mode [data-mode]").forEach((b) => b.onclick = () => {
+      mode = b.dataset.mode;
+      S.qsa("#lr-mode [data-mode]").forEach((x) => x.className = "btn sm " + (x.dataset.mode === mode ? "primary" : "ghost"));
+    });
+    S.qsa("#lr-list [data-load]").forEach((b) => b.onclick = () => {
+      m.close();
+      applyRoutineTo(state.day.id, routineById(b.dataset.load), mode, state.dayOpts.backTab);
+    });
+  }
+
+  // "I always do this" — turn the open session into a routine, or push today's numbers back into an
+  // existing one (the maintenance case: everything's the same except the squat crept up).
+  function saveDayAsRoutine() {
+    if (!state.exercises.length) return S.toast("Log some exercises first", "err");
+    const dt = GYM_DAYS.includes(state.day.day_type) ? state.day.day_type : "Custom";
+    let days = [];
+    const m = S.modal({
+      title: "Save as routine",
+      body: `<div class="sub" style="font-size:13px;margin-bottom:12px">Saves this workout's exercises,
+          sets, reps and weights as a template you can drop onto any day.</div>
+        <label class="field"><span>Save to</span><select id="sr-target">
+          <option value="">New routine</option>
+          ${state.routines.map((r) => `<option value="${r.id}">Update “${S.esc(r.name)}” with today's numbers</option>`).join("")}
+        </select></label>
+        <div id="sr-new">
+          <label class="field"><span>Name</span><input id="sr-name" maxlength="60" placeholder="${S.esc(suggestName(dt))}"></label>
+          <div class="section-label" style="margin-top:12px">Default for these days <span class="muted" style="text-transform:none;letter-spacing:0">(optional)</span></div>
+          <div class="row" id="sr-days" style="gap:6px;margin-top:8px;flex-wrap:wrap">${DOW.map((d) => `<button class="btn sm ghost" data-wd="${d}">${d}</button>`).join("")}</div>
+        </div>`,
+      footer: `<button class="btn ghost" id="sr-x">Cancel</button><button class="btn primary" id="sr-save">Save</button>`,
+    });
+    const newBox = S.qs("#sr-new");
+    S.qs("#sr-target").onchange = (e) => newBox.style.display = e.target.value ? "none" : "";
+    S.qsa("#sr-days [data-wd]").forEach((b) => b.onclick = () => {
+      const d = b.dataset.wd;
+      days = days.includes(d) ? days.filter((x) => x !== d) : days.concat(d);
+      b.className = "btn sm " + (days.includes(d) ? "primary" : "ghost");
+    });
+    S.qs("#sr-x").onclick = m.close;
+    S.qs("#sr-save").onclick = async () => {
+      // The exercise save is debounced 700ms — flush it first, or the routine gets built from the
+      // server's copy of the session as it was BEFORE your last edit.
+      clearTimeout(state.saveT);
+      await saveExercises();
+      const target = S.qs("#sr-target").value;
+      try {
+        if (target) {
+          const r = routineById(target);
+          await S.api(`/api/gym/routines/${target}`, { method: "PATCH", body: { from_log_id: state.day.id } });
+          S.toast(`“${r.name}” updated from this workout`, "ok");
+        } else {
+          await S.api("/api/gym/routines", { method: "POST", body: {
+            name: S.qs("#sr-name").value.trim(), day_type: dt, weekdays: days, from_log_id: state.day.id,
+          } });
+          S.toast("Routine saved", "ok");
+        }
+        m.close();
+        await loadRoutines();
+      } catch (e) { S.toast(e.detail || "Couldn't save", "err"); }
+    };
   }
 
   // ============================ HISTORY ============================
@@ -662,6 +1087,7 @@ window.pageInit = async (S) => {
   // --- boot -------------------------------------------------------------------
   renderBodyStats();
   state.plan = await S.api("/api/gym/plan");
+  await loadRoutines();   // every tab reads state.routines, so this lands before the first render
   setMonthFromIso(state.plan.today.date);
   switchTab("Calendar");
 };

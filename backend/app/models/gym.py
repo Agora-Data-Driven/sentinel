@@ -1,4 +1,4 @@
-"""gym_logs, gym_exercises, exercise_library."""
+"""gym_logs, gym_exercises, gym_routines, exercise_library."""
 from __future__ import annotations
 
 from datetime import date, datetime
@@ -79,6 +79,41 @@ class GymPlanOverride(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     __table_args__ = (UniqueConstraint("user_id", "date", name="uq_gym_override_user_date"),)
+
+
+class GymRoutine(Base):
+    """A saved workout template — "Push A", "Legs B" — with its exercises, sets, reps and weights
+    already filled in, so logging a repeat session is one tap instead of twenty inputs.
+
+    Two deliberate shape choices:
+
+    * **The exercises are one JSON blob, not a child table.** A routine is only ever read and
+      written whole (like ``GymSchedule.week_json``); nothing queries *inside* it. History, PRs and
+      the Hevy "PREVIOUS" lookup all read ``gym_exercises`` — a template never participates in
+      those, so a second table would buy nothing and cost a join.
+    * **``weekdays_json`` lives here, not on ``gym_schedules``.** The weekly split says *what kind*
+      of day it is (Push); this says *which* Push. Hanging it off the routine means the whole
+      feature is one NEW table — and a new table is the only schema change `create_all` can land on
+      a DB that hasn't run Alembic. A new COLUMN on gym_schedules would need `_ensure_columns`.
+
+    A weekday belongs to at most one routine (``gym.set_routine_weekdays`` clears it elsewhere), so
+    "what am I doing today?" always has exactly one answer.
+    """
+
+    __tablename__ = "gym_routines"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(60), nullable=False)  # free text: "Push A", "Leg day"
+    day_type: Mapped[str] = mapped_column(String(16), default="Custom")  # Push|Pull|Legs|Custom
+    # [{exercise_name, muscle_group, sets:[{kg,reps,type}], notes}] — see services.gym.normalize_routine_exercises
+    exercises_json: Mapped[str] = mapped_column(Text, default="[]")
+    # Weekdays this routine is the default for, e.g. ["Mon"] — a subset of constants.GYM_WEEKDAYS.
+    weekdays_json: Mapped[str] = mapped_column(Text, default="[]")
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
 class ExerciseLibrary(Base):

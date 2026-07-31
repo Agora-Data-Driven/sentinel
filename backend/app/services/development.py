@@ -284,6 +284,9 @@ def holistic_digest(db: Session, user: User) -> dict:
         "gym": {
             "weekly_split": weekly_split,
             "weekly_cardio": weekly_cardio,
+            # Saved workout templates by name only — enough for the coach to talk about the week
+            # ("your Monday is Push A") without paying for every set and rep.
+            "routines": gym_svc.routine_summary_lines(db, user.id),
             "sessions_last_14d": sessions_14d,
             "completed_last_14d": completed_14d,
         },
