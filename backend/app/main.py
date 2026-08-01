@@ -117,6 +117,13 @@ def _ensure_columns() -> None:
         # The four growth dimensions (was missing from this list when e5a7c3d9b1f4 shipped —
         # a pre-2026-07-26 local DB 500'd with `no such column: dimension`).
         ("professional_goals", "dimension", "VARCHAR(16) DEFAULT 'professional'"),
+        # The growth journal became per-dimension (2026-08-01), so each of the four tabs holds its
+        # own titled entries instead of one shared list plus a free-form blob. Existing rows
+        # backfill to 'spiritual' — where the whole journal rendered before the split — so nothing
+        # appears to jump tabs on upgrade.
+        # 🔴 Prod deploys don't run alembic, so THIS LIST is the only path this column takes to
+        # production. The alembic revision beside it is for local/migrated DBs.
+        ("growth_items", "dimension", "VARCHAR(16) DEFAULT 'spiritual'"),
     ]
     try:
         insp = inspect(engine)
@@ -134,6 +141,13 @@ def _ensure_columns() -> None:
         if "professional_goals" in insp.get_table_names():
             with engine.begin() as conn:
                 conn.execute(text("UPDATE professional_goals SET dimension='philosophical' WHERE dimension='mental'"))
+        # Backstop for the growth-journal split: ADD COLUMN ... DEFAULT backfills existing rows on
+        # both SQLite and Postgres 11+, but a row written through an older path (or a DB where the
+        # column arrived without the default) would be left NULL — and a NULL dimension renders in
+        # no tab at all, which looks exactly like the entry was deleted.
+        if "growth_items" in insp.get_table_names():
+            with engine.begin() as conn:
+                conn.execute(text("UPDATE growth_items SET dimension='spiritual' WHERE dimension IS NULL OR dimension=''"))
     except Exception as exc:  # never let a migration attempt crash startup
         print(f"[sentinel] column ensure skipped: {exc}")
 

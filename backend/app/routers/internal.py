@@ -125,6 +125,54 @@ def internal_holistic_profile(
     return {"found": True, "profile": dev_svc.holistic_digest(db, user)}
 
 
+@router.get("/growth-detail")
+def internal_growth_detail(
+    email: str,
+    ids: str = "",
+    x_academy_ts: str | None = Header(default=None),
+    x_academy_sig: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    """Full bodies for specific growth-journal entries — the "big" half of small-to-big retrieval.
+
+    `holistic-profile` hands the coach a COMPLETE index of the worker's journal (every entry's title,
+    uncapped) but no bodies, because the journal grows without bound and most turns need none of it.
+    When a turn does bear on an entry, the coach names its ids here and gets the text back WHOLE.
+
+    Why the index is complete and only the bodies are lazy: the coach decides "you have no note about
+    X" by not seeing X in the index. If the index were sampled, that inference would be a confident
+    lie — the failure that made a 600-char cap on `other_info` deny a list the worker was looking at
+    on their own screen. A retrieval MISS here is recoverable (the title is still listed, so the
+    coach can say "you have a note called X I haven't opened"); a missing title is not.
+
+    `ids` is a comma-separated list, capped at `MAX_GROWTH_DETAIL_IDS` entries per call — a limit on
+    the request, never on any entry's text. Entries are scoped to the owner, so unknown or
+    other-people's ids are simply absent from the response rather than an error.
+
+    Always the user's OWN journal (the coach acts on their behalf), so no manager check applies.
+    Unknown/inactive email → an empty result and the coach stays ungrounded, exactly as before.
+    """
+    _verify(x_academy_ts, x_academy_sig, "growth-detail")
+    norm = (email or "").strip().lower()
+    user = db.execute(
+        select(User).where(func.lower(User.email) == norm)
+    ).scalars().first() if norm else None
+    if user is None or not user.is_active:
+        return {"found": False, "entries": []}
+    wanted: list[int] = []
+    for part in (ids or "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            wanted.append(int(part))
+        except ValueError:
+            # A malformed id is the caller's bug, not a reason to fail the worker's whole turn —
+            # skip it and serve whatever else was asked for.
+            continue
+    return {"found": True, "entries": dev_svc.growth_details(db, user.id, wanted)}
+
+
 @router.get("/mentor-search")
 def internal_mentor_search(
     email: str,

@@ -459,7 +459,10 @@
     const PHYS = ["name", "kind", "target_value", "current_value", "unit", "direction", "notes", "status"];
     const GOAL = ["title", "dimension", "description", "target_date", "status", "progress_pct"];
     const ACH = ["title", "description", "achieved_on"];
-    const GROW = ["kind", "title", "detail", "status"];
+    // `dimension` files the entry under one of the four growth areas. Without it in this whitelist
+    // every coach-created entry silently lands in Spiritual (the model default) no matter which
+    // area the coach proposed — the server validates the value, this just has to pass it through.
+    const GROW = ["dimension", "kind", "title", "detail", "status"];
     const SKILL = ["name", "level", "source", "note"];
     const METRIC = ["body_fat_pct", "weight_kg", "date", "notes"];
     const RESUME = ["headline", "resume_text", "resume_file_url"];

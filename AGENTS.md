@@ -120,7 +120,7 @@ deploy/            deploy.ps1, seed-job.ps1, DEPLOY.md
 | `meta.py` | Enums/constants for the frontend |
 | `cron.py` | Scheduled job endpoints |
 | `stream.py` | SSE push to the browser |
-| `internal.py` | **HMAC-signed** service-to-service (Mastery Engine ↔ Sentinel) |
+| `internal.py` | **HMAC-signed** service-to-service (Mastery Engine ↔ Sentinel). Purposes: `user-lookup`, `academy-people`, `holistic-profile`, `growth-detail`, `mentor-search` |
 
 Adding a router? Register it in the tuple at [main.py:322](backend/app/main.py#L322).
 
@@ -435,6 +435,36 @@ Design constraints worth knowing before changing it:
   and stops naming some mentors entirely once a library is large.
 
 Covered by `tests/test_mentor_search.py`.
+
+### 🔴 The coach's growth-journal INDEX must never be capped
+
+The Growth hub's four dimensions each hold **titled entries** (`growth_items`, one idea per row,
+`dimension` added 2026-08-01). `holistic_digest` ships **every entry's title, uncapped**, on every
+coach turn; the `detail` bodies are fetched separately via `GET /api/internal/growth-detail`
+(purpose `growth-detail`, `services/development.growth_details`). Small-to-big retrieval — and the
+split is only safe because of one rule:
+
+> **The index is complete; only the bodies are lazy.**
+
+The coach decides "you have no note about X" by not finding X in that index. Cap or filter the
+index and that inference becomes a confident lie. A missing *body* is recoverable (the title is
+still listed, so the coach can say "you have a note called X I haven't opened"); a missing *title*
+is not. So: never add a `[:N]` to `growth_index`, never drop archived rows from it, and never
+truncate a `detail` — bodies are budgeted from the index's `chars` **before** fetching precisely so
+they never need cutting. The Mastery Engine end mirrors this (`growthGroundingFor` in `server.js`,
+`growthNotesBlock` in `lib/gemini.js`), and declares whatever it didn't load.
+
+**This replaced `development_areas.other_info`**, a per-dimension free-form blob with no titles and
+therefore no index — so it could only ever be sent truncated. It was capped at 600 chars, and the
+coach consequently denied the existence of a list the worker was looking at on their own screen.
+The field still exists, is no longer truncated, and surfaces in the UI as "Unfiled" with a one-click
+path into a real entry; `update_area` remains for editing/clearing it, but the coach is told to
+prefer `add_growth`. The same cap-the-index bug is documented one section down for
+`mentor_library` — it is the same mistake, and it has now been made twice.
+
+Covered by `tests/test_growth_notes.py`. 🔴 The column reaches **prod** via
+`main._ensure_columns` (deploys don't run alembic); `b6d2f8a4c7e9` is the local/migrated path and is
+existence-guarded because `create_all` usually wins the race.
 
 ### 🟡 Gym routines: two constraints that shaped the design
 

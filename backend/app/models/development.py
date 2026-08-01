@@ -165,12 +165,29 @@ class DevelopmentArea(Base):
 
 
 class GrowthItem(Base):
-    """The worker's personal, bottom-up journal — obstacles they're facing, reflections, notes."""
+    """The worker's personal, bottom-up journal — ONE TITLED IDEA PER ROW, filed under a dimension.
+
+    "One idea per entry" is the design, not a convention: every entry's `title` ships to the AI coach
+    on every turn (a complete, uncapped index) while its `detail` body is fetched only when a
+    conversation turns out to need it. That split is what lets the journal grow without bound —
+    but it only works if a title honestly describes one thing. A single entry holding five unrelated
+    ideas is indexed by whichever one made it into the title, and the other four become invisible.
+
+    This replaced `DevelopmentArea.other_info`, a per-dimension free-form dump that had no titles and
+    therefore no index — so it could only ever be sent truncated, and the coach then denied the
+    existence of content the worker could see on their own screen (2026-08-01). The old field still
+    exists and still works; the UI presents whatever is left in it as "unfiled" with a one-click path
+    into real entries. See services/development.holistic_digest + growth_details.
+    """
 
     __tablename__ = "growth_items"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    # Which of the four growth dimensions this entry belongs to. Defaults to 'spiritual' because
+    # that is where the journal lived before it was split per-dimension — every pre-existing row is
+    # backfilled there so nothing appears to move tabs on upgrade (main._ensure_columns).
+    dimension: Mapped[str] = mapped_column(String(16), default="spiritual", nullable=False)
     kind: Mapped[str] = mapped_column(String(16), default="reflection")  # obstacle|reflection|note
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     detail: Mapped[str | None] = mapped_column(Text, nullable=True)

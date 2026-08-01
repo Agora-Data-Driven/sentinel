@@ -297,6 +297,7 @@ class AreaUpdateIn(BaseModel):
 
 
 class GrowthItemIn(BaseModel):
+    dimension: str = "spiritual"  # spiritual | professional | philosophical | physical
     kind: str = "reflection"  # obstacle | reflection | note
     title: str
     detail: str | None = None
@@ -304,6 +305,7 @@ class GrowthItemIn(BaseModel):
 
 
 class GrowthItemUpdateIn(BaseModel):
+    dimension: str | None = None
     kind: str | None = None
     title: str | None = None
     detail: str | None = None

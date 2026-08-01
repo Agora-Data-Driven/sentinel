@@ -180,7 +180,7 @@ window.pageInit = async (S) => {
       ${paceRow(d)}
       <div class="pace-detail">
         ${goalsBlock(d.key)}
-        <div class="dim-records">${SUBS[d.key]()}${infoSub(d.key)}</div>
+        <div class="dim-records">${SUBS[d.key]()}${notesSub(d.key)}</div>
       </div>
     </div>`;
   }
@@ -432,27 +432,85 @@ window.pageInit = async (S) => {
   }
 
   function spiritualSubs() {
-    const items = data.growth || [];
-    const journalInner = `<div class="sub" style="margin-bottom:8px">Obstacles you're working through and reflections. Your coach reads these to help.</div>
-      ${readOnly ? "" : `<div style="margin-bottom:6px"><a href="#" id="add-growth" class="linky">+ add</a></div>`}
-      ${items.length ? items.map((g) => `
-        <div class="row between" style="border-top:1px solid var(--line);padding:8px 0">
-          <div><span class="pill ${g.kind === "obstacle" ? "amber" : ""}">${esc(g.kind)}</span> <strong>${esc(g.title)}</strong>${g.detail ? `<div class="sub">${esc(g.detail)}</div>` : ""}</div>
-          ${readOnly ? "" : `<a href="#" class="linky danger" data-del-growth="${g.id}">delete</a>`}
-        </div>`).join("") : '<div class="empty">Nothing yet.</div>'}`;
-    return sub("spiritual", "journal", "Growth journal", journalInner,
-        `<span class="ds-hint">${items.length}</span>`)
-      + (readOnly ? "" : sub("spiritual", "engine", "Scripture & study",
-          `<div class="sub">Apologetics, church history and doctrine — mastered book by book in the Spiritual tab's engine. <a class="linky" href="/spiritual">Open Spiritual</a></div>`, ""));
+    // The old shared "Growth journal" sub lived here and listed EVERY growth item regardless of
+    // area. Entries are per-dimension now, so each tab's own Notes sub renders them and a journal
+    // here would just duplicate Spiritual's (2026-08-01).
+    return readOnly ? "" : sub("spiritual", "engine", "Scripture & study",
+      `<div class="sub">Apologetics, church history and doctrine — mastered book by book in the Spiritual tab's engine. <a class="linky" href="/spiritual">Open Spiritual</a></div>`, "");
   }
 
-  // Free-form per-dimension dump — the worker's or the coach's. Appended to every box.
-  function infoSub(key) {
-    const txt = (areaOf(key).other_info || "").trim();
-    const inner = `<div class="sub" style="margin-bottom:8px">Anything worth keeping for this area — notes, links, context. Your coach reads this and can edit it (with your approval).</div>
-      ${txt ? `<div class="prewrap">${esc(txt)}</div>` : '<div class="empty">Nothing here yet.</div>'}
-      ${readOnly ? "" : `<div style="margin-top:8px"><a href="#" class="linky" data-edit-info="${key}">${txt ? "edit" : "+ add"}</a></div>`}`;
-    return sub(key, "info", "Other info", inner, txt ? `<span class="ds-hint">·</span>` : "");
+  // --- Notes: the worker's own titled entries, one per dimension ---------------------------
+  // ONE IDEA PER ENTRY. That's the design, not tidiness: every entry's TITLE goes to the AI coach
+  // on every turn as a complete, uncapped index, while the bodies are fetched only for the entries
+  // a conversation actually turns out to need (services/development.growth_details). An entry
+  // holding five unrelated ideas gets indexed by whichever one reached the title, and the other
+  // four are invisible to the coach.
+  //
+  // This replaced the per-dimension "Other info" blob, which had no titles and therefore no index,
+  // so it could only ever be handed over truncated — and the coach then denied the existence of
+  // content sitting on this very page (2026-08-01). Whatever is still in that blob renders below as
+  // "Unfiled", with a one-click path into a real entry.
+  const KINDS = [
+    { v: "note", t: "Note" },
+    { v: "reflection", t: "Reflection" },
+    { v: "obstacle", t: "Obstacle" },
+  ];
+  const kindLabel = (v) => (KINDS.find((k) => k.v === v) || {}).t || v;
+  const kindTone = (v) => (v === "obstacle" ? "amber" : v === "reflection" ? "" : "green");
+  // Legacy rows predate `dimension` — they read as spiritual, where the whole journal used to live.
+  const noteDimOf = (g) => (DIM_KEYS.includes(g.dimension) ? g.dimension : "spiritual");
+  const notesFor = (key) => (data.growth || [])
+    .filter((g) => noteDimOf(g) === key)
+    // Live entries first, then newest — what you're still working through outranks what you closed.
+    .sort((a, b) => ((a.status === "open" ? 0 : 1) - (b.status === "open" ? 0 : 1))
+      || String(b.created_at || "").localeCompare(String(a.created_at || "")));
+
+  function noteRow(g) {
+    const uiKey = `note:${g.id}`;
+    const size = (g.detail || "").trim().length;
+    return `<details class="note-item" data-ui="${uiKey}" ${openSubs.has(uiKey) ? "open" : ""}>
+      <summary>
+        <span class="note-head">
+          <span class="pill ${kindTone(g.kind)}">${esc(kindLabel(g.kind))}</span>
+          <strong class="note-title">${esc(g.title)}</strong>
+          ${g.status !== "open" ? `<span class="pill muted-pill">${esc(g.status)}</span>` : ""}
+        </span>
+        <span class="ds-right">
+          <span class="ds-hint">${size ? `${size.toLocaleString()} chars` : "empty"}</span>${S.ICON.chev}
+        </span>
+      </summary>
+      <div class="ds-body">
+        ${g.detail ? `<div class="prewrap">${esc(g.detail)}</div>` : '<div class="empty">No detail yet — open edit to write it.</div>'}
+        ${readOnly ? "" : `<div class="row" style="gap:14px;margin-top:10px">
+          <a href="#" class="linky" data-edit-note="${g.id}">edit</a>
+          <a href="#" class="linky danger" data-del-growth="${g.id}">delete</a>
+        </div>`}
+      </div>
+    </details>`;
+  }
+
+  function notesSub(key) {
+    const items = notesFor(key);
+    const unfiled = (areaOf(key).other_info || "").trim();
+    const inner = `<div class="sub" style="margin-bottom:10px">Anything worth keeping for this area — one idea per entry, each with its own title. Your coach always sees every title, and reads an entry's detail when the conversation calls for it.</div>
+      ${readOnly ? "" : `<div style="margin-bottom:8px"><a href="#" class="linky" data-add-note="${key}">+ add entry</a></div>`}
+      ${items.length ? `<div class="note-list">${items.map(noteRow).join("")}</div>`
+        : '<div class="empty">No entries yet.</div>'}
+      ${unfiled ? `
+        <div class="unfiled">
+          <div class="row between" style="align-items:baseline;gap:10px">
+            <span class="section-label">Unfiled</span>
+            ${readOnly ? "" : `<span class="row" style="gap:12px">
+              <a href="#" class="linky" data-file-info="${key}">file as entry</a>
+              <a href="#" class="linky" data-edit-info="${key}">edit</a>
+            </span>`}
+          </div>
+          <div class="sub" style="margin:4px 0 8px">Older free-form notes for this area. They have no title, so your coach can't tell what's in here without reading all of it — filing them as entries fixes that.</div>
+          <div class="prewrap">${esc(unfiled)}</div>
+        </div>` : ""}`;
+    const badge = items.length || unfiled
+      ? `<span class="ds-hint">${items.length}${unfiled ? " + unfiled" : ""}</span>` : "";
+    return sub(key, "notes", "Notes", inner, badge);
   }
 
   const SUBS = { spiritual: spiritualSubs, professional: professionalSubs, philosophical: philosophicalSubs, physical: physicalSubs };
@@ -707,12 +765,21 @@ window.pageInit = async (S) => {
         { name: "deadline", label: `Deadline (blank = default ${DEADLINE_DEFAULT})`, type: "date", value: areaOf(key).deadline || "" },
       ], (o) => api(`/api/development/areas/${key}`, { method: "PATCH", body: { deadline: o.deadline || null } }));
     });
+    // The legacy free-form blob. Still editable so nothing is trapped, but the way OUT of it is
+    // "file as entry" — a titled entry is what the coach can actually index.
     S.qsa("[data-edit-info]").forEach((a) => a.onclick = (e) => {
       e.preventDefault();
       const key = a.dataset.editInfo;
-      formModal(`${dimName(key)} — other info`, [
-        { name: "other_info", label: "Notes, links, context — anything worth keeping", type: "textarea", rows: 8, value: areaOf(key).other_info || "" },
+      formModal(`${dimName(key)} — unfiled notes`, [
+        { name: "other_info", label: "Free-form text with no title. Prefer adding an entry instead — your coach can only see what's in here by reading all of it.", type: "textarea", rows: 10, value: areaOf(key).other_info || "" },
       ], (o) => api(`/api/development/areas/${key}`, { method: "PATCH", body: { other_info: o.other_info || null } }));
+    });
+    S.qsa("[data-file-info]").forEach((a) => a.onclick = (e) => { e.preventDefault(); fileUnfiledForm(a.dataset.fileInfo); });
+
+    S.qsa("[data-add-note]").forEach((a) => a.onclick = (e) => { e.preventDefault(); noteForm(null, a.dataset.addNote); });
+    S.qsa("[data-edit-note]").forEach((a) => a.onclick = (e) => {
+      e.preventDefault();
+      noteForm((data.growth || []).find((g) => g.id == a.dataset.editNote));
     });
 
     const aa = S.qs("#add-ach"); if (aa) aa.onclick = (e) => { e.preventDefault(); formModal("Add achievement", [
@@ -729,11 +796,6 @@ window.pageInit = async (S) => {
     });
     S.qsa("[data-del-skill]").forEach((a) => a.onclick = (e) => { e.preventDefault(); e.stopPropagation(); del(`/api/development/skills/${a.dataset.delSkill}`); });
 
-    const agr = S.qs("#add-growth"); if (agr) agr.onclick = (e) => { e.preventDefault(); formModal("Add to journal", [
-      { name: "kind", label: "Kind", type: "select", value: "reflection", options: [{ v: "reflection", t: "Reflection" }, { v: "obstacle", t: "Obstacle" }, { v: "note", t: "Note" }] },
-      { name: "title", label: "Title", ph: "What's on your mind?" },
-      { name: "detail", label: "Detail", type: "textarea" },
-    ], (o) => api("/api/development/growth", { method: "POST", body: { kind: o.kind, title: o.title, detail: o.detail } })); };
     S.qsa("[data-del-growth]").forEach((a) => a.onclick = (e) => { e.preventDefault(); del(`/api/development/growth/${a.dataset.delGrowth}`); });
   }
 
@@ -749,6 +811,46 @@ window.pageInit = async (S) => {
       const body = { exercise_name: o.exercise_name, weight_value: num(o.weight_value) || 0, weight_unit: o.weight_unit, reps: num(o.reps) || 1, detail: o.detail || null, achieved_on: o.achieved_on || null };
       return pr ? api(`/api/development/prs/${pr.id}`, { method: "PATCH", body }) : api("/api/development/prs", { method: "POST", body });
     });
+  }
+
+  // --- notes -------------------------------------------------------------------
+  // The TITLE is the load-bearing field: it's what the AI coach sees for every entry on every turn,
+  // and how it decides which bodies to pull. "Misc thoughts" indexes nothing.
+  function noteForm(g, dimKey) {
+    const key = g ? noteDimOf(g) : (dimKey || "professional");
+    formModal(g ? "Edit entry" : `Add ${dimName(key).toLowerCase()} entry`, [
+      { name: "title", label: "Title — name the ONE thing this entry is about", value: g && g.title, ph: "e.g. Pareto problem set" },
+      { name: "dimension", label: "Area", type: "select", value: key, options: DIMS.map((d) => ({ v: d.key, t: d.name })) },
+      { name: "kind", label: "Kind", type: "select", value: (g && g.kind) || "note", options: KINDS },
+      { name: "detail", label: "Details — as long as you like, nothing is truncated", type: "textarea", rows: 12, value: g && g.detail, ph: "The full text." },
+      { name: "status", label: "Status", type: "select", value: (g && g.status) || "open", options: [{ v: "open", t: "Open" }, { v: "resolved", t: "Resolved" }, { v: "archived", t: "Archived" }] },
+    ], (o) => {
+      if (!String(o.title || "").trim()) throw { detail: "Give it a title — that's the part your coach always sees." };
+      const body = { dimension: o.dimension, kind: o.kind, title: o.title, detail: o.detail || null, status: o.status };
+      return g ? api(`/api/development/growth/${g.id}`, { method: "PATCH", body })
+        : api("/api/development/growth", { method: "POST", body });
+    }, { wide: true });
+  }
+
+  /** Move a dimension's leftover free-form blob into a real titled entry, then clear the blob.
+   *  Deliberately moves the WHOLE text in one go rather than trying to split it: deciding where one
+   *  idea ends is a judgement call, and an auto-split would bury content under a title that doesn't
+   *  describe it — the same invisibility this whole change exists to end. Split it afterwards by
+   *  trimming this entry and adding siblings. */
+  function fileUnfiledForm(key) {
+    const txt = (areaOf(key).other_info || "").trim();
+    if (!txt) return;
+    formModal(`File ${dimName(key).toLowerCase()} notes as an entry`, [
+      { name: "title", label: "Title — what is this text about?", ph: "e.g. Learning roadmap" },
+      { name: "kind", label: "Kind", type: "select", value: "note", options: KINDS },
+      { name: "detail", label: "Details (your unfiled text, moved across whole — edit freely)", type: "textarea", rows: 14, value: txt },
+    ], async (o) => {
+      if (!String(o.title || "").trim()) throw { detail: "Give it a title — that's the part your coach always sees." };
+      await api("/api/development/growth", { method: "POST", body: { dimension: key, kind: o.kind, title: o.title, detail: o.detail || null, status: "open" } });
+      // Clear the blob ONLY after the entry is safely stored. If this second call fails the text is
+      // duplicated rather than lost, which is the right way round for something irreplaceable.
+      await api(`/api/development/areas/${key}`, { method: "PATCH", body: { other_info: null } });
+    }, { wide: true });
   }
 
   // No progress-% field: a dimension's % is its Mastery Engine score, never typed by hand.
