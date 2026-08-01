@@ -452,11 +452,14 @@ def development_area_dict(a: DevelopmentArea) -> dict:
 def growth_item_dict(g: GrowthItem) -> dict:
     return {
         "id": g.id,
+        # Legacy rows predate the column; they read as 'spiritual', where the journal used to live.
+        "dimension": g.dimension or "spiritual",
         "kind": g.kind,
         "title": g.title,
         "detail": g.detail,
         "status": g.status,
         "created_at": _iso(g.created_at),
+        "updated_at": _iso(g.updated_at),
     }
 
 

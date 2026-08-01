@@ -843,6 +843,35 @@ textarea { resize: vertical; min-height: 78px; }
   max-width:34ch; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .ds-body { padding:2px 2px 14px; }
 
+/* Per-dimension notes — one titled idea per entry (see growth.js). The row mirrors how the AI coach
+   consumes them: the TITLE is always visible because the coach always has it, and the body is
+   revealed on demand because that's exactly when the coach fetches it. */
+.note-list { display:flex; flex-direction:column; gap:6px; }
+.note-item { border:1px solid var(--line); border-radius:var(--radius-sm); }
+.note-item summary { list-style:none; display:flex; align-items:center; gap:10px; padding:9px 12px;
+  cursor:pointer; border-radius:var(--radius-sm);
+  /* Undo the mono/uppercase LABEL styling that `.dim-sub summary` applies to every summary inside a
+     dimension box (it's a descendant selector, and these rows live in one). An entry title is
+     content, not a section heading — uppercased mono makes real sentences genuinely hard to scan. */
+  font-family:inherit; font-size:13.5px; font-weight:400; letter-spacing:normal;
+  text-transform:none; color:var(--text); }
+.note-item summary::-webkit-details-marker { display:none; }
+.note-item summary:hover { background:var(--hover); }
+.note-item[open] { border-color:var(--green-line); }
+.note-item[open] .ds-right svg { transform:rotate(-90deg); }
+.note-head { display:flex; align-items:center; gap:8px; min-width:0; }
+.note-title { font-weight:600; font-size:13.5px; min-width:0; overflow:hidden;
+  text-overflow:ellipsis; white-space:nowrap; }
+.pill.muted-pill { background:var(--input); color:var(--muted); }
+.note-item .ds-body { padding:0 12px 12px; }
+.note-item .prewrap { font-size:13px; color:var(--sub); }
+
+/* Leftover free-form text from before entries were titled. Dashed and quiet on purpose: it still
+   works, but it is the thing to empty out, not the thing to add to. */
+.unfiled { margin-top:16px; padding:12px; border:1px dashed var(--line);
+  border-radius:var(--radius-sm); background:var(--input); }
+.unfiled .prewrap { font-size:13px; color:var(--sub); max-height:18em; overflow:auto; }
+
 @media (prefers-reduced-motion: reduce) {
   .dim-cell, .pace-row, .pr-chev svg, .goal-item summary svg, .ds-right svg { transition:none; }
 }

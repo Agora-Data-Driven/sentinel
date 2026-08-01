@@ -244,16 +244,57 @@ def holistic_digest(db: Session, user: User) -> dict:
 
     reading_now = [r["title"] for r in reading if r["progress"]["status"] == "reading"][:8]
     reading_done = [r["title"] for r in reading if r["progress"]["status"] == "done"][:12]
+
+    # The growth journal is sent as a COMPLETE INDEX (every entry, uncapped) carrying titles only;
+    # the `detail` bodies are fetched on demand via /api/internal/growth-detail. This is the same
+    # small-to-big shape as the mentor library, and the completeness is the whole point:
+    #
+    #   🔴 NEVER cap this list. The coach infers "you have no note about X" from its absence here.
+    #   Truncate the index and that inference becomes a confident lie — which is exactly how a
+    #   600-char cap on areas.other_info made the coach report a list the worker could see on
+    #   their own screen as non-existent (2026-08-01). Bodies may be lazy; the index may not.
+    #
+    # Archived entries stay listed (marked) for the same reason — the worker can still ask about
+    # something they put away, and silence would be indistinguishable from "it never existed".
+    # `chars` lets the caller decide what's worth hydrating without fetching it first.
+    growth_index = [
+        {
+            "id": g.id,
+            "dimension": g.dimension or "spiritual",
+            "kind": g.kind,
+            "status": g.status,
+            "title": g.title,
+            "created": g.created_at.date().isoformat() if g.created_at else None,
+            "chars": len(g.detail or ""),
+        }
+        for g in growth
+    ]
+    # Transitional: the pre-index shape, kept so a Mastery Engine that hasn't been redeployed yet
+    # still shows growth context. The two services deploy separately, so dropping these the same
+    # day would blank the coach's growth awareness in whichever window one side lags. Safe to
+    # delete once both sides are known live on the index.
     obstacles = [g.title for g in growth if g.kind == "obstacle" and g.status != "archived"][:6]
     reflections = [g.title for g in growth if g.kind in ("reflection", "note")][:6]
 
     # Per-dimension area settings (pace deadline + the free-form "other info" dump). The coach
     # can both read these and edit them via the update_area action, so include current values.
+    #
+    # 🔴 other_info is sent WHOLE — never truncate it here. Two reasons, both learned the hard way
+    # (2026-08-01), and a "reasonable" cap reintroduces both:
+    #   1. This dump is where a worker keeps the notes they most want coached on (a learning
+    #      roadmap, a shortlist, a pending decision). A cap silently hides the tail, and the
+    #      assistant then reports that content as NOT EXISTING — confidently, because from inside
+    #      its context it genuinely doesn't. There is no marker telling it the field was cut.
+    #   2. update_area REPLACES other_info, and the coach is instructed to resend the existing
+    #      text plus its addition. Handing it a truncated copy therefore makes "add a line to my
+    #      professional notes" DELETE everything past the cap. Silent, unrecoverable data loss.
+    # The whole dimension is at most a few thousand tokens — far less than the mentor/catalog
+    # blocks already in this prompt. Cost is not the constraint; correctness is.
     areas = _areas(db, user.id)
     area_summaries = {
         dim: {
             "deadline": a.deadline.isoformat() if a.deadline else None,
-            "other_info": (a.other_info or "")[:600] or None,
+            "other_info": (a.other_info or "").strip() or None,
         }
         for dim, a in areas.items()
     }
@@ -309,7 +350,13 @@ def holistic_digest(db: Session, user: User) -> dict:
             {"name": s.name, "level": s.level, "source": s.source} for s in skills[:40]
         ],
         "reading": {"reading_now": reading_now, "done": reading_done},
-        "growth": {"obstacles": obstacles, "reflections": reflections},
+        "growth": {
+            # The authoritative, uncapped list. Bodies via /api/internal/growth-detail.
+            "index": growth_index,
+            # Transitional (see above) — remove once both services run the index.
+            "obstacles": obstacles,
+            "reflections": reflections,
+        },
         "areas": area_summaries,
         # Titles only — a mentor transcript can be a whole video's worth of text, so the
         # digest lists what's available rather than dumping it into every prompt.
@@ -329,3 +376,38 @@ def holistic_digest(db: Session, user: User) -> dict:
         ],
         "editable": editable,
     }
+
+
+# How many journal entries one growth-detail call may hydrate. A ceiling on the REQUEST, not on any
+# entry's text: whatever is returned is returned whole. Bodies are the thing the caller came for, so
+# truncating one here would recreate the bug the index exists to prevent.
+MAX_GROWTH_DETAIL_IDS = 50
+
+
+def growth_details(db: Session, user_id: int, ids: list[int]) -> list[dict]:
+    """Full bodies for specific growth-journal entries — the "big" half of small-to-big retrieval.
+
+    `holistic_digest` ships every entry's TITLE on every turn (cheap, and complete, so the coach can
+    always see what exists); this fetches the `detail` text for the handful the conversation actually
+    turned out to need. Entries come back WHOLE — never excerpted — because a partial body is
+    indistinguishable to the model from a complete one, and it will summarise the fragment as if it
+    were the note.
+
+    Always scoped to `user_id`: an id belonging to someone else simply isn't found, so a caller
+    cannot walk the table by guessing integers. Unknown ids are skipped silently — the caller
+    reconciles against the index it was given, and a missing id there means "deleted since", which
+    is not an error worth failing the whole turn over.
+    """
+    wanted = [i for i in dict.fromkeys(ids) if isinstance(i, int)][:MAX_GROWTH_DETAIL_IDS]
+    if not wanted:
+        return []
+    rows = list(
+        db.execute(
+            select(GrowthItem)
+            .where(GrowthItem.user_id == user_id, GrowthItem.id.in_(wanted))
+        ).scalars()
+    )
+    by_id = {g.id: g for g in rows}
+    # Preserve the caller's order — it asked most-relevant-first, and that ordering survives into
+    # the prompt, where earlier context carries more weight.
+    return [growth_item_dict(by_id[i]) for i in wanted if i in by_id]

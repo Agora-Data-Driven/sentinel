@@ -304,9 +304,27 @@ def update_area(
 
 
 # --- Growth journal ---------------------------------------------------------
+# One titled idea per entry, filed under a growth dimension. The title is what the AI coach sees on
+# every turn (complete index); the detail is fetched on demand. See models/development.GrowthItem.
+def _dimension_or_400(value: str | None, fallback: str = "spiritual") -> str:
+    """Validate a dimension, or 400. An unknown one would file the entry into a tab that renders
+    nowhere — invisible in the UI, and mis-grouped in the coach's index."""
+    dim = (value or fallback).strip().lower()
+    if dim not in GROWTH_DIMENSIONS:
+        raise HTTPException(status_code=400, detail=f"Unknown dimension '{value}'")
+    return dim
+
+
 @router.post("/growth")
 def add_growth(payload: GrowthItemIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    g = GrowthItem(user_id=user.id, kind=payload.kind, title=payload.title, detail=payload.detail, status=payload.status)
+    g = GrowthItem(
+        user_id=user.id,
+        dimension=_dimension_or_400(payload.dimension),
+        kind=payload.kind,
+        title=payload.title,
+        detail=payload.detail,
+        status=payload.status,
+    )
     db.add(g)
     db.commit()
     return growth_item_dict(g)
@@ -315,6 +333,8 @@ def add_growth(payload: GrowthItemIn, user: User = Depends(get_current_user), db
 @router.patch("/growth/{item_id}")
 def update_growth(item_id: int, payload: GrowthItemUpdateIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     g = _own(db, GrowthItem, item_id, user)
+    if payload.dimension is not None:
+        g.dimension = _dimension_or_400(payload.dimension)
     _apply(g, payload, ["kind", "title", "detail", "status"])
     db.commit()
     return growth_item_dict(g)
