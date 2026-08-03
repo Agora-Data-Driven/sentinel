@@ -98,17 +98,20 @@ window.pageInit = async (S) => {
 
     <div id="ac-engine">
       <button class="btn ac-back" id="ac-back">&larr; Back</button>
+      <!-- background is a TOKEN, not #fff: a white slab flashes behind the engine in dark mode. -->
       <iframe id="ac-frame" title="AGORA Mastery Engine" allow="microphone" loading="eager"
         style="width:100%;height:calc(100vh - 190px);min-height:520px;border:1px solid var(--line);
-               border-radius:18px;box-shadow:var(--shadow);background:#fff;display:block"></iframe>
+               border-radius:18px;box-shadow:var(--shadow);background:var(--card);display:block"></iframe>
     </div>`;
 
   const dash = S.qs("#ac-dash");
   const eng = S.qs("#ac-engine");
   const frame = S.qs("#ac-frame");
 
+  // S.engineUrl appends &theme=<the page's theme> so the engine boots in the same skin as
+  // Sentinel around it; app.js also messages every iframe when the toggle moves.
   const openFrame = (url) => {
-    frame.src = url;
+    frame.src = S.engineUrl(url);
     dash.style.display = "none";
     eng.classList.add("on");
   };

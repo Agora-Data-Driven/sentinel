@@ -10,12 +10,14 @@ kiosk. Operating rules (CSP, cache bumping, `api()`-only fetches) live in
 | Entry | What it is |
 |---|---|
 | `pages/*.html` | 19 shells (~0.7 kb each; JS renders everything): dashboard, attendance, approvals, gym, growth, reading, academy, philosophical, spiritual, people, leave, north-star, reports, settings, manage, payroll, login, kiosk, scanner. Routes registered in `backend/app/main.py:381` (`_PAGES`; `/login` is its own route) |
-| `static/js/app.js` | The shell every page loads: `NAV` array `:78` (roles/`min`/`hideRoles` gate visibility), `api()` `:130` (CSRF echo + FastAPI error flattening), `toast`, `skeleton`, `modal`, `esc`/`qs`/`qsa`, `ICON`, `avatar`, command palette (`initCommandPalette`), Coach FAB |
-| `static/js/taskboard.js` | Mountable Kanban embedded in the dashboard (no /tasks page — the URL 307s to /dashboard). Optimistic DnD (native HTML5 — deliberate, see AGENTS.md §9), SSE reload, quick-add, Atrium-card editing |
-| `static/js/dashboard.js` | KPIs, self clock-in card, hosts the task board |
+| `static/js/app.js` | The shell every page loads: `NAV` array `:78` (roles/`min`/`hideRoles` gate visibility), `api()` (CSRF echo + FastAPI error flattening), `toast`, `skeleton`, `modal`, `esc`/`qs`/`qsa`, `ICON`, `avatar`, command palette (`initCommandPalette`), Coach FAB, `setTheme`/`engineUrl`/`themeEmbeds` (hands our light/dark to every embedded Mastery Engine) |
+| `static/js/taskboard.js` | Mountable Kanban embedded in the Overview (no /tasks page — the URL 307s to /dashboard). Optimistic DnD (native HTML5 — deliberate, see AGENTS.md §9), SSE reload, quick-add, Atrium-card editing |
+| `static/js/dashboard.js` | **The Overview** (`/dashboard`, labelled "Overview" since 2026-08-03): greeting + the day strip (attendance/gym as two buttons), then `GrowthPanel`'s rings, the task board, `GrowthPanel`'s ledger, and — admins only, last — the org KPIs/chart/late list/handovers |
+| `static/js/growth-page.js` | `/growth` = a manager's read-only view of ONE person (`?user=<id>`); without a `?user` it redirects to the Overview |
 | `static/js/attendance.js` · `approvals.js` | Time page · combined attendance+leave approvals inbox (team_lead+) |
 | `static/js/gym.js` | Calendar, no-lock day editor, saved routines (one-tap workout templates), history |
-| `static/js/growth.js` · `reading.js` | Development hub (4 dimensions, Mentor Library import) · reading canon |
+| `static/js/growth.js` | **`window.GrowthPanel`, a component — not a page controller.** `mount(S, root, {userId, ringsHost, mast})` renders the 4-dimension compass (each ring links into its engine tab) and the ledger (pace band, per-dimension details, Mentor Library import). `ringsHost` splits the two so the Overview can put the task board between them |
+| `static/js/reading.js` | Reading canon |
 | `static/js/academy.js` | Mastery Engine iframe (Professional tab) |
 | `static/js/engine-tab.js` | ONE controller for the Philosophical + Spiritual tabs — each shell pins a program via `<body data-program>` → iframe `?program=` |
 | `static/js/kiosk.js` | QR scanning + **IndexedDB offline punch queue** (syncs every 30 s) |
@@ -34,6 +36,7 @@ kiosk. Operating rules (CSP, cache bumping, `api()`-only fetches) live in
 | Page script | Calls | Backend shape from `backend/app/serializers.py` |
 |---|---|---|
 | `taskboard.js` | `/api/tasks*` | `task_card` / `task_detail` (+ Atrium cards via `as_board_card` — string ids `atrium:<client>:<id>`) |
+| `dashboard.js` | `/api/dashboard`, `/api/insights`, `/api/attendance/self-event` | `dashboard` payload (`me`, `kpis`, `late_today_list`, `handovers`) |
 | `attendance.js`, `approvals.js` | `/api/attendance/*` | `summary_dict`, `attendance_request_dict` |
 | `gym.js` | `/api/gym/*` | `gym_log_dict`, `gym_routine_dict`, `body_metric_dict`, `personal_record_dict` |
 | `leave.js`, `approvals.js` | `/api/leave/*` | `leave_type_dict`, `leave_balance_dict`, `leave_request_dict` |
@@ -52,9 +55,16 @@ kiosk. Operating rules (CSP, cache bumping, `api()`-only fetches) live in
    header + 422-detail flattening live there).
 5. **Add an icon** — extend the `ICON` map in `app.js`; inline SVG strings, no icon fonts.
 6. **Embed another Mastery Engine tab** — copy the `engine-tab.js` pattern: new shell with
-   `data-program`/`data-title`, iframe needs `allow="microphone"`, and the server must delegate
-   the mic (Permissions-Policy derives from `SKILL_MASTERY_URL` — AGENTS.md §5).
-7. **Change styles** — `static/css/styles.css` only; keep it token-driven (`var(--*)`) so dark
+   `data-program`/`data-title`, iframe needs `allow="microphone"`, build the src through
+   **`S.engineUrl(base, extra)`** (it appends `&theme=` so the engine boots in our skin; `setTheme`
+   then messages every iframe when the toggle moves), give the iframe `background:var(--card)`
+   NOT `#fff`, and the server must delegate the mic (Permissions-Policy derives from
+   `SKILL_MASTERY_URL` — AGENTS.md §5).
+7. **Add something to the Overview** — it is `dashboard.js` end to end. Blocks are appended in
+   reading order to one `html` string, then mounted: `GrowthPanel` into `#dash-rings`/`#dash-growth`,
+   `TaskBoard` into `#dash-taskboard`. Both mounts are fail-soft on purpose — a bad
+   `/api/development` must never cost anyone their task board.
+8. **Change styles** — `static/css/styles.css` only; keep it token-driven (`var(--*)`) so dark
    mode holds; then bump the SW cache.
 
 Verify: `node --check` every edited JS file (CI does the same); full check = backend pytest suite.
@@ -73,6 +83,12 @@ Deploy: `..\deploy\deploy.ps1` (Cloud Run `sentinel`, asia-southeast1).
 - **Two renderers must never share a host element.** `renderGoals` and `renderBodyStats` both wrote
   `#gym-body` and each set `innerHTML`, so whichever fetch resolved last silently erased the other
   card. They own `#gym-goals` / `#gym-body` now — give every async renderer its own node.
+- **`growth.js` must not define `window.pageInit`.** The Overview loads `growth.js` AND
+  `dashboard.js`; whichever assigned `pageInit` last would win, silently. `growth.js` exports
+  `window.GrowthPanel` only, and `/growth`'s controller is the separate `growth-page.js`.
+- **A component that queries `S.qsa` document-wide must not collide with its host's markup.**
+  `GrowthPanel` keys its collapsibles off `details[data-ui]`; the task board it now shares a page
+  with uses `data-uid`. Check before adding an attribute selector.
 - Forgetting the `CACHE` bump ships stale assets to everyone (AGENTS.md §5 has the full two-layer
   cache story; the server's `Cache-Control: no-cache` half is pinned by backend tests).
 - No React, no bundler, no TypeScript — keep matching what's here.
@@ -81,5 +97,5 @@ Deploy: `..\deploy\deploy.ps1` (Cloud Run `sentinel`, asia-southeast1).
 
 - Live: `https://sentinel-585951669065.asia-southeast1.run.app` — serving revision
   **`sentinel-00112-mpl`** (verified 2026-07-29).
-- `sw.js` `CACHE` currently **`sentinel-v48`**.
-- 21 JS files under `static/js/`; 19 page shells.
+- `sw.js` `CACHE` currently **`sentinel-v53`**.
+- 22 JS files under `static/js/`; 19 page shells.

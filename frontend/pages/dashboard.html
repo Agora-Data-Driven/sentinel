@@ -3,18 +3,21 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Dashboard · Sentinel</title>
+  <title>Overview · Sentinel</title>
   <link rel="icon" href="/static/favicon.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <!-- Space Mono is the growth ledger's label face (GrowthPanel renders here now). -->
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/css/styles.css">
   <link rel="manifest" href="/manifest.json">
 </head>
-<body data-title="Dashboard">
+<body data-title="Overview">
   <div id="view"></div>
   <script src="/static/js/app.js"></script>
   <script src="/static/js/charts.js"></script>
   <script src="/static/js/taskboard.js"></script>
+  <!-- growth.js only defines window.GrowthPanel; dashboard.js owns window.pageInit. -->
+  <script src="/static/js/growth.js"></script>
   <script src="/static/js/dashboard.js"></script>
 </body>
 </html>

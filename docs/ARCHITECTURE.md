@@ -190,8 +190,9 @@ No framework, no bundler. `pages/*.html` are ~0.7 kb shells; JS renders the mark
 |---|---|
 | `app.js` (44 kb) | Shell: nav, `api()`, `toast()`, `modal()`, `skeleton()`, icons, command palette, Coach FAB |
 | `gym.js` (36 kb) | Calendar, day editor, history |
-| `growth.js` (23 kb) | Development hub |
-| `taskboard.js` (19 kb) | Kanban + drag/drop — a mountable component embedded in the dashboard (no /tasks page; the URL **307-redirects** to /dashboard, query string intact) |
+| `growth.js` (24 kb) | `window.GrowthPanel` — a mountable component (compass + ledger), hosted by the Overview and by `/growth`'s read-only manager view |
+| `dashboard.js` (10 kb) | **The Overview**: day strip, then GrowthPanel's rings, TaskBoard, GrowthPanel's ledger, and the admin block |
+| `taskboard.js` (19 kb) | Kanban + drag/drop — a mountable component embedded in the Overview (no /tasks page; the URL **307-redirects** to /dashboard, query string intact) |
 | `kiosk.js` (17 kb) | QR scanning + **IndexedDB offline punch queue** (syncs every 30s) |
 | `manage.js`, `reading.js`, `charts.js`, `people.js`, … | One per page |
 | `academy.js` | Hosts the Mastery Engine iframe |
@@ -201,10 +202,13 @@ normalised (see AGENTS.md §5).
 
 ### Navigation (the `NAV` array, `app.js:78`)
 
-Two sidebar sections. **Workspace**: Dashboard (with the embedded task board) · a **Growth**
-group whose four tabs mirror the Overview's four dimensions one-to-one — Overview (`/growth`),
-Professional (`/academy`, the engine's career programs), Philosophical + Spiritual (each a
-Mastery Engine pinned to its reading program), Physical (`/gym`) · a **Time & Leave** group —
+Two sidebar sections. **Workspace**: **Overview** (`/dashboard` — the task board AND the growth
+compass/ledger, merged 2026-08-03; the URL kept its name because notifications, the palette and
+bookmarks all point at it) · a **Growth** group of exactly the four engine tabs, which the
+Overview's four rings link into one-to-one — Professional (`/academy`, the engine's career
+programs), Philosophical + Spiritual (each a Mastery Engine pinned to its reading program),
+Physical (`/gym`); `/growth` is no longer in the nav — it serves only a manager's read-only view
+of one person (`?user=<id>`) · a **Time & Leave** group —
 Time (`/attendance`), Leave, Approvals (team_lead+, one inbox for attendance + leave),
 Clock in (`/scanner`, super_admin only) · Our North Star (`/north-star`). **Admin**: People,
 Reports (team_lead+), Payroll, Manage (super_admin), Settings (admin+). There is no Reading tab —

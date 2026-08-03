@@ -21,7 +21,7 @@ leave, payroll, reporting, and a "holistic development" hub (learning + reading 
 | **Runs on** | Cloud Run service `sentinel`, project `agora-data-driven`, region **`asia-southeast1`** |
 | **Live URL** | `https://sentinel-585951669065.asia-southeast1.run.app` |
 | **Timezone** | Stored **UTC**, displayed/ruled in **Asia/Manila (UTC+8)** |
-| **Embeds** | The Mastery Engine, via iframe — Professional (formerly Academy) tab, Philosophical + Spiritual tabs (each pinned to one engine program via `?program=`), and the global Coach FAB |
+| **Embeds** | The Mastery Engine, via iframe — Professional (formerly Academy) tab, Philosophical + Spiritual tabs (each pinned to one engine program via `?program=`), and the global Coach FAB. Every src is built through `S.engineUrl()`, which appends `&theme=` so the engine wears our light/dark; `setTheme` messages the running frames (§5) |
 
 > ⚠️ **Region is `asia-southeast1`, not `us-central1`.** Every other Agora service is
 > `us-central1`. Getting this wrong makes `gcloud` commands silently target nothing.
@@ -95,7 +95,9 @@ backend/app/
   seed.py          populates every table with sample data
 frontend/
   pages/*.html     thin shells — real markup is rendered by JS
-  static/js/       app.js (shell + api() + toast) + one file per page
+  static/js/       app.js (shell + api() + toast) + one file per page, PLUS two mountable
+                   components: taskboard.js and growth.js (`window.GrowthPanel`), which the
+                   Overview (dashboard.js) hosts together — see §5
   static/css/      styles.css — the whole design system
   sw.js            service worker — BUMP `CACHE` ON EVERY ASSET CHANGE (§5)
 deploy/            deploy.ps1, seed-job.ps1, DEPLOY.md
@@ -487,6 +489,35 @@ extending them:
 Applying with `mode="replace"` also sets the session's `day_type` from the routine (loading a Push
 template over a whole day means the day IS a push day); `append` leaves the split alone. Sets arrive
 with `done: false` — a template holds sets to *do*, and pre-ticking them would log work never done.
+
+### 🟡 The Overview is ONE page assembled from components — `/growth` is not your growth hub
+
+Merged 2026-08-03. `/dashboard` (labelled **"Overview"**; the URL is unchanged because
+notifications, the command palette and everyone's bookmarks point at it) now hosts, in reading
+order: greeting + the day strip → `GrowthPanel`'s four rings → `TaskBoard` → `GrowthPanel`'s
+ledger → the admin block. Consequences worth knowing before you edit any of it:
+
+- **`growth.js` exports `window.GrowthPanel`, not `window.pageInit`.** The Overview loads it
+  *alongside* `dashboard.js`, and two files assigning `pageInit` is a silent last-one-wins bug.
+  `mount(S, root, {userId, ringsHost, mast})`; `ringsHost` is what lets the task board sit
+  between the compass and the ledger.
+- **`/growth` survives only as a manager's read-only view of somebody else** (`?user=<id>`,
+  `growth-page.js`). With no `?user` it redirects to the Overview — rendering a second copy of
+  your own hub is how the two drift apart. It is no longer in the Growth hub's nav children,
+  so that hub is now exactly the four engine tabs.
+- **Each ring is the door into its Mastery Engine tab** (`/academy`, `/philosophical`,
+  `/spiritual`, `/gym`); the quiet "Details" strip under it expands that dimension in the ledger.
+  Two affordances, deliberately not one overloaded click.
+- Both mounts are **fail-soft**: a broken `/api/development` must never cost anyone their board.
+
+### 🟡 An embedded Mastery Engine stays light inside a dark Sentinel
+
+The engine is cross-origin, so it cannot read our theme. We hand it over twice and BOTH halves are
+required: `S.engineUrl()` appends `&theme=` to the iframe src (the initial paint), and `setTheme`
+postMessages `{type:'agora-theme'}` to every iframe (the toggle moving while a frame is already
+running). Build every engine src through `S.engineUrl()` — a hand-built src loses half of it.
+Also give the iframe `background:var(--card)`, never `#fff`: a white slab flashes behind the
+engine on every load in dark mode. The engine end is `public/theme.js` there.
 
 ### 🟡 A `/go` from another machine can clobber this repo
 
