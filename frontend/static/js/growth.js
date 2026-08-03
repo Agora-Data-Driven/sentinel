@@ -1,24 +1,42 @@
-// Development Overview — the holistic hub, organized around FOUR GROWTH DIMENSIONS:
-// Spiritual · Professional · Philosophical · Physical — mirroring the Growth nav tabs
-// one-to-one. Layout, top to bottom:
-//   1. The compass — four progress rings. A ring's % is the MASTERY ENGINE's score for that
-//      dimension's program(s) (via /api/academy/courses) — never typed by hand. The tick marks
-//      "expected by today" on the run from the area's start to its deadline.
-//   2. The pace band — the same actual-vs-expected on a date track; each row's deadline is
-//      editable (default 2026-11-04) and stored per dimension (/api/development/areas).
-//      Each row IS its dimension: the track renders exactly as before, and clicking a row
-//      expands that dimension's details INLINE beneath it — goals + objectives first, then
-//      its records as collapsible sub-sections, then a free-form "Other info" dump the coach
-//      can read and edit. NOTHING from the old hub was dropped:
-//      Physical → body stats + PRs · Professional → resume, achievements, skills, Academy ·
-//      Philosophical → books/essays + philosophy canon · Spiritual → journal.
-// A manager opens ?user=<id> for a read-only view. The same data feeds the AI coach.
-window.pageInit = async (S) => {
-  const view = S.view();
+/* GrowthPanel — the holistic growth hub, organized around FOUR GROWTH DIMENSIONS:
+   Spiritual · Professional · Philosophical · Physical — mirroring the Growth nav tabs
+   one-to-one. Two parts, which the host may place separately:
+     1. The compass — four progress rings. A ring's % is the MASTERY ENGINE's score for that
+        dimension's program(s) (via /api/academy/courses) — never typed by hand. The tick marks
+        "expected by today" on the run from the area's start to its deadline. Each ring is also
+        the DOOR into that dimension's Mastery Engine tab (/academy, /philosophical, /spiritual,
+        /gym), with a quieter "Details" button for the pace-band expansion below.
+     2. The ledger — the pace band (the same actual-vs-expected on a date track; each row's
+        deadline is editable, default 2026-11-04, stored per dimension via
+        /api/development/areas) plus the mentor library. Each pace row IS its dimension:
+        clicking it expands that dimension's details INLINE beneath it — goals + objectives
+        first, then its records as collapsible sub-sections, then a free-form "Other info" dump
+        the coach can read and edit. NOTHING from the old hub was dropped:
+        Physical → body stats + PRs · Professional → resume, achievements, skills, Academy ·
+        Philosophical → books/essays + philosophy canon · Spiritual → journal.
+
+   Mounted TWICE over the app (which is why this is a component, not a page controller —
+   2026-08-03, when the Dashboard and this hub became one "Overview"):
+     • the Overview page (dashboard.js) splits it — rings up top, ledger under the task board;
+     • /growth?user=<id> is a manager's read-only view of one person (growth-page.js).
+   The same data feeds the AI coach.
+
+   mount(S, root, opts):
+     opts.userId    — read-only view of that person (omit for your own, editable, profile)
+     opts.ringsHost — render the compass into this element instead of into `root`, so the host
+                      can put something (the task board) between the rings and the ledger
+     opts.mast      — render the ledger masthead (title/lede). The Overview supplies its own. */
+window.GrowthPanel = {
+  async mount(S, root, opts) { return mountGrowth(S, root, opts || {}); },
+};
+
+async function mountGrowth(S, root, opts) {
+  const view = root;
+  const ringsHost = opts.ringsHost || null;
+  const showMast = !!opts.mast;
   const esc = S.esc;
   const api = S.api;
-  const params = new URLSearchParams(location.search);
-  const targetId = params.get("user");
+  const targetId = opts.userId || null;
   const readOnly = !!targetId;
 
   let data = null;
