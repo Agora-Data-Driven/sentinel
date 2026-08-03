@@ -743,17 +743,31 @@ textarea { resize: vertical; min-height: 78px; }
    progress; the small radial tick marks where the calendar says you should be today. */
 .dim-rings { display:grid; grid-template-columns:repeat(4,1fr); background:var(--card);
   border:1px solid var(--line); border-radius:var(--radius); overflow:hidden; margin-bottom:16px; box-shadow:var(--shadow); }
-.dim-cell { appearance:none; background:none; border:none; border-left:1px solid var(--line); cursor:pointer;
-  font:inherit; color:inherit; padding:16px 12px 13px; display:flex; flex-direction:column; align-items:center; gap:7px;
-  transition:background .12s; }
+/* A cell carries TWO affordances, stacked so neither is a guess: the face (.dc-main) is a link
+   into that dimension's Mastery Engine tab, and the quiet strip beneath it (.dc-more) expands
+   the dimension in the pace band. A manager's read-only view has no engine to open, so there
+   .dc-main is itself the expand button and .dc-more isn't rendered. */
+.dim-cell { border-left:1px solid var(--line); display:flex; flex-direction:column; }
 .dim-cell:first-child { border-left:none; }
-.dim-cell:hover { background:var(--hover); }
-.dim-cell:focus-visible { outline:2px solid var(--hue); outline-offset:-3px; border-radius:8px; }
+.dc-main { appearance:none; background:none; border:none; cursor:pointer; text-decoration:none;
+  font:inherit; color:inherit; padding:16px 12px 12px; display:flex; flex-direction:column; align-items:center; gap:7px;
+  flex:1; transition:background .12s; }
+.dc-main:hover { background:var(--hover); }
+.dc-main:focus-visible { outline:2px solid var(--hue); outline-offset:-3px; border-radius:8px; }
 .dc-label { font-family:var(--mono); font-size:10px; letter-spacing:.15em; text-transform:uppercase;
   color:var(--sub); display:flex; align-items:center; gap:7px; font-weight:700; }
 .dc-label svg { width:13px; height:13px; stroke:var(--hue); flex:none; }
 .dc-sub { font-family:var(--mono); font-size:10.5px; color:var(--muted); letter-spacing:.02em; }
 .dc-chip { min-height:16px; }
+/* Always legible, not hover-only: on a touch screen a hover-revealed door is no door at all. */
+.dc-open { font-family:var(--mono); font-size:9.5px; letter-spacing:.12em; text-transform:uppercase;
+  font-weight:700; color:var(--hue); opacity:.62; transition:opacity .14s; }
+.dim-cell:hover .dc-open, .dc-main:focus-visible .dc-open { opacity:1; }
+.dc-more { appearance:none; background:none; cursor:pointer; border:none; border-top:1px solid var(--line-soft);
+  font-family:var(--mono); font-size:9.5px; letter-spacing:.14em; text-transform:uppercase; font-weight:700;
+  color:var(--muted); padding:7px 0; transition:color .12s, background .12s; }
+.dc-more:hover { color:var(--text); background:var(--hover); }
+.dc-more:focus-visible { outline:2px solid var(--hue); outline-offset:-2px; }
 
 /* The shared ahead/behind verdict, used by rings, the pace band and goal cards */
 .pace-chip { font-family:var(--mono); font-size:10.5px; font-weight:700; letter-spacing:.04em; white-space:nowrap; }
@@ -873,7 +887,7 @@ textarea { resize: vertical; min-height: 78px; }
 .unfiled .prewrap { font-size:13px; color:var(--sub); max-height:18em; overflow:auto; }
 
 @media (prefers-reduced-motion: reduce) {
-  .dim-cell, .pace-row, .pr-chev svg, .goal-item summary svg, .ds-right svg { transition:none; }
+  .dc-main, .dc-more, .dc-open, .day-item, .pace-row, .pr-chev svg, .goal-item summary svg, .ds-right svg { transition:none; }
 }
 
 /* Cards inside the ledger: quieter, hairline-led, green-forward */
@@ -883,7 +897,29 @@ textarea { resize: vertical; min-height: 78px; }
 .dev .section-label { font-family:var(--mono); font-size:10px; letter-spacing:.13em; }
 .dev .linky { color:var(--green-d); }
 .dev .linky.danger { color:var(--danger); }
-.dev .btn.primary.dev-coach { background:linear-gradient(135deg,#9484FB,#5C4BD0); box-shadow:0 8px 22px rgba(92,75,208,.32); }
+
+/* ============ Overview page (the merged dashboard) ============
+   The day strip: attendance + gym as two pill-shaped buttons in the page head. They replaced
+   three full-width tiles — the notifications one is gone entirely (the topbar bell already
+   carries that count), and these two were mostly whitespace around one line of status. */
+.day-strip { display:flex; align-items:stretch; gap:10px; flex-wrap:wrap; }
+.day-item { display:flex; align-items:center; gap:11px; padding:8px 14px 8px 10px; min-height:54px;
+  background:var(--card); border:1px solid var(--line); border-radius:var(--pill);
+  text-decoration:none; color:inherit; transition:border-color .14s, box-shadow .14s; }
+a.day-item:hover { border-color:var(--green-line); box-shadow:var(--shadow-sm); }
+.ds-ic { width:32px; height:32px; border-radius:10px; flex:none; display:grid; place-items:center; background:var(--sunken); }
+.ds-ic .svg-ic { width:16px; height:16px; stroke:var(--sub); }
+.ds-txt { display:flex; flex-direction:column; gap:3px; min-width:0; }
+.ds-k { font-size:9.5px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); }
+.ds-v { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.ds-when { font-size:12.5px; color:var(--sub); white-space:nowrap; }
+.ds-go { font-size:12px; font-weight:700; color:var(--green-d); white-space:nowrap; }
+.day-item .btn { flex:none; margin-left:2px; }
+
+/* Section rules between the Overview's blocks — growth, board, ledger, org. */
+.sect-head { align-items:baseline; margin:30px 0 12px; gap:14px; }
+.sect-head .sub { font-size:12.5px; text-align:right; }
+@media (max-width:760px){ .sect-head .sub{ display:none; } }
 
 @media (max-width:820px){
   .dim-rings{ grid-template-columns:repeat(2,1fr); }

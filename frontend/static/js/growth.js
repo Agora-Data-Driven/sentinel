@@ -152,6 +152,16 @@ async function mountGrowth(S, root, opts) {
       <text x="${cx}" y="${cx + 6}" text-anchor="middle" font-size="19" font-weight="800" fill="var(--text)">${pct}%</text></svg>`;
   }
 
+  // Each dimension's Mastery Engine tab. Physical has no engine program — its "engine" is the
+  // gym page, which is where its target PRs actually move.
+  const DIM_TAB = {
+    spiritual: "/spiritual", professional: "/academy", philosophical: "/philosophical", physical: "/gym",
+  };
+
+  // A ring is two affordances, deliberately separate rather than one overloaded click:
+  // the cell OPENS that dimension's engine tab (the thing you came to do), and a quiet
+  // "Details" button expands its pace row below (the thing you came to read). A manager's
+  // read-only view has no engine to open, so there the whole cell is the Details button.
   function ringCell(d) {
     const actual = dimActual(d.key), expected = dimExpected(d.key);
     const active = goalsFor(d.key).filter((g) => g.status === "active").length;
@@ -160,12 +170,18 @@ async function mountGrowth(S, root, opts) {
       : d.key === "physical"
         ? `${((data.physical || {}).targets || []).filter((t) => t.status !== "paused").length} target PRs`
         : `${active} active goal${active === 1 ? "" : "s"}`;
-    return `<button class="dim-cell" data-goto-dim="${d.key}" style="--hue:var(--dim-${d.key})" title="Open ${esc(d.name)}">
-      <span class="dc-label">${S.ICON[d.icon]}${esc(d.name)}</span>
+    const face = `<span class="dc-label">${S.ICON[d.icon]}${esc(d.name)}</span>
       ${ringSvg(actual, expected)}
       <span class="dc-sub">${esc(sub)}</span>
-      <span class="dc-chip">${paceChip(actual, expected)}</span>
-    </button>`;
+      <span class="dc-chip">${paceChip(actual, expected)}</span>`;
+    const main = readOnly
+      ? `<button class="dc-main" data-goto-dim="${d.key}" title="Open ${esc(d.name)} details">${face}</button>`
+      : `<a class="dc-main" href="${DIM_TAB[d.key]}" title="Open the ${esc(d.name)} Mastery Engine">${face}
+          <span class="dc-open">${d.key === "physical" ? "Open gym" : "Open engine"} &rarr;</span></a>`;
+    return `<div class="dim-cell" style="--hue:var(--dim-${d.key})">
+      ${main}
+      ${readOnly ? "" : `<button class="dc-more" data-goto-dim="${d.key}">Details</button>`}
+    </div>`;
   }
 
   // --- the pace band: engine score vs where-the-calendar-says per dimension ----
@@ -619,33 +635,38 @@ async function mountGrowth(S, root, opts) {
   }
 
   // --- page render ----------------------------------------------------------------
+  // The compass and the ledger render into separate hosts when the Overview asks for it, so the
+  // task board can sit between them. With no ringsHost they stack in `view` exactly as before.
+  // No "Ask your coach" button: the Coach FAB is on every page already (app.js), so a second
+  // entry point was just another thing to look at.
   function render() {
     const who = readOnly && data.user ? esc(data.user.name.split(" ")[0]) + "’s growth" : "Your growth";
     const eyebrow = readOnly && data.user ? "Development · " + esc(data.user.name) : "Development · Overview";
     const asOf = data.physical.latest ? esc(data.physical.latest.date) : new Date().toISOString().slice(0, 10);
 
-    view.innerHTML = `<div class="dev">
-      <div class="dev-mast">
+    const rings = `<div class="dim-rings">${DIMS.map(ringCell).join("")}</div>`;
+    const mast = !showMast ? "" : `<div class="dev-mast">
         <div>
           <div class="dev-eyebrow">${eyebrow}</div>
           <h1>${who}</h1>
           <div class="lede">Four dimensions of everything you're becoming: spirit, craft, philosophy, and body — each ring is its tab's Mastery Engine score.</div>
         </div>
-        <div class="dev-mast-right">
-          ${readOnly ? "" : `<button class="btn primary dev-coach" id="ask-coach">${S.ICON.sparkle}Ask your coach</button>`}
-          <div class="dev-mast-meta">AS OF ${asOf}</div>
-        </div>
-      </div>
+        <div class="dev-mast-right"><div class="dev-mast-meta">AS OF ${asOf}</div></div>
+      </div>`;
 
-      <div class="dim-rings">${DIMS.map(ringCell).join("")}</div>
-
-      <div class="dim-pace">
+    const ledger = `<div class="dim-pace">
         <div class="dim-pace-head">Pace — where you are vs where the calendar says <span class="pace-key"><b class="pr-tick demo"></b> = expected today · click a row for its details</span></div>
         ${DIMS.map(paceBlock).join("")}
       </div>
 
-      ${libraryBlock()}
-    </div>`;
+      ${libraryBlock()}`;
+
+    if (ringsHost) {
+      ringsHost.innerHTML = `<div class="dev">${rings}</div>`;
+      view.innerHTML = `<div class="dev">${mast}${ledger}</div>`;
+    } else {
+      view.innerHTML = `<div class="dev">${mast}${rings}${ledger}</div>`;
+    }
 
     wire();
   }
@@ -745,8 +766,6 @@ async function mountGrowth(S, root, opts) {
     });
 
     if (readOnly) return;
-    const ac = S.qs("#ask-coach"); if (ac) ac.onclick = () => (window.SentinelOpenCoach ? window.SentinelOpenCoach() : S.toast("Coach isn't configured", "err"));
-
     const at = S.qs("#add-transcript"); if (at) at.onclick = (e) => { e.preventDefault(); transcriptForm(); };
     const ata = S.qs("#add-transcript-atrium"); if (ata) ata.onclick = (e) => { e.preventDefault(); atriumImportPicker(); };
     S.qsa("[data-del-transcript]").forEach((a) => a.onclick = (e) => { e.preventDefault(); delete transcriptText[a.dataset.delTranscript]; del(`/api/development/transcripts/${a.dataset.delTranscript}`); });
@@ -1080,10 +1099,14 @@ async function mountGrowth(S, root, opts) {
   }
 
   async function load() {
+    // Both hosts get a placeholder: the rings keep their instrument-panel shape (one card, four
+    // cells) so the Overview doesn't jump when the data lands.
+    if (ringsHost) ringsHost.innerHTML = `<div class="skeleton skel-card" style="height:170px"></div>`;
     view.innerHTML = S.skeleton ? S.skeleton({ rows: 6 }) : "Loading…";
     try {
       data = await api(readOnly ? `/api/development/user/${targetId}` : "/api/development/me");
     } catch (e) {
+      if (ringsHost) ringsHost.innerHTML = "";
       view.innerHTML = `<div class="empty card pad">${esc(e.detail || "Couldn't load this profile.")}</div>`;
       return;
     }
@@ -1093,5 +1116,5 @@ async function mountGrowth(S, root, opts) {
 
   // Let the global Coach refresh this hub after it applies an approved edit.
   if (!readOnly) window.SentinelReloadDevelopment = load;
-  load();
-};
+  await load();
+}

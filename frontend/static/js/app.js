@@ -77,21 +77,22 @@
   // is filtered out is dropped entirely (e.g. Admin disappears for regular staff).
   const NAV = [
     { section: "Workspace" },
-    // The Task Board has no tab of its own — it's embedded in the Dashboard (see taskboard.js);
-    // the old /tasks URL redirects there so saved notification links keep working.
-    { href: "/dashboard", label: "Dashboard", icon: "grid" },
+    // "Overview" (the URL stays /dashboard — notifications, the palette and bookmarks all point
+    // at it) is ONE page: the task board (taskboard.js) plus the growth compass and ledger
+    // (growth.js), merged 2026-08-03. The old /tasks URL redirects there too.
+    { href: "/dashboard", label: "Overview", icon: "grid" },
     // The four Growth tabs mirror the Overview's four dimensions one-to-one:
     // Professional (the engine's career programs, formerly "Academy"), Philosophical and
     // Spiritual (each a Mastery Engine pinned to its reading program), Physical (the gym,
-    // formerly "Gym"). Overview rolls all four up.
+    // formerly "Gym"). The Overview's rings roll all four up and link straight into them —
+    // which is why this hub no longer carries an "Overview" child of its own.
     { group: "Growth", icon: "sparkle", children: [
-      { href: "/growth", label: "Overview", icon: "sparkle" },
       { href: "/academy", label: "Professional", icon: "target" },
       { href: "/philosophical", label: "Philosophical", icon: "cap" },
       { href: "/spiritual", label: "Spiritual", icon: "flame" },
       { href: "/gym", label: "Physical", icon: "dumbbell", hideRoles: ["super_admin"] },
       // No Reading tab: the reading canon overlaps the Philosophical/Spiritual engines.
-      // The /reading page itself stays reachable (Overview's "Open the canon" links).
+      // The /reading page itself stays reachable (the Overview's "Open the canon" links).
     ] },
     { group: "Time & Leave", icon: "clock", children: [
       { href: "/attendance", label: "Time", icon: "clock" },
@@ -101,7 +102,7 @@
       { href: "/approvals", label: "Approvals", icon: "inbox", min: "team_lead" },
       // Clock in (the QR scanner station) punches OTHER people's badges, and the punch endpoints
       // only trust a Super-Admin session (attendance.kiosk_guard) — so only super_admin gets the
-      // tab. Everyone else clocks themselves in from the Dashboard's Attendance card.
+      // tab. Everyone else clocks themselves in from the Overview's day strip.
       { href: "/scanner", label: "Clock in", icon: "qr", roles: ["super_admin"] },
     ] },
     { href: "/north-star", label: "Our North Star", icon: "compass" },
@@ -434,7 +435,7 @@
         const f = document.createElement("iframe");
         f.id = "coach-frame";
         f.allow = "microphone; clipboard-write";
-        f.src = base + "&actions=1";               // {engine}/?embed=assistant&actions=1
+        f.src = engineUrl(base, "&actions=1");     // {engine}/?embed=assistant&actions=1&theme=…
         qs("#coach-frame-wrap", panel).appendChild(f);
         framed = true;
       }
@@ -637,7 +638,22 @@
     try { localStorage.setItem(THEME_KEY, t); } catch (e) { /* private mode */ }
     qsa("#theme-toggle button").forEach((b) => b.classList.toggle("on", b.dataset.setTheme === t));
     applyBrandLogo();
+    themeEmbeds(t);
   }
+  // Every Mastery Engine we embed (the Professional / Philosophical / Spiritual tabs and the
+  // Coach FAB) is a cross-origin iframe, so it can't read our theme — we hand it over twice:
+  // as `&theme=` on the src (see engineUrl below, for the initial paint) and as this message
+  // when the toggle moves, so a running engine flips with the page instead of staying light
+  // inside a dark one until the next reload. The engine's theme.js accepts it only from its own
+  // parent window. Payload is a colour-scheme name, hence the "*" target origin.
+  function themeEmbeds(t) {
+    qsa("iframe").forEach((f) => {
+      try { f.contentWindow.postMessage({ type: "agora-theme", theme: t }, "*"); } catch (e) { /* frame gone */ }
+    });
+  }
+  // The `&theme=` an engine iframe should boot with. Every embed builds its src through this.
+  const engineUrl = (base, extra) =>
+    base + (extra || "") + "&theme=" + encodeURIComponent(currentTheme());
   const currentTheme = () => document.documentElement.getAttribute("data-theme") || "light";
   async function doLogout() { try { await api("/api/auth/logout", { method: "POST" }); } finally { location.href = "https://agoradatadriven.com"; } }
   function navAllowed(n) {
@@ -864,6 +880,7 @@
 
   const Sentinel = {
     api, toast, skeleton, modal, esc, qs, qsa, ICON, avatar, initials, uploadAvatar, removeAvatar,
+    engineUrl, theme: currentTheme,
     fmtTime, fmtDate, fmtDateFull, timeAgo, priorityDot, labelPills, statusPill,
     roleRank: ROLE_RANK,
     get user() { return USER; }, set user(u) { USER = u; },

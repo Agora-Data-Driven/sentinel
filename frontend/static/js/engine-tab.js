@@ -25,10 +25,13 @@ window.pageInit = async (S) => {
     return;
   }
 
-  // cfg.url already ends in "?embed=1", so the pin appends with "&".
+  // cfg.url already ends in "?embed=1", so the pin appends with "&". The frame background must be
+  // a TOKEN, not #fff — a white slab flashes behind the engine on every load in dark mode.
   view.innerHTML = `
     <iframe id="et-frame" title="AGORA Mastery Engine — ${S.esc(label)}" allow="microphone" loading="eager"
       style="width:100%;height:calc(100vh - 190px);min-height:520px;border:1px solid var(--line);
-             border-radius:18px;box-shadow:var(--shadow);background:#fff;display:block"></iframe>`;
-  S.qs("#et-frame").src = cfg.url + (program ? "&program=" + encodeURIComponent(program) : "");
+             border-radius:18px;box-shadow:var(--shadow);background:var(--card);display:block"></iframe>`;
+  // S.engineUrl appends &theme=<our theme> so the engine boots in the same skin as the page
+  // around it (app.js also posts it a message when the toggle moves).
+  S.qs("#et-frame").src = S.engineUrl(cfg.url, program ? "&program=" + encodeURIComponent(program) : "");
 };
