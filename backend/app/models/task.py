@@ -61,6 +61,11 @@ class Task(Base):
     # claim. `reviewer_id` is who decided, stamped on the decision, not on the request.
     review_state: Mapped[str | None] = mapped_column(String(20), nullable=True)
     reviewer_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    # Which adoption run created this row (WP 3.4). NULL for every task a human raised.
+    # 🔴 This column is what makes importing live client cards REVERSIBLE: `task_adoption.revert`
+    # removes exactly one run's rows and nothing else. Without it an import would be a one-way
+    # door over data nobody can afford to guess about.
+    adoption_batch: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
     # How many change requests the CLIENT has open on this card (D4 / WP 3.5).
     # 🔴 Deliberately NOT `review_state`. That field is the internal approval gate (D5): a team
     # lead saying "this is done". A client asking for a revision is a different fact from a
@@ -242,6 +247,48 @@ class TaskRequest(Base):
     task_id: Mapped[int | None] = mapped_column(ForeignKey("tasks.id"), nullable=True, index=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+class RecurringService(Base):
+    """A retainer deliverable that should exist every period (WP 6.1, M10).
+
+    Monthly deliverables were re-created by hand every month, which means they get forgotten in
+    the months somebody is busy — exactly when the client notices.
+
+    🔴 `last_period` is the whole safety mechanism, and it is a STRING KEY ("2026-08"), not a
+    timestamp. The generator asks "have I already made the task for THIS period?" and a period key
+    answers that identically no matter how often the tick runs, how many instances run it, or
+    whether it ran late. A `last_run_at` datetime would not: two ticks in one day, a retry, or a
+    catch-up run after an outage would each have to reason about clock windows, and one of them
+    would eventually double-create a client's deliverable.
+
+    🔴 It also means NO BACKFILL. A recurrence created today does not retro-generate the months it
+    did not exist for — `last_period` starts at the current period, so the first task appears at
+    the NEXT boundary. Waking up to eleven months of invented work is worse than a missing month.
+    """
+
+    __tablename__ = "recurring_services"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    client_id: Mapped[int | None] = mapped_column(ForeignKey("clients.id"), nullable=True, index=True)
+    service_key: Mapped[str | None] = mapped_column(String(60), nullable=True)  # ServiceTemplate.key
+    assigned_team_id: Mapped[int | None] = mapped_column(ForeignKey("teams.id"), nullable=True)
+    assigned_to_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    priority: Mapped[str] = mapped_column(String(16), default=PRIORITY_MEDIUM)
+
+    # "monthly" | "weekly". Deliberately only two: a retainer is billed monthly or run weekly, and
+    # every extra cadence is another way for the period key to be computed inconsistently.
+    cadence: Mapped[str] = mapped_column(String(16), default="monthly")
+    # monthly: day of month (clamped to the month's length). weekly: 0=Mon .. 6=Sun.
+    day_of_period: Mapped[int] = mapped_column(Integer, default=1)
+    # How many days after generation the task is due. 0 = due the day it appears.
+    due_in_days: Mapped[int] = mapped_column(Integer, default=0)
+
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    last_period: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class AtriumApproval(Base):

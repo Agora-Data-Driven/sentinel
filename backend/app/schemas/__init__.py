@@ -416,6 +416,36 @@ class TaskBulkIn(BaseModel):
     value: str | int | None = None
 
 
+class RecurringServiceIn(BaseModel):
+    """A retainer deliverable that should exist every period (WP 6.1)."""
+
+    title: str
+    client_id: int | None = None
+    service_key: str | None = None
+    assigned_team_id: int | None = None
+    assigned_to_id: int | None = None
+    priority: str = "Medium"
+    cadence: Literal["monthly", "weekly"] = "monthly"
+    # monthly: day of month (clamped to the month's length). weekly: 0=Mon .. 6=Sun.
+    day_of_period: int = Field(1, ge=0, le=31)
+    due_in_days: int = Field(0, ge=0, le=365)
+    is_active: bool = True
+
+
+class TaskAdoptionApplyIn(BaseModel):
+    """Import one workspace's Atrium cards (WP 3.4). `confirm` must repeat `client` exactly —
+    this writes rows derived from LIVE client data, and the typed confirmation is what separates
+    "I read the plan" from "I posted the wrong body"."""
+
+    client: str
+    confirm: str
+    batch: str | None = None      # omit and one is minted; it is the handle for reverting
+
+
+class TaskAdoptionRevertIn(BaseModel):
+    batch: str
+
+
 class TaskRequestDecisionIn(BaseModel):
     """Accepting or declining a client's ask (D3). Everything is optional except, on a decline,
     the reason — enforced in the route so the error can say why it is owed."""
