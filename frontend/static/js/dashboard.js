@@ -75,8 +75,11 @@ window.pageInit = async (S) => {
     </div>
     <div id="dash-rings"></div>`;
 
-  // --- 3 · the task board (its own page until 2026-07-26) — see taskboard.js -------------------
-  html += `<div id="dash-taskboard"></div>`;
+  // --- 3 · my work -----------------------------------------------------------------------------
+  // The Task Board left this page on 2026-08-03 (decision D7) — it has its own /tasks page and
+  // sidebar item again. What stays is a "my work" strip: the three questions someone opens the
+  // Overview to answer, each linking INTO the board rather than duplicating it.
+  html += `<div id="dash-mywork"></div>`;
 
   // --- 4 · the growth ledger ------------------------------------------------------------------
   html += `<div id="dash-growth" style="margin-top:26px"></div>`;
@@ -147,19 +150,58 @@ window.pageInit = async (S) => {
   }
   wireAttCard();
 
-  // Mount the growth hub across its two hosts — the compass above the board, the ledger below it.
+  // Mount the growth hub across its two hosts — the compass above "my work", the ledger below it.
   // Fail-soft: growth is a section of this page, not the page, so a bad /api/development never
-  // costs anyone their task board.
+  // costs anyone the rest of their Overview.
   if (window.GrowthPanel) {
     GrowthPanel.mount(S, S.qs("#dash-growth"), { ringsHost: S.qs("#dash-rings") })
       .catch((e) => S.toast(e.detail || "Couldn't load your growth", "err"));
   }
 
-  // Mount the embedded Task Board (filters, views, drag-and-drop, detail drawer, SSE) after the
-  // page paints, so the greeting/growth never wait on the board's data.
-  if (window.TaskBoard) {
-    TaskBoard.mount(S, S.qs("#dash-taskboard"))
-      .catch((e) => S.toast(e.detail || "Couldn't load the task board", "err"));
+  // "My work": what is on me, what is late, what is waiting on my approval. The board itself lives
+  // at /tasks (decision D7) — this strip links INTO it rather than duplicating it. Rendered after
+  // the page paints so the greeting never waits on it, and it fails SILENTLY: a task-list hiccup
+  // must not put an error toast over someone's morning attendance card.
+  renderMyWork();
+  async function renderMyWork() {
+    // "Today" in Manila as an ISO date (en-CA -> YYYY-MM-DD), so "overdue" matches the SERVER's
+    // Asia/Manila business rule rather than the viewer's timezone. Same one-liner taskboard.js uses;
+    // deliberately duplicated rather than exported, since these two files share no module system.
+    const PH_TODAY = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
+    const box = S.qs("#dash-mywork");
+    if (!box) return;
+    let tasks;
+    try { tasks = await S.api("/api/tasks"); }
+    catch (e) { return; }
+    // The list is already scoped by the server (task_perms.can_view), so "mine" is a filter on top
+    // of it, never a second source of truth. Atrium-owned cards have no assignee to be mine.
+    const mine = tasks.filter((t) => t.assigned_to_id === S.user.id && !t.archived);
+    const open = mine.filter((t) => !t.completed_at);
+    const overdue = open.filter((t) => t.due_date && t.due_date < PH_TODAY);
+    // Waiting on ME: only a lead/manager sees these, and only for their own team — the same scope
+    // task_perms.can_review enforces server-side (the buttons live in the board's panel).
+    const canReview = S.can("account_manager")
+      || (S.can("team_lead") && S.user.team_id != null);
+    const toReview = !canReview ? [] : tasks.filter((t) => t.review_state === "pending"
+      && (S.can("account_manager") || t.assigned_team_id === S.user.team_id));
+    const tile = (n, label, href, bad) => `<a class="card pad" href="${href}" style="text-decoration:none;flex:1;min-width:150px">
+        <div class="section-label">${label}</div>
+        <div class="k-val ${bad && n ? "bad" : ""}" style="font-size:30px;margin-top:6px">${n}</div>
+      </a>`;
+    box.innerHTML = `<div class="pagehead" style="margin:30px 0 14px"><div>
+        <h3 style="font-size:18px;letter-spacing:-.01em">My work</h3>
+        <div class="lead">Everything else is on the <a href="/tasks">Task Board</a>.</div></div></div>
+      <div class="row" style="gap:12px;align-items:stretch;flex-wrap:wrap">
+        ${tile(open.length, "Open tasks", "/tasks")}
+        ${tile(overdue.length, "Overdue", "/tasks", true)}
+        ${canReview ? tile(toReview.length, "Waiting on my approval", "/tasks") : ""}
+      </div>
+      ${open.length ? `<div class="card" style="margin-top:12px">${open.slice(0, 5).map((t) => `
+        <a class="row" href="/tasks?open=${t.id}" style="text-decoration:none;justify-content:space-between;gap:10px;padding:11px 14px;border-bottom:1px solid var(--line-soft)">
+          <span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${S.esc(t.title)}</span>
+          <span class="sub" style="flex:none;font-size:12px">${S.esc(t.status)}${t.due_date
+            ? ` · <span class="${t.due_date < PH_TODAY ? "bad" : ""}">${S.fmtDate(t.due_date + "T00:00:00+08:00")}</span>` : ""}</span>
+        </a>`).join("")}</div>` : `<div class="empty card pad" style="margin-top:12px">Nothing assigned to you right now.</div>`}`;
   }
 
   // Clock-in chart (admin only) — fetched after paint so the page never blocks on it.

@@ -179,6 +179,7 @@ def task_card(t: Task, db: Session) -> dict:
         "status": t.status,
         "priority": t.priority,
         "due_date": _d(t.due_date),
+        "start_date": _d(getattr(t, "start_date", None)),
         "labels": _loads(t.labels_json, []),
         "client_id": t.client_id,
         "client_name": client.name if client else None,
@@ -192,6 +193,19 @@ def task_card(t: Task, db: Session) -> dict:
         "checklist_total": total,
         "checklist_done": done,
         "atrium_visible": t.atrium_visible,
+        # The projection's real state, not just the old boolean: `atrium_task_id` proves a client
+        # card exists, and `atrium_sync_error` non-null means that card is STALE. The board renders
+        # the difference — a share that never happened must never look like a share that did.
+        "atrium_task_id": getattr(t, "atrium_task_id", None),
+        "atrium_sync_error": getattr(t, "atrium_sync_error", None),
+        "atrium_shared": bool(getattr(t, "atrium_task_id", None)),
+        # The workflow state a CARD has to show (Stage 2): a pause, a filed task, and where the
+        # review stands. `hold_reason` is NOT here — it is internal prose and belongs in the drawer,
+        # not on a card 60 people scroll past.
+        "on_hold": bool(getattr(t, "on_hold", False)),
+        "archived": bool(getattr(t, "archived", False)),
+        "review_state": getattr(t, "review_state", None),
+        "completed_at": _iso(getattr(t, "completed_at", None)),
     }
 
 
@@ -200,8 +214,15 @@ def task_detail(t: Task, db: Session) -> dict:
     d = task_card(t, db)
     am = db.get(User, t.account_manager_id) if t.account_manager_id else None
     team = db.get(Team, t.assigned_team_id) if t.assigned_team_id else None
+    reviewer = db.get(User, t.reviewer_id) if getattr(t, "reviewer_id", None) else None
     d.update(
         {
+            # Internal-only workflow detail (the drawer's, not the card's): why it is paused, where
+            # Resume will put it back, and who decided the review.
+            "hold_reason": getattr(t, "hold_reason", None),   # 🔒 internal — never crosses to Atrium
+            "resume_to": getattr(t, "resume_to", None),
+            "reviewer_id": getattr(t, "reviewer_id", None),
+            "reviewer": user_public(reviewer),
             "description": t.description,
             "campaign": t.campaign,
             "content_type": t.content_type,
@@ -211,7 +232,11 @@ def task_detail(t: Task, db: Session) -> dict:
             "account_manager_id": t.account_manager_id,
             "account_manager": user_public(am),
             "assigned_team_name": team.name if team else None,
-            "checklist": _loads(t.checklist_json, []),  # legacy flat list (kept for compatibility)
+            # 🔴 `checklist` (the legacy flat list) was dropped from this payload 2026-08-04 (WP
+            # 0.4). `maintasks` is the two-level breakdown every surface actually renders, and
+            # `MT.normalize` migrates the old flat rows into it on read — so shipping both meant
+            # sending the SAME steps twice, in two shapes, one of them stale the moment anybody
+            # edited the breakdown. `checklist_json` stays on the model as the migration source.
             "maintasks": maintask_list(t, db),
             "deliverable_url": t.deliverable_url,
             "internal_notes": t.internal_notes,
@@ -226,7 +251,12 @@ def task_detail(t: Task, db: Session) -> dict:
 
 
 def atrium_payload(t: Task, db: Session) -> dict:
-    """ONLY client-facing fields — this is what may cross the bridge into Atrium."""
+    """The client-facing view of a task, for the audit trail and the share response.
+
+    🔴 This is NOT the bridge payload. `task_bridge.client_safe_fields` is the one function that
+    builds what actually crosses (in Atrium's field names) — keeping two builders in step failed
+    once already, so this one is only ever read by humans.
+    """
     client = db.get(Client, t.client_id) if t.client_id else None
     return {
         "task_id": t.id,
@@ -235,6 +265,7 @@ def atrium_payload(t: Task, db: Session) -> dict:
         "content_type": t.content_type,
         "title": t.title,
         "due_date": _d(t.due_date),
+        "start_date": _d(getattr(t, "start_date", None)),
         "labels": _loads(t.labels_json, []),
         "deliverable_url": t.deliverable_url,
         "client_notes": t.client_facing_notes,

@@ -9,10 +9,10 @@ unit map + cookbook.
 
 | Entry | What it is |
 |---|---|
-| `app/main.py` | App assembly: middleware stack, startup safeguards (bootstrap admin + platform owners), **router tuple `main.py:322`**, `_PAGES` dict `:381`, `/login` SSO short-circuit `:358`, `/tasks` 307 redirect `:413` |
+| `app/main.py` | App assembly: middleware stack, startup safeguards (bootstrap admin + platform owners), **router tuple**, `_PAGES` dict (🔴 `/dashboard` is NOT in it — it needs the board-deep-link forward, see `dashboard_page`), `/login` SSO short-circuit, and `/tasks` as a real page again |
 | `app/config.py` | `Settings` (pydantic-settings) — every env var the app reads |
 | `app/database.py` | Engine / `SessionLocal` / `Base` / `get_db` |
-| `app/constants.py` | Roles, statuses, `ROLE_RANK` |
+| `app/constants.py` | Roles, statuses, `ROLE_RANK` — 🔴 `ROLE_VIEWER` is a read-only SEAT at the floor of the rank, not a rung; reads name it via `VIEW_ALL_ROLES` |
 | `app/security.py` | `get_current_user`, `require_min_role`, `require_roles` factories; `user_from_sso` `:50` |
 | `app/sso.py` | Portal `ag_sso` cookie parsing (`email_from_cookie`, `COOKIE_NAME`) |
 | `app/middleware.py` | `_csp()` `:37`, `_permissions_policy()` `:61`, `SecurityHeadersMiddleware` `:68` (also sets `Cache-Control: no-cache` on non-API responses `:94`), `RateLimitMiddleware` `:111` (hand-rolled on purpose), `CSRFMiddleware` `:167` |
@@ -25,23 +25,25 @@ unit map + cookbook.
 | `app/services/attendance.py` | The attendance engine (punch state machine, late/grace in Manila) |
 | `app/services/atrium_bridge.py` · `atrium_watcher.py` | HMAC signer + Watcher-archive client (Mentor Library import; fail-soft by design) |
 | `app/services/atrium_tasks.py` | Whole Atrium task-bridge translation layer: `FIELD_MAP`, `to_atrium_fields`, `as_board_card`, `as_task_detail`, `split_id`, `GONE`/`GONE_COMMENT` |
-| `app/services/task_perms.py` | The whole task RBAC table. `can_view` (employee/intern = **assigned to them**, nothing else) · `can_view_atrium` / `can_edit_atrium` (team lead+) / `can_manage_atrium` (AM+) |
-| `app/services/task_config.py` · `task_templates.py` · `maintasks.py` | Board vocab (task_vocab), service templates, two-level work breakdown |
+| `app/services/task_perms.py` | The whole task RBAC table. `can_view` (employee/intern = assigned to them **+ their team's unowned queue**, `_team_queue`) · `can_review` (D5) · `can_view_atrium` / `can_edit_atrium` (team lead+) / `can_manage_atrium` (AM+) |
+| `app/services/task_config.py` · `task_templates.py` · `maintasks.py` | Board vocab (task_vocab: `stage_for` / `status_for_stage` / `is_completed` — **never key off a status label**), service templates, two-level work breakdown |
+| `app/services/task_bridge.py` | **The Atrium projection.** `client_safe_fields` (the bridge's field-exposure boundary), `publish` / `push` / `push_stage`, `stale_shares` (the D15 report) |
+| `app/services/task_workflow.py` | The task lifecycle: `review_blocks` (the one enforced gate), `on_status_change` (the `completed_at` stamp), `park` / `resume`, `archive` |
 | `app/services/mentor_search.py` | Per-user BM25-ish retrieval over `mentor_transcripts` (`resolve_mentor`, `DEFAULT_LIMIT`; no table of its own — deliberate) |
 | `app/services/development.py` | Holistic hub incl. `holistic_digest` (feeds the Coach) |
 | `app/services/` (rest) | `gym.py`, `leave.py`, `payroll.py`, `notifications.py`, `settings.py`, `audit.py`, `daily.py` — one domain each |
 | `app/utils/` | `time.py` (**`utcnow()` — the only clock**), `qr.py`, `csv_export.py`, `passwords.py` |
-| `alembic/versions/` | 17 revisions; head `a9c4e7f2d5b8_service_templates_task_vocab` |
+| `alembic/versions/` | 22 revisions; head `e8b3f5c7a2d9_task_workflow_fields` |
 | `entrypoint.sh` → `migrate.py` | Boot: `alembic upgrade head` (or `stamp head` to adopt a create_all schema), then uvicorn |
 | `seed.py` · `make_badges.py` | Demo data · printable QR badges |
-| `tests/` (23 files) | pytest suite — `conftest.py` builds a throwaway SQLite per test |
+| `tests/` (28 files) | pytest suite — `conftest.py` builds a throwaway SQLite per test |
 | `sentinel.db` | Local dev database (throwaway) |
 
 ## Data contract (router → serializer → page consumer)
 
 | Domain | Router | `serializers.py` | Consumer (`frontend/static/js/`) |
 |---|---|---|---|
-| Tasks | `routers/tasks.py` | `task_card`, `task_detail`, `comment_dict`, `history_dict`, `atrium_payload` | `taskboard.js` (embedded in dashboard) |
+| Tasks | `routers/tasks.py` | `task_card`, `task_detail`, `comment_dict`, `history_dict`, `atrium_payload` | `taskboard.js`, mounted by `tasks.js` on the `/tasks` page; `dashboard.js` renders a my-work strip that links in |
 | Attendance | `routers/attendance.py` | `summary_dict`, `attendance_request_dict` | `attendance.js`, `dashboard.js`, `approvals.js`, `kiosk.js` |
 | Gym | `routers/gym.py` | `gym_log_dict`, `gym_routine_dict`, `body_metric_dict`, `personal_record_dict` | `gym.js` |
 | Leave | `routers/leave.py` | `leave_type_dict`, `leave_balance_dict`, `leave_request_dict` | `leave.js`, `approvals.js` |
@@ -65,8 +67,10 @@ unit map + cookbook.
    `_verify(x_academy_ts, x_academy_sig, "<purpose>")`; the purpose string must match the caller's
    signer exactly (Mastery Engine `lib/sentinel.js` / Atrium bridge). Add a case to
    `tests/test_internal.py`. Deploy BOTH sides; the caller 401s until purposes agree.
-5. **Expose a new field to the frontend** — `serializers.py` only; check `atrium_payload` before
-   adding anything client-visible (internal fields must never cross to Atrium).
+5. **Expose a new field to the frontend** — `serializers.py` only. If the field is client-visible,
+   decide DELIBERATELY whether it crosses to Atrium: `task_bridge.SAFE` + `client_safe_fields` is
+   the bridge's boundary (`atrium_payload` is only the audit/display shape). Add it to
+   `touches_client_view` too, or an edit to it will leave the client's card stale.
 6. **Add a vocab/enum the frontend needs** — `routers/meta.py` (`GET /api/vocab`) or, for the
    board, a `task_vocab` row via `services/task_config.py`.
 7. **RETIRE a board status** — a `task_config.RETIRED_STATUSES` entry (`{"Old": SURVIVING}`), not

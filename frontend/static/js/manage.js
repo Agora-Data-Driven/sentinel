@@ -183,7 +183,8 @@ window.pageInit = async (S) => {
   const _svcDefaults = (r) => {
     const bits = [];
     if (r.default_priority) bits.push(S.esc(r.default_priority));
-    if ((r.default_labels || []).length) bits.push(r.default_labels.map((l) => S.esc(l)).join(", "));
+    // default_labels is deliberately not summarised — a task's label comes from its department
+    // now (D14), so a stored per-template default is inert and showing it would mislead.
     if (r.default_description) bits.push("brief");
     return bits.length ? bits.join(" · ") : "—";
   };
@@ -363,7 +364,6 @@ window.pageInit = async (S) => {
     if (!recipe.length) recipe = [{ title: "", subsText: "" }];
     const deptOpts = [{ value: "", label: "—" }].concat(OPTS.teamNames);
     const prioOpts = [{ value: "", label: "— none —" }].concat((vocab.priorities || []).map((p) => ({ value: p, label: p })));
-    const curLabels = (item && item.default_labels) || [];
     let defLabel = item ? item.label : "";
     if (asNew && item) defLabel = `${item.label} (copy)`;
     const m = S.modal({
@@ -384,7 +384,11 @@ window.pageInit = async (S) => {
           <label class="field"><span>Default priority</span><select id="sf-prio">${prioOpts.map((o) => `<option value="${S.esc(o.value)}" ${item && item.default_priority === o.value ? "selected" : ""}>${S.esc(o.label)}</option>`).join("")}</select></label>
           <label class="field"><span>Show in the New Task picker</span><label class="chip" style="cursor:pointer;align-self:start"><input type="checkbox" id="sf-active" style="width:auto" ${item && item.is_active === false ? "" : "checked"}> Active</label></label>
         </div>
-        <label class="field"><span>Default labels</span><div class="row wrap" id="sf-labels">${(vocab.task_labels || []).map((l) => `<label class="chip" style="cursor:pointer"><input type="checkbox" style="width:auto" value="${S.esc(l)}" ${curLabels.includes(l) ? "checked" : ""}> ${S.esc(l)}</label>`).join("")}</div></label>
+        <!-- Default labels was REMOVED 2026-08-04 (decision D14): a task's one label is derived
+             from its department, so a per-template default could only ever be ignored. The
+             'default_labels_json' column stays for now but nothing reads it.
+             NO BACKTICKS in this comment: it is inside a template literal. -->
+        <div class="field" style="grid-column:1/-1"><div class="form-hint">The task's label is set automatically from the department this service belongs to — Acquisition → Paid Media, Lifecycle → Organic, everything else → Website.</div></div>
         <label class="field"><span>Default description / brief</span><textarea id="sf-desc" rows="3">${S.esc(item ? item.default_description || "" : "")}</textarea></label>`,
       footer: `<button class="btn ghost" id="sf-cancel">Cancel</button><button class="btn primary" id="sf-save">${editing ? "Save" : "Create"}</button>`,
     });
@@ -419,7 +423,7 @@ window.pageInit = async (S) => {
       const payload = {
         label, dept: S.qs("#sf-dept").value || null, content_type: S.qs("#sf-ctype").value || null, maintasks,
         default_priority: S.qs("#sf-prio").value || null,
-        default_labels: S.qsa("#sf-labels input:checked").map((c) => c.value),
+        // default_labels is no longer sent: the label is derived from the department (D14).
         default_description: S.qs("#sf-desc").value.trim() || null,
         is_active: S.qs("#sf-active").checked,
       };

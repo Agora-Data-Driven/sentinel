@@ -392,6 +392,7 @@ class TaskCreateIn(BaseModel):
     priority: str = "Medium"
     status: str = "To Do"
     due_date: date | None = None
+    start_date: date | None = None
     service_charge: MoneyStr = None
     labels: list[str] = Field(default_factory=list)
     checklist: list[ChecklistItem] = Field(default_factory=list)
@@ -399,6 +400,10 @@ class TaskCreateIn(BaseModel):
     deliverable_url: str | None = None
     internal_notes: str | None = None
     client_facing_notes: str | None = None
+    # Share-on-create (decision D6). None = "decide for me": share when the task has a client, and
+    # the caller can force it either way. Tri-state on purpose — `False` must mean "explicitly do
+    # not share", which a plain bool default could not express.
+    share_with_client: bool | None = None
 
 
 class TaskUpdateIn(BaseModel):
@@ -411,6 +416,7 @@ class TaskUpdateIn(BaseModel):
     assigned_to_id: int | None = None
     priority: str | None = None   # honored only for roles that can_prioritize; ignored otherwise
     due_date: date | None = None
+    start_date: date | None = None   # a real Sentinel column since 2026-08-03 (was Atrium-only)
     service_charge: MoneyStr = None
     labels: list[str] | None = None
     checklist: list[ChecklistItem] | None = None
@@ -420,10 +426,15 @@ class TaskUpdateIn(BaseModel):
     client_facing_notes: str | None = None
     atrium_visible: bool | None = None
     # --- Atrium-owned cards only (board id "atrium:<client_key>:<task_id>") -------------------
-    # Atrium has no Sentinel assignee/team and stores owners as roster EMAILS, and it carries two
-    # fields Sentinel's own rows don't (its start date, and the hold switch). They are inert on a
-    # Sentinel row: services/atrium_tasks.FIELD_MAP is the only thing that reads them.
-    start_date: date | None = None
+    # Atrium has no Sentinel assignee/team and stores owners as roster EMAILS. These are inert on a
+    # Sentinel row: services/atrium_tasks.FIELD_MAP is the only thing that reads them, and the
+    # Sentinel branch of the update route drops them (ONLY_ATRIUM).
+    #
+    # `start_date` LEFT this block on 2026-08-03 — it is a real Sentinel column now (M5), declared
+    # above with the other shared fields. `on_hold` / `hold_reason` deliberately did NOT: Sentinel
+    # has both columns, but a PATCH must not set them, because a hold is three coupled fields
+    # (`on_hold` + `hold_reason` + `resume_to`) and only `POST /{id}/park` sets all three. A PATCH
+    # could otherwise leave a card "on hold" with nothing remembering where it came from.
     on_hold: bool | None = None
     hold_reason: str | None = None
     atrium_department: str | None = None
@@ -433,6 +444,16 @@ class TaskUpdateIn(BaseModel):
 
 class TaskStatusIn(BaseModel):
     status: str
+
+
+class TaskParkIn(BaseModel):
+    """Why the work is paused. 🔒 Internal — never crosses to the client (task_bridge.SAFE)."""
+    reason: str = ""
+
+
+class TaskReviewIn(BaseModel):
+    """A reviewer's note, used by "request changes". Optional."""
+    note: str = ""
 
 
 class TaskPriorityIn(BaseModel):

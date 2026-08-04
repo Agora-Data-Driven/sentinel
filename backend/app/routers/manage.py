@@ -467,6 +467,7 @@ def delete_service(item_id: int, actor: User = Depends(get_current_user), db: Se
 # ---------------- Task vocabulary: statuses / labels / priorities ----------------
 def _vocab_dict(v: TaskVocabItem) -> dict:
     return {"id": v.id, "kind": v.kind, "name": v.name, "color": v.color,
+            "key": v.key, "stage": v.stage,
             "sort_order": v.sort_order, "is_active": v.is_active}
 
 
@@ -528,8 +529,23 @@ def create_vocab(payload: dict, actor: User = Depends(get_current_user), db: Ses
         raise HTTPException(400, "Name is required")
     if db.execute(select(TaskVocabItem).where(TaskVocabItem.kind == kind, TaskVocabItem.name == name)).scalar_one_or_none():
         raise HTTPException(409, f"That {kind} already exists")
+    # 🔴 A NEW STATUS MUST DECLARE ITS ATRIUM STAGE (decision D13). The board is happy to hold any
+    # number of statuses, but a client card can only sit in one of Atrium's five stages — so a
+    # status with no stage means every attempt to move a published card into it fails. That used to
+    # be discoverable only as a bare 400 "Invalid status" long after someone added the column.
+    stage = (payload.get("stage") or "").strip() or None
+    if kind == "status":
+        if not stage:
+            raise HTTPException(
+                400, "Pick which client stage this status maps to: "
+                     + ", ".join(task_config.ATRIUM_STAGES))
+        if stage not in task_config.ATRIUM_STAGES:
+            raise HTTPException(400, f"Unknown client stage “{stage}”")
+    else:
+        stage = None                      # only statuses project onto a stage
     last = db.execute(select(func.max(TaskVocabItem.sort_order)).where(TaskVocabItem.kind == kind)).scalar() or 0
-    v = TaskVocabItem(kind=kind, name=name, color=payload.get("color") or None, sort_order=last + 1)
+    v = TaskVocabItem(kind=kind, name=name, color=payload.get("color") or None,
+                      key=task_config.slugify(name), stage=stage, sort_order=last + 1)
     db.add(v)
     db.commit()
     audit.record(db, actor_id=actor.id, table_name="task_vocab", record_id=v.id, action="create", new={"kind": kind, "name": name})
@@ -545,6 +561,19 @@ def update_vocab(item_id: int, payload: dict, actor: User = Depends(get_current_
         new = payload["name"].strip()
         _rename_in_tasks(db, v.kind, v.name, new)  # keep existing tasks consistent
         v.name = new
+        # `key` and `stage` deliberately DO NOT move. The label is the renameable facet; the key is
+        # this row's identity and the stage is where the client's card sits. Re-slugging the key
+        # here would reintroduce exactly the breakage the split exists to prevent — which is what
+        # makes "Blocked" -> "Parked" a one-field edit (docs/TASKBOARD_REBUILD.md §5.1).
+    if "stage" in payload and v.kind == "status":
+        stage = (payload.get("stage") or "").strip()
+        if not stage:
+            raise HTTPException(400, "A status must keep a client stage")
+        if stage not in task_config.ATRIUM_STAGES:
+            raise HTTPException(400, f"Unknown client stage “{stage}”")
+        v.stage = stage
+    if not v.key:
+        v.key = task_config.slugify(v.name)   # heal a row seeded before the column existed
     if "color" in payload:
         v.color = payload["color"] or None
     if "sort_order" in payload and payload["sort_order"] not in (None, ""):

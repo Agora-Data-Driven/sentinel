@@ -1,0 +1,2704 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sentinel = system of record · Atrium = read-only monitor</title>
+<!-- Standalone prototype of the DECIDED target state in docs/TASKBOARD_REBUILD.md (D1-D12).
+     No build step, no external requests. Written 2026-08-03.
+
+     This SUPERSEDES the estate-root taskboard_prototype.html for the bridge mechanics:
+     that one models the prototype's "internal shadow" (client-facing fields edited on the
+     Atrium card). D2 removed every writer on the Atrium side, so this one models the
+     PROJECTION instead - the Sentinel row owns every field and pushes the client-safe
+     subset. One authority, one direction, no reconciliation.
+
+     Design tokens for both frames are copied from the real apps, same as the older
+     prototype: sentinel/frontend/static/css/styles.css and
+     atrium/services/portal/dash/templates/atrium.html. -->
+<style>
+  /* ============ page shell ============ */
+  :root {
+    color-scheme: light dark;
+    --pg:#EDEFF3; --pgink:#12161C; --pgsub:#69727F; --pgline:#DDE1E7; --pgcard:#fff;
+    --mono:ui-monospace,"Cascadia Mono","Cascadia Code",Consolas,"SF Mono",Menlo,monospace;
+    --ui:"Inter","Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --pg:#0A0D11; --pgink:#E9EDF2; --pgsub:#8B95A3; --pgline:#232932; --pgcard:#14181E; }
+  }
+  :root[data-theme="dark"] { --pg:#0A0D11; --pgink:#E9EDF2; --pgsub:#8B95A3; --pgline:#232932; --pgcard:#14181E; }
+  :root[data-theme="light"] { --pg:#EDEFF3; --pgink:#12161C; --pgsub:#69727F; --pgline:#DDE1E7; --pgcard:#fff; }
+
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--pg); color:var(--pgink); font-family:var(--ui);
+    font-size:14px; line-height:1.5; -webkit-font-smoothing:antialiased; }
+  button { font:inherit; cursor:pointer; }
+  /* Wide on purpose: five board columns + the sidebar need ~1640px to render with no
+     horizontal scroll, and the board is the thing you came to look at. */
+  .wrap { max-width:1740px; margin:0 auto; padding:18px 20px 48px; }
+  h1 { margin:0; font-size:19px; font-weight:700; letter-spacing:-.015em; }
+
+  .top { display:flex; flex-wrap:wrap; gap:12px 20px; align-items:flex-end;
+    justify-content:space-between; margin-bottom:14px; }
+  .top p { margin:5px 0 0; font-size:12.5px; color:var(--pgsub); max-width:78ch; }
+  .ctl { display:flex; gap:7px; align-items:center; flex-wrap:wrap; }
+  .seats { display:flex; gap:3px; padding:3px; background:var(--pgcard); border:1px solid var(--pgline);
+    border-radius:9px; flex-wrap:wrap; }
+  .seat { border:0; background:transparent; border-radius:6px; padding:5px 9px; font-size:11.5px;
+    font-weight:550; color:var(--pgsub); display:flex; align-items:center; gap:6px; }
+  .seat[aria-pressed="true"] { background:var(--pg); color:var(--pgink); font-weight:650; }
+  .seat:focus-visible { outline:2px solid #2575FC; outline-offset:1px; }
+  .seat i { width:18px; height:18px; border-radius:50%; display:grid; place-items:center;
+    font-size:8px; font-weight:700; color:#fff; font-style:normal; }
+  .gbtn { border:1px solid var(--pgline); background:var(--pgcard); border-radius:8px;
+    padding:7px 13px; font-size:12.5px; font-weight:600; color:var(--pgink); }
+  .gbtn:hover { border-color:var(--pgsub); }
+  .gbtn.hot { background:#FEF2F2; border-color:#F4C7C4; color:#B4322E; }
+
+  .frame { border-radius:12px; overflow:hidden; border:1px solid var(--pgline);
+    box-shadow:0 12px 34px rgba(10,14,20,.14); margin-bottom:16px; background:#fff; }
+  .bar { display:flex; align-items:center; gap:9px; padding:8px 12px; background:#20242B; }
+  .bar .dots { display:flex; gap:5px; }
+  .bar .dots i { width:9px; height:9px; border-radius:50%; background:#454B55; }
+  .bar .u { flex:1; background:#2B3038; border-radius:20px; padding:4px 12px; font-family:var(--mono);
+    font-size:11px; color:#9AA3AE; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .bar .u b { color:#E4E8ED; font-weight:600; }
+  .bar .who { font-size:10.5px; color:#9AA3AE; }
+
+  .seclbl { display:flex; align-items:baseline; gap:9px; margin:24px 0 9px; flex-wrap:wrap; }
+  .seclbl h2 { margin:0; font-size:15px; font-weight:700; }
+  .seclbl span { font-size:12px; color:var(--pgsub); }
+
+  /* Everything is full width and stacked. The inspector used to sit in a 400px right rail,
+     which left the board ~1100px — three and a half columns of five. */
+
+  /* ================================================================
+     SENTINEL - tokens from sentinel/frontend/static/css/styles.css
+     ================================================================ */
+  .sent {
+    --green:#54B948; --green-d:#3A9A2F; --green-bg:#E9F7E6; --green-strong:#2F8A2C;
+    --violet:#9484FB; --violet-d:#5C4BD0; --violet-bg:#F1EFFE;
+    --sentinel:#FF6B35; --sentinel-2:#F2820C;
+    --ink:#0D1117; --text:#2B333C; --sub:#5B6673; --muted:#8A939F;
+    --line:#E7EAEE; --line-soft:#EEF0F3; --line-strong:#D8DDE3;
+    --canvas:#F6F7F9; --card:#FFFFFF; --input:#F1F3F5; --hover:#F1F3F5;
+    --ok:#54B948; --warn:#F59E0B; --danger:#EF4444;
+    --radius:16px; --pill:999px;
+    --shadow:0 2px 4px rgba(16,24,40,.04), 0 10px 24px -12px rgba(16,24,40,.14);
+    --shadow-lg:0 2px 6px rgba(16,24,40,.05), 0 18px 40px -16px rgba(16,24,40,.18);
+    --grad-brand:linear-gradient(90deg,#6BCB4E 0%,#54B948 55%,#3A9A2F 100%);
+    display:grid; grid-template-columns:248px 1fr; background:var(--canvas);
+    color:var(--text); font-family:"Inter",system-ui,sans-serif; min-height:600px;
+  }
+  @media (max-width:900px) { .sent { grid-template-columns:1fr; } .sent .side { display:none; } }
+  .sent .side { background:#fff; border-right:1px solid var(--line); padding:16px 12px;
+    display:flex; flex-direction:column; }
+  .sent .logo { display:flex; align-items:center; gap:9px; padding:2px 8px 16px; }
+  .sent .logo .m { width:28px; height:28px; border-radius:9px;
+    background:linear-gradient(120deg,#FF7A45 0%,#F2820C 100%); display:grid; place-items:center;
+    color:#fff; font-weight:800; font-size:13px; }
+  .sent .logo .n { font-weight:800; font-size:15px; color:var(--ink); letter-spacing:-.02em; }
+  .sent .nav { display:flex; flex-direction:column; gap:2px; }
+  .sent .nav .it { display:flex; align-items:center; gap:10px; padding:9px 11px; border-radius:10px;
+    font-size:13.5px; font-weight:600; color:var(--sub); }
+  .sent .nav .it.on { background:var(--grad-brand); color:#fff; box-shadow:0 6px 14px -8px #3A9A2F; }
+  .sent .nav .it .ic { width:16px; text-align:center; font-size:13px; }
+  .sent .nav .it .bdg { margin-left:auto; font-size:10px; font-weight:800; background:var(--violet-bg);
+    color:var(--violet-d); border-radius:var(--pill); padding:1px 7px; }
+  .sent .nav .it.on .bdg { background:rgba(255,255,255,.24); color:#fff; }
+  .sent .nav .sec { font-size:10px; font-weight:800; letter-spacing:.1em; text-transform:uppercase;
+    color:var(--muted); padding:14px 11px 5px; }
+  .sent .usercard { margin-top:auto; background:var(--canvas); border-radius:12px; padding:10px;
+    display:flex; align-items:center; gap:9px; }
+  .sent .usercard .av { width:32px; height:32px; border-radius:50%; display:grid; place-items:center;
+    color:#fff; font-size:11px; font-weight:800; }
+  .sent .usercard .n { font-size:13px; font-weight:700; color:var(--ink); }
+  .sent .usercard .r { font-size:11px; color:var(--sub); }
+
+  .sent .mainarea { min-width:0; display:flex; flex-direction:column; }
+  .sent .topbar { background:#fff; border-bottom:1px solid var(--line); padding:14px 20px 0;
+    position:relative; }
+  .sent .topbar::after { content:""; position:absolute; left:0; right:0; bottom:0; height:2px;
+    background:var(--grad-brand); }
+  .sent .topbar h2 { margin:0; font-size:20px; font-weight:800; color:var(--ink);
+    letter-spacing:-.02em; }
+  .sent .topbar .sb { font-size:13px; color:var(--sub); margin:3px 0 14px; }
+  .sent .content { padding:18px 20px; flex:1; }
+
+  .sent .seg { display:inline-flex; padding:3px; border-radius:var(--pill); border:1px solid var(--line);
+    background:var(--input); margin-bottom:14px; flex-wrap:wrap; }
+  .sent .seg button { border:none; background:transparent; color:var(--sub); font:inherit;
+    font-size:12.5px; font-weight:700; padding:5px 13px; border-radius:var(--pill); }
+  .sent .seg button.on { background:var(--card); color:var(--green-d); box-shadow:var(--shadow); }
+  .sent .seg button .n { font-size:10px; opacity:.75; margin-left:4px; }
+
+  .sent .barrow { display:flex; gap:9px; align-items:center; flex-wrap:wrap;
+    justify-content:space-between; margin-bottom:12px; }
+
+  .sent .board { display:flex; gap:12px; overflow-x:auto; padding-bottom:12px; align-items:flex-start; }
+  .sent .col { flex:0 0 252px; background:var(--canvas); border:1px solid var(--line);
+    border-radius:var(--radius); display:flex; flex-direction:column; }
+  .sent .col-head { display:flex; align-items:center; justify-content:space-between; padding:12px 14px; }
+  .sent .col-head .t { font-weight:800; font-size:13px; color:var(--ink); display:flex; gap:6px;
+    align-items:center; }
+  .sent .col-head .t i { width:8px; height:8px; border-radius:50%; display:inline-block; }
+  .sent .col-head .c { font-size:11px; font-weight:800; color:var(--sub); background:#fff;
+    border:1px solid var(--line); border-radius:var(--pill); padding:1px 8px; }
+  .sent .col-list { padding:4px 10px 12px; display:flex; flex-direction:column; gap:9px;
+    min-height:44px; }
+  .sent .tcard { background:#fff; border:1px solid var(--line); border-radius:11px; padding:12px;
+    box-shadow:var(--shadow); cursor:pointer; text-align:left; width:100%; font:inherit;
+    color:inherit; display:block; }
+  .sent .tcard:hover { box-shadow:var(--shadow-lg); }
+  .sent .tcard.sel { border-color:var(--green); box-shadow:0 0 0 2px var(--green-bg), var(--shadow-lg); }
+  .sent .labels { display:flex; flex-wrap:wrap; gap:5px; margin-bottom:7px; }
+  .sent .lp { font-size:10px; font-weight:800; padding:2px 8px; border-radius:var(--pill);
+    letter-spacing:.02em; }
+  .sent .t-title { font-weight:700; font-size:13.5px; color:var(--ink); line-height:1.35; }
+  .sent .t-meta { display:flex; align-items:center; gap:7px; flex-wrap:wrap; margin-top:9px;
+    font-size:12px; color:var(--sub); }
+  .sent .pdot { width:8px; height:8px; border-radius:50%; display:inline-block; }
+  .sent .t-foot { display:flex; align-items:center; justify-content:space-between; margin-top:10px;
+    gap:8px; }
+  .sent .t-foot .row { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--sub); }
+  .sent .avatar { width:26px; height:26px; border-radius:50%; display:grid; place-items:center;
+    color:#fff; font-size:10px; font-weight:800; }
+  .sent .avatar.sm { width:22px; height:22px; font-size:9px; }
+  .sent .icons { display:flex; gap:9px; color:var(--muted); font-size:12px; align-items:center; }
+  .sent .empty { padding:22px; text-align:center; color:var(--muted); font-size:13px; }
+
+  .sent .btn { border:1px solid var(--line-strong); background:#fff; border-radius:10px;
+    padding:9px 15px; font-size:13px; font-weight:700; color:var(--text); }
+  .sent .btn:hover { background:var(--hover); }
+  .sent .btn.primary { background:var(--grad-brand); border-color:transparent; color:#fff; }
+  .sent .btn.orange { background:linear-gradient(120deg,#FF7A45,#F2820C); border-color:transparent;
+    color:#fff; }
+  .sent .btn.sm { padding:6px 11px; font-size:12px; }
+  .sent .btn:disabled { opacity:.45; cursor:not-allowed; }
+
+  /* swimlanes / monitor / intake */
+  .lane { border:1px solid var(--line); border-radius:12px; background:#fff; margin-bottom:10px;
+    overflow:hidden; }
+  .lane .lh { display:flex; align-items:center; gap:9px; padding:10px 13px; background:var(--canvas);
+    border-bottom:1px solid var(--line); }
+  .lane .lh .nm { font-weight:800; font-size:13px; color:var(--ink); }
+  .lane .lh .rl { font-size:11px; color:var(--sub); }
+  .lane .lh .ct { margin-left:auto; font-size:11px; font-weight:700; color:var(--sub); }
+  .lane .lb { padding:10px 13px; display:flex; gap:9px; flex-wrap:wrap; }
+  .lane .mini { border:1px solid var(--line); border-radius:9px; padding:8px 10px; font-size:12px;
+    max-width:230px; cursor:pointer; background:#fff; text-align:left; font-family:inherit; }
+  .lane .mini:hover { border-color:var(--line-strong); }
+  .lane .mini b { display:block; font-size:12.5px; color:var(--ink); font-weight:700; }
+  .lane .mini span { color:var(--sub); font-size:11.5px; }
+
+  table.mon { width:100%; border-collapse:collapse; background:#fff; border:1px solid var(--line);
+    border-radius:12px; overflow:hidden; font-size:12.5px; }
+  table.mon th { text-align:left; padding:9px 12px; background:var(--canvas); font-size:10.5px;
+    font-weight:800; letter-spacing:.06em; text-transform:uppercase; color:var(--muted);
+    border-bottom:1px solid var(--line); }
+  table.mon td { padding:9px 12px; border-bottom:1px solid var(--line-soft); color:var(--text); }
+  table.mon tr:last-child td { border-bottom:0; }
+  table.mon td.num { font-variant-numeric:tabular-nums; font-weight:700; }
+  table.mon .od { color:#B4322E; font-weight:800; }
+  table.mon .z { color:var(--muted); font-weight:400; }
+  table.mon tbody tr { cursor:pointer; }
+  table.mon tbody tr:hover { background:var(--canvas); }
+
+  .intk { border:1px solid var(--line); border-left:3px solid var(--violet); border-radius:11px;
+    background:#fff; padding:12px 13px; margin-bottom:9px; }
+  .intk .ih2 { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:5px; }
+  .intk .ttl { font-weight:700; font-size:13.5px; color:var(--ink); }
+  .intk .bod { font-size:12.5px; color:var(--sub); }
+  .intk .acts { display:flex; gap:7px; margin-top:10px; flex-wrap:wrap; }
+
+  /* sentinel drawer */
+  /* The open card. It sits under a full-width board now, so it announces itself: a green
+     top rule and a label, or you cannot tell what you just clicked. */
+  .sdraw { border:1px solid var(--line); border-radius:var(--radius); background:#fff;
+    box-shadow:var(--shadow-lg); overflow:hidden; margin-top:18px; border-top:3px solid var(--green); }
+  .sdraw .dh { padding:14px 16px; border-bottom:1px solid var(--line); display:flex;
+    align-items:center; gap:10px; flex-wrap:wrap; }
+  .sdraw .dh .eyebrow { font-size:10px; font-weight:800; letter-spacing:.1em;
+    text-transform:uppercase; color:var(--green-d); width:100%; margin-bottom:-4px; }
+  .sdraw .dh h3 { margin:0; font-size:15px; font-weight:800; color:var(--ink); }
+  .sdraw .dh .x { margin-left:auto; border:0; background:transparent; font-size:19px;
+    color:var(--muted); padding:0 4px; border-radius:6px; }
+  .sdraw .db { padding:14px 16px; display:grid; grid-template-columns:1fr 1fr; gap:18px; }
+  @media (max-width:820px) { .sdraw .db { grid-template-columns:1fr; } }
+  .sdraw .fld { margin-bottom:11px; }
+  .sdraw .fld .lb { font-size:10.5px; font-weight:800; letter-spacing:.06em; text-transform:uppercase;
+    color:var(--muted); margin-bottom:4px; }
+  .sdraw .fld .vl { font-size:13px; color:var(--text); }
+  .sdraw select, .sdraw input, .sdraw textarea { font:inherit; font-size:13px; background:var(--input);
+    border:1px solid var(--line); border-radius:10px; padding:7px 10px; color:var(--text); width:100%; }
+  .sdraw .mt { border:1px solid var(--line); border-radius:11px; overflow:hidden; margin-bottom:9px; }
+  .sdraw .mt .h { padding:8px 11px; background:var(--canvas); font-size:12px; font-weight:800;
+    color:var(--ink); display:flex; gap:7px; align-items:center; }
+  .sdraw .mt .h .n { margin-left:auto; font-size:11px; color:var(--sub); font-weight:700; }
+  .sdraw .sub { padding:7px 11px; display:flex; gap:8px; align-items:flex-start; font-size:12.5px; }
+  .sdraw .sub + .sub { border-top:1px solid var(--line-soft); }
+  .sdraw .sub .bx { width:15px; height:15px; border:1.5px solid var(--line-strong); border-radius:4px;
+    flex:none; margin-top:2px; display:grid; place-items:center; font-size:9px; color:#fff;
+    background:#fff; cursor:pointer; }
+  .sdraw .sub .bx.on { background:var(--green); border-color:var(--green); }
+  .sdraw .sub .bx.dis { opacity:.45; cursor:not-allowed; }
+  .sdraw .sub .tx { flex:1; color:var(--text); }
+  .sdraw .sub.done .tx { color:var(--muted); text-decoration:line-through; }
+  .sdraw .sub .dod { display:block; font-size:11px; color:var(--sentinel-2); margin-top:2px; }
+  .sdraw .sub .as { font-size:10px; font-weight:700; padding:1px 7px; border-radius:var(--pill);
+    background:var(--canvas); border:1px solid var(--line); color:var(--sub); white-space:nowrap; }
+  .sdraw select.own { width:auto; max-width:132px; font-size:11px; padding:3px 6px;
+    border-radius:8px; background:#fff; flex:none; }
+  .sdraw .mt .h select.own { margin-left:auto; }
+  .sdraw .bulk { display:flex; align-items:center; gap:7px; flex-wrap:wrap; margin:2px 0 10px;
+    font-size:11.5px; color:var(--sub); }
+  .sdraw .qnote { font-size:11.5px; color:var(--sub); margin-top:5px; line-height:1.5; }
+  .sdraw .df { padding:12px 16px; border-top:1px solid var(--line); background:var(--canvas);
+    display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .sbanner { border-radius:11px; padding:11px 13px; font-size:12.5px; line-height:1.5;
+    margin-bottom:11px; }
+  .sbanner.ok { background:var(--green-bg); color:var(--green-strong); }
+  .sbanner.no { background:#FEF2F2; color:#B4322E; }
+  .sbanner.wa { background:#FFFBEB; color:#92610B; }
+  .sbanner.in { background:var(--violet-bg); color:var(--violet-d); }
+  .sbanner b { font-weight:800; }
+  .thread { display:flex; flex-direction:column; gap:7px; margin:8px 0 0; }
+  .msg { border-radius:9px; padding:8px 10px; font-size:12.5px; line-height:1.5; }
+  .msg.c { background:var(--canvas); color:var(--text); }
+  .msg.x { background:#FBEAE9; color:#B0413E; }
+  .msg.r { background:var(--green-bg); color:var(--green-strong); }
+  .msg b { display:block; font-size:10px; font-weight:800; text-transform:uppercase;
+    letter-spacing:.05em; margin-bottom:3px; }
+
+  /* ================================================================
+     ATRIUM - tokens from atrium/.../templates/atrium.html
+     ================================================================ */
+  .atr {
+    --ax-green:#4CAC4C; --ax-green-d:#3E8C3B; --ax-green-bg:#EAF6E9;
+    --ax-violet:#2575FC; --ax-violet-d:#1856C9; --ax-violet-bg:#E7F0FE;
+    --ax-ink:#0C1022; --ax-sub:#6B7280; --ax-line:#E9EAEE; --ax-canvas:#FFFFFF; --ax-white:#fff;
+    --ax-ok:#4CAC4C; --ax-warn:#F2820C; --ax-bad:#E5413E;
+    --ax-radius:5px; --ax-pill:999px;
+    --ax-shadow:0 1px 2px rgba(16,24,40,.04), 0 8px 24px rgba(16,24,40,.06);
+    --ax-shadow-lg:0 2px 6px rgba(16,24,40,.05), 0 18px 42px rgba(16,24,40,.12);
+    display:grid; grid-template-columns:216px 1fr; background:var(--ax-canvas); color:var(--ax-ink);
+    font-family:"Inter",system-ui,sans-serif; min-height:430px;
+  }
+  @media (max-width:900px) { .atr { grid-template-columns:1fr; } .atr .arail { display:none; } }
+  .atr .arail { border-right:1px solid var(--ax-line); padding:14px 10px; display:flex;
+    flex-direction:column; }
+  .atr .abrand { display:flex; align-items:center; gap:8px; padding:2px 8px 13px;
+    border-bottom:1px solid var(--ax-line); margin-bottom:12px; }
+  .atr .abrand .m { width:26px; height:26px; border-radius:6px; background:var(--ax-green);
+    display:grid; place-items:center; color:#fff; font-weight:800; font-size:12px; }
+  .atr .abrand .n { font-weight:700; font-size:14px; letter-spacing:-.01em; }
+  .atr .acrest { border:1px solid var(--ax-line); border-radius:8px; padding:11px 9px;
+    text-align:center; margin-bottom:13px; }
+  .atr .acrest .lg { width:32px; height:32px; border-radius:8px; display:grid; place-items:center;
+    color:#fff; font-weight:800; font-size:12px; margin:0 auto 6px; }
+  .atr .acrest .cn { font-size:12px; font-weight:700; }
+  .atr .acrest .ck { font-size:10px; color:var(--ax-sub); font-family:var(--mono); }
+  .atr .agrp { font-size:10px; font-weight:800; letter-spacing:.09em; text-transform:uppercase;
+    color:var(--ax-sub); padding:11px 9px 4px; }
+  .atr .ait { display:flex; align-items:center; gap:9px; padding:7px 9px; border-radius:5px;
+    font-size:13.5px; font-weight:600; color:var(--ax-sub); }
+  .atr .ait.on { background:var(--ax-green-bg); color:var(--ax-green-d); font-weight:700; }
+  .atr .ait .ic { width:15px; text-align:center; font-size:12px; }
+  .atr .afoot { margin-top:auto; padding-top:12px; border-top:1px solid var(--ax-line);
+    display:flex; align-items:center; gap:9px; }
+  .atr .afoot .av { width:30px; height:30px; border-radius:50%; display:grid; place-items:center;
+    color:#fff; font-size:11px; font-weight:800; }
+  .atr .afoot .n { font-size:12.5px; font-weight:650; }
+  .atr .afoot .r { font-size:10.5px; color:var(--ax-sub); }
+
+  .atr .amain { padding:20px 22px; min-width:0; }
+  .atr .atop h2 { margin:0; font-size:21px; font-weight:700; letter-spacing:-.02em; }
+  .atr .atop .s { font-size:13.5px; color:var(--ax-sub); margin:6px 0 14px; line-height:1.55; }
+  .rochip { display:inline-flex; align-items:center; gap:6px; background:var(--ax-green-bg);
+    color:var(--ax-green-d); font-size:11.5px; font-weight:700; border-radius:var(--ax-pill);
+    padding:4px 11px; margin-bottom:16px; }
+  .atr .apgcols { display:flex; gap:14px; overflow-x:auto; padding-bottom:8px; align-items:flex-start; }
+  .atr .apgcol { flex:0 0 250px; }
+  .atr .apgh { display:flex; align-items:center; gap:8px; padding:0 2px 9px; }
+  .atr .apgh .dot { width:8px; height:8px; border-radius:50%; }
+  .atr .apgh .t { font-size:12.5px; font-weight:800; }
+  .atr .apgh .c { font-size:11px; color:var(--ax-sub); font-weight:700; }
+  .atr .apglist { display:flex; flex-direction:column; gap:11px; min-height:40px; }
+  .ax-pg-card { background:var(--ax-white); border:1px solid var(--ax-line);
+    border-radius:var(--ax-radius); padding:14px; box-shadow:var(--ax-shadow);
+    text-align:left; width:100%; font:inherit; color:inherit; display:block; }
+  .ax-pg-card.fresh { animation:aland .7s ease-out; }
+  @keyframes aland { 0% { transform:scale(.96); box-shadow:0 0 0 4px var(--ax-green-bg); } }
+  .ax-pg-stage { font-size:10px; font-weight:800; border-radius:var(--ax-pill); padding:3px 10px;
+    letter-spacing:.03em; text-transform:uppercase; display:inline-block; }
+  .ax-pg-stage.todo { background:#EEF0F3; color:#5B6472; }
+  .ax-pg-stage.in_progress { background:var(--ax-violet-bg); color:var(--ax-violet-d); }
+  .ax-pg-stage.blocked { background:#FDF0E1; color:#B4610A; }
+  .ax-pg-stage.revision { background:#FBEAE9; color:#B0413E; }
+  .ax-pg-stage.completed { background:var(--ax-green-bg); color:var(--ax-green-d); }
+  .ax-pg-chip { display:inline-flex; align-items:center; font-size:10px; font-weight:800;
+    border-radius:var(--ax-pill); padding:2px 9px; letter-spacing:.03em; text-transform:uppercase; }
+  .ax-pg-chip.lb-paid { background:#ECECFB; color:#5A54DD; }
+  .ax-pg-chip.lb-organic { background:var(--ax-green-bg); color:var(--ax-green-d); }
+  .ax-pg-chip.lb-web { background:var(--ax-violet-bg); color:var(--ax-violet-d); }
+  .atr .apgt { font-size:15px; font-weight:700; margin:9px 0 5px; line-height:1.35; }
+  .atr .apgn { font-size:13px; color:var(--ax-sub); line-height:1.55; }
+  .atr .apgrow { display:flex; gap:7px; flex-wrap:wrap; align-items:center; }
+  .atr .apgmeta { display:flex; gap:9px; flex-wrap:wrap; margin-top:11px; font-size:12px;
+    color:var(--ax-sub); }
+  .atr .apgbar { height:5px; background:#EEF0F3; border-radius:var(--ax-pill); margin-top:11px;
+    overflow:hidden; }
+  .atr .apgbar i { display:block; height:100%; background:var(--ax-green); border-radius:var(--ax-pill);
+    transition:width .35s; }
+  .atr .apgph { margin-top:11px; padding:10px 11px; background:#FAFBFC; border-radius:var(--ax-radius);
+    display:flex; flex-direction:column; gap:6px; }
+  .atr .apgphr { display:flex; align-items:center; gap:8px; font-size:12.5px; }
+  .atr .apgphr .k { width:14px; height:14px; border-radius:4px; border:1.5px solid #D8DDE3;
+    display:grid; place-items:center; font-size:8px; color:#fff; flex:none; }
+  .atr .apgphr .k.on { background:var(--ax-green); border-color:var(--ax-green); }
+  .atr .apgphr .n { margin-left:auto; font-size:11px; color:var(--ax-sub); font-weight:700; }
+  .atr .acta { display:flex; gap:8px; margin-top:13px; flex-wrap:wrap; }
+  .atr .abtn { border:1px solid var(--ax-line); background:#fff; border-radius:var(--ax-radius);
+    padding:8px 14px; font-size:12.5px; font-weight:700; color:var(--ax-ink); }
+  .atr .abtn:hover { border-color:#d4d6df; }
+  .atr .abtn.g { background:var(--ax-green); border-color:var(--ax-green); color:#fff; }
+  .atr .abtn.v { background:var(--ax-violet); border-color:var(--ax-violet); color:#fff; }
+  .atr .amsg { margin-top:11px; padding:10px 12px; border-radius:var(--ax-radius); font-size:12.5px;
+    line-height:1.5; }
+  .atr .amsg.c { background:#F6F7F9; color:var(--ax-sub); }
+  .atr .amsg.x { background:#FBEAE9; color:#B0413E; }
+  .atr .amsg.r { background:var(--ax-green-bg); color:var(--ax-green-d); }
+  .atr .amsg b { display:block; font-size:10px; font-weight:800; text-transform:uppercase;
+    letter-spacing:.05em; margin-bottom:3px; }
+  .atr .aempty { border:1px dashed var(--ax-line); border-radius:var(--ax-radius); padding:26px 20px;
+    text-align:center; color:var(--ax-sub); font-size:13px; }
+  .anotice { border:1px solid var(--ax-line); background:#FAFBFC; border-radius:var(--ax-radius);
+    padding:12px 14px; font-size:12.5px; color:var(--ax-sub); line-height:1.6; margin-top:14px; }
+  .anotice b { color:var(--ax-ink); }
+  .anotice.warn { background:#FFFBF5; border-color:#F5E3C8; }
+  .qadd { border:1px solid var(--ax-line); border-radius:var(--ax-radius); padding:13px 14px;
+    margin-top:16px; background:#FCFCFD; }
+  .qadd h4 { margin:0 0 4px; font-size:13px; font-weight:800; }
+  .qadd p { margin:0 0 10px; font-size:12.5px; color:var(--ax-sub); line-height:1.55; }
+  .qadd .row2 { display:flex; gap:8px; flex-wrap:wrap; }
+  .qadd input { flex:1; min-width:200px; font:inherit; font-size:13px; border:1px solid var(--ax-line);
+    border-radius:var(--ax-radius); padding:8px 11px; }
+
+  /* ============ inspector — full width, collapsible ============ */
+  .insp { background:var(--pgcard); border:1px solid var(--pgline);
+    border-radius:12px; overflow:hidden; box-shadow:0 8px 22px rgba(10,14,20,.1);
+    margin-bottom:16px; }
+  .insp .ih { padding:11px 14px; border-bottom:1px solid var(--pgline); display:flex;
+    align-items:center; gap:14px; flex-wrap:wrap; }
+  .insp .ih h3 { margin:0; font-size:13.5px; font-weight:700; }
+  .insp .ih p { margin:3px 0 0; font-size:11.5px; color:var(--pgsub); }
+  .insp .ih .grow { flex:1; min-width:200px; }
+  .itabs { display:flex; gap:3px; padding:8px 12px 0; flex-wrap:wrap; }
+  .itab { border:0; background:transparent; border-bottom:2px solid transparent; padding:6px 9px;
+    font-size:11.5px; font-weight:650; color:var(--pgsub); }
+  .itab[aria-selected="true"] { color:var(--pgink); border-bottom-color:#2575FC; }
+  .ibody { display:grid; grid-template-columns:1fr; }
+  @media (min-width:1080px) { .ibody { grid-template-columns:1fr 380px; } }
+  .icode { padding:11px 14px; max-height:330px; overflow:auto; }
+  .icode pre { margin:0; font-family:var(--mono); font-size:11.5px; line-height:1.7;
+    white-space:pre-wrap; word-break:break-word; color:var(--pgink); }
+  .k { color:#2575FC; } .s { color:#3E8C3B; } .n2 { color:#B4610A; } .b { color:#8B5CF6; }
+  .cmt { color:var(--pgsub); font-style:italic; }
+  .strike { color:#C0453F; text-decoration:line-through; }
+  .inote { padding:12px 14px; border-top:1px solid var(--pgline); font-size:12px;
+    color:var(--pgsub); line-height:1.6; background:var(--pg); }
+  @media (min-width:1080px) { .inote { border-top:0; border-left:1px solid var(--pgline); } }
+  .inote b { color:var(--pgink); }
+  .insp.off .itabs, .insp.off .ibody { display:none; }
+
+  /* decision legend */
+  .legend { background:var(--pgcard); border:1px solid var(--pgline); border-radius:12px;
+    padding:13px 15px; margin-top:16px; }
+  .legend h3 { margin:0 0 9px; font-size:13.5px; font-weight:700; }
+  .legend ul { margin:0; padding:0; list-style:none; display:grid; gap:6px;
+    grid-template-columns:repeat(auto-fit,minmax(330px,1fr)); }
+  .legend li { font-size:12px; color:var(--pgsub); line-height:1.5; display:flex; gap:8px; }
+  .legend li code { font-family:var(--mono); font-size:10.5px; font-weight:700; color:var(--pgink);
+    background:var(--pg); border:1px solid var(--pgline); border-radius:5px; padding:1px 6px;
+    height:fit-content; white-space:nowrap; }
+  .legend li b { color:var(--pgink); font-weight:650; }
+
+  /* modal */
+  .veil { position:fixed; inset:0; background:rgba(8,11,16,.6); z-index:60; display:none; }
+  .veil.on { display:block; }
+  .mod { position:fixed; z-index:61; top:50%; left:50%; transform:translate(-50%,-50%);
+    width:min(760px,calc(100vw - 28px)); max-height:calc(100vh - 44px); background:#fff;
+    border-radius:14px; box-shadow:0 30px 70px rgba(8,11,16,.4); display:none;
+    flex-direction:column; overflow:hidden; color:#2B333C; font-family:"Inter",system-ui,sans-serif; }
+  .mod.on { display:flex; }
+  .mod .mh { padding:15px 18px; border-bottom:1px solid #E7EAEE; display:flex; align-items:flex-start;
+    gap:10px; }
+  .mod .mh h3 { margin:0; font-size:17px; font-weight:800; color:#0D1117; }
+  .mod .mh p { margin:2px 0 0; font-size:12.5px; color:#5B6673; }
+  .mod .mb { padding:16px 18px; overflow-y:auto; }
+  .mod .mf { padding:13px 18px; border-top:1px solid #E7EAEE; background:#F6F7F9; display:flex;
+    gap:9px; flex-wrap:wrap; align-items:center; }
+  .mod .x { margin-left:auto; border:0; background:transparent; font-size:20px; color:#8A939F;
+    padding:2px 6px; border-radius:6px; }
+  .fgrp { display:flex; flex-direction:column; gap:11px; }
+  .fr2 { display:grid; grid-template-columns:1fr 1fr; gap:11px; }
+  @media (max-width:560px) { .fr2 { grid-template-columns:1fr; } }
+  .fl { display:flex; flex-direction:column; gap:4px; }
+  .fl .l { font-size:10.5px; font-weight:800; letter-spacing:.05em; text-transform:uppercase;
+    color:#8A939F; }
+  .fi { font:inherit; font-size:13px; background:#F1F3F5; border:1px solid #E7EAEE;
+    border-radius:10px; padding:8px 11px; color:#2B333C; width:100%; }
+  .fi:focus { outline:2px solid #54B948; outline-offset:-1px; }
+  .shrow { display:flex; align-items:flex-start; gap:11px; padding:11px 12px; border:1px solid #E7EAEE;
+    border-radius:10px; background:#fff; }
+  .shrow.on { border-color:#54B948; background:#E9F7E6; }
+  .shrow input[type=checkbox] { width:16px; height:16px; accent-color:#54B948; margin-top:2px; }
+  .shrow .al { font-size:13px; font-weight:700; color:#0D1117; }
+  .shrow .ah { font-size:12px; color:#5B6673; margin-top:2px; line-height:1.5; }
+
+  .toasts { position:fixed; bottom:16px; left:50%; transform:translateX(-50%); z-index:80;
+    display:flex; flex-direction:column; gap:6px; pointer-events:none; align-items:center; }
+  .toast { background:#0D1117; color:#fff; font-size:12.5px; font-weight:600; padding:9px 15px;
+    border-radius:9px; box-shadow:0 12px 30px rgba(0,0,0,.3); max-width:min(560px,92vw); }
+  .toast.bad { background:#9B2C2A; }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,*::before,*::after { animation-duration:.001ms !important; transition-duration:.001ms !important; }
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <div class="top">
+    <div>
+      <h1>Sentinel is the system of record. Atrium is a read-only monitor.</h1>
+      <p>The decided target state from <span style="font-family:var(--mono);font-size:.9em">docs/TASKBOARD_REBUILD.md</span>
+        — D1–D12. Both frames use their real design tokens. Drive it: switch seats, publish, park,
+        review, file. The inspector shows the actual record, the exact projection push, and the
+        reverse channel. <b>Nothing here edits the Atrium side</b> — that is the whole point.</p>
+    </div>
+    <div class="ctl">
+      <div class="seats" id="seats" role="group" aria-label="Act as"></div>
+      <button class="gbtn" id="bridge" type="button"></button>
+      <button class="gbtn" id="reset" type="button">Reset</button>
+    </div>
+  </div>
+
+  <!-- SENTINEL — the whole width, so all five columns render -->
+  <div class="seclbl">
+    <h2>Sentinel — where the work is managed</h2>
+    <span>Click any card to open its drawer underneath the board.</span>
+  </div>
+  <div class="frame">
+    <div class="bar">
+      <div class="dots"><i></i><i></i><i></i></div>
+      <div class="u"><b>sentinel-585951669065.asia-southeast1.run.app</b><span id="surl">/tasks</span></div>
+      <span class="who">Sentinel · internal</span>
+    </div>
+    <div class="sent" id="sent"></div>
+  </div>
+
+  <!-- INSPECTOR -->
+  <div class="insp" id="insp">
+    <div class="ih">
+      <div class="grow">
+        <h3>Data inspector</h3>
+        <p>Live. Updates with every action — the record, the exact push, the reverse channel.</p>
+      </div>
+      <button class="gbtn" id="insp-toggle" type="button">Hide</button>
+    </div>
+    <div class="itabs" id="itabs" role="tablist"></div>
+    <div class="ibody">
+      <div class="icode"><pre id="icode"></pre></div>
+      <div class="inote" id="inote"></div>
+    </div>
+  </div>
+
+  <!-- ATRIUM -->
+  <div class="seclbl">
+    <h2>Atrium — what the client sees</h2>
+    <span>Christina's Tasks tab. Read-only by construction — the team affordances are gone from the markup, not hidden by CSS.</span>
+  </div>
+  <div class="frame">
+    <div class="bar">
+      <div class="dots"><i></i><i></i><i></i></div>
+      <div class="u" id="aurl"></div>
+      <span class="who">Atrium · client</span>
+    </div>
+    <div class="atr" id="atr"></div>
+  </div>
+
+  <div class="legend">
+    <h3>What this prototype proves</h3>
+    <ul id="legend"></ul>
+  </div>
+</div>
+
+<div class="veil" id="veil"></div>
+<div class="mod" id="mod" role="dialog" aria-modal="true"></div>
+<div class="toasts" id="toasts" aria-live="polite"></div>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ============================================================ people, clients, vocab ==== */
+
+  var P = {
+    zhen:    { id:9, name:"Zhen",     role:"intern",          team:"Acquisition", c:"#7A5FA6" },
+    justine: { id:6, name:"Justine",  role:"employee",        team:"Acquisition", c:"#2F7D6B" },
+    ehjay:   { id:4, name:"Ehjay",    role:"team_lead",       team:"Acquisition", c:"#37556F" },
+    charles: { id:2, name:"Charles",  role:"account_manager", team:"",            c:"#6E5AA8" },
+    dana:    { id:11,name:"Dana",     role:"viewer",          team:"",            c:"#556070" },
+    client:  { id:null,name:"Christina", role:"client",        team:"",            c:"#C9A227" }
+  };
+  var RL = { intern:"Intern", employee:"Employee", team_lead:"Team Lead",
+             account_manager:"Account Manager", viewer:"Viewer (read-only)", client:"Client" };
+  var SEATS = ["zhen","justine","ehjay","charles","dana","client"];
+
+  /* ---- the automated task creator: service_templates.
+     Editable in real Sentinel at Manage → Services (GET/POST/PATCH/DELETE
+     /api/manage/service-templates): key · label · dept · content_type · maintasks ·
+     default_priority · default_labels · default_description · sort_order · is_active.
+
+     `campaign:true` is the answer to "not every task is a campaign" — the Campaign field
+     is only offered when the chosen service is campaign-shaped. Four of the eight real
+     templates are standalone work, so most services never see that field at all. */
+  var TEMPLATES = [
+    { key:"", label:"Custom (blank)", dept:null, ct:null, campaign:false, groups:[] },
+    { key:"google_meta_campaign", label:"Google / Meta Campaign", dept:"acquisition",
+      ct:"Campaign", campaign:true, prio:"Urgent", groups:[
+      ["Campaign build", [
+        ["Audience, interest & budget research","Research sheet completed and linked on the card"],
+        ["Campaign structure plan","Objective + conversion event + CBO/ABO approved by the lead"],
+        ["Audience build","Custom / lookalike / interest audiences saved in Ads Manager"],
+        ["Load creatives + copy","All approved creatives, headlines, primary text and CTAs loaded"],
+        ["Compliance check","Client rules verified before launch"]]],
+      ["Launch & verify", [
+        ["Tracking confirmation with Systems & Dev","Pixel / CAPI events verified firing before spend starts"],
+        ["Launch","Campaign published; campaign ID logged on the card"],
+        ["Post-launch QA (24h)","Delivery, spend pacing and attribution confirmed"]]]] },
+    { key:"standalone_static", label:"Static Ad — standalone", dept:"acquisition",
+      ct:"Static", campaign:false, groups:[
+      ["Static ad production", [
+        ["Batch brief approved (angles + copy direction)","Brief signed off before any design starts"],
+        ["Design to brand spec","Copy matches the approved brief"],
+        ["Internal review of the batch","All statics checked against brief + compliance"],
+        ["Export + file","Exports filed; folder link on the card"]]]] },
+    { key:"email_automation", label:"Email Automation / Sequence", dept:"lifecycle",
+      ct:"Email Automation", campaign:true, groups:[
+      ["Plan", [["Automation map (trigger, waits, if/else, exit)","Flow documented in plain language, handover-ready"]]],
+      ["Build & activate", [
+        ["Automation built in platform","All steps, conditions and tags created"],
+        ["End-to-end test","A test contact travels the full flow correctly"],
+        ["Activate","Sequence live; logged on the card"]]]] },
+    { key:"organic_social", label:"Organic Social Post Production", dept:"lifecycle",
+      ct:"Social", campaign:false, groups:[
+      ["Post batch", [
+        ["Concept + caption","Concept and caption approved"],
+        ["Design","Designed to brand spec"],
+        ["Approver sign-off","A named approver has signed off the batch"],
+        ["Scheduled","Scheduled per cadence; logged"]]]] },
+    { key:"market_research", label:"Market Research Package", dept:"data",
+      ct:"Research", campaign:false, groups:[
+      ["Research package", [
+        ["Company profile","What they do, offer and positioning documented"],
+        ["Competitor research","Three or more competitors profiled (offer, pricing, angle)"],
+        ["Link in central sheet","Research doc linked on the central sheet"]]]] },
+    { key:"tracking_setup", label:"Tracking Infrastructure Setup", dept:"development",
+      ct:"Tracking", campaign:false, groups:[
+      ["Install", [
+        ["GTM container","Installed; publish access confirmed"],
+        ["GA4","Connected and receiving data"],
+        ["Meta Pixel + CAPI","Installed, firing and deduplicating"]]],
+      ["Configure & verify", [
+        ["Conversion events / triggers","Every key event built and named per convention"],
+        ["QA / verify","Events confirmed in GTM Preview and GA4 Realtime"]]]] }
+  ];
+  function tpl(key) {
+    for (var i = 0; i < TEMPLATES.length; i++) if (TEMPLATES[i].key === key) return TEMPLATES[i];
+    return TEMPLATES[0];
+  }
+  /* dept key -> the Team name a card is routed to. This is ServiceTemplate.dept, which the
+     real schema already stores and today uses only BACKWARDS (to filter the picker). */
+  var DEPT_TEAM = { acquisition:"Acquisition", lifecycle:"Lifecycle",
+                    data:"Data Analyst", development:"Development" };
+  var TEAMS = ["Acquisition", "Lifecycle", "Data Analyst", "Development"];
+  /* Everyone assignable, with their team — so the owner pickers can put the routed team's
+     people first without ever HIDING the rest (cross-team help is real work). */
+  var ROSTER = ["ehjay", "justine", "zhen", "charles"];
+
+  var CLIENTS = {
+    honeytribe:{ id:3, name:"Honey Tribe", tint:"#C9A227" },
+    rhe:       { id:2, name:"Rooming House Expert", tint:"#3D6E96" },
+    tcs:       { id:4, name:"The Contract Shop", tint:"#A15C2E" },
+    riverdance:{ id:1, name:"Riverdance RV", tint:"#2F7D6B" }
+  };
+
+  /* Statuses carry a stable KEY (Stage 1). The label is free to change; the bridge maps
+     key -> stage, never label -> stage. That asymmetry is what makes "Blocked -> Parked"
+     a label edit instead of a silent card-eating migration. */
+  var STATUSES = [
+    { key:"todo",        label:"To Do",           stage:"todo",        dot:"#8A939F" },
+    { key:"in_progress", label:"In Progress",     stage:"in_progress", dot:"#2575FC" },
+    { key:"revision",    label:"Revision Needed", stage:"revision",    dot:"#E5413E" },
+    { key:"parked",      label:"Parked",          stage:"blocked",     dot:"#F2820C" },
+    { key:"completed",   label:"Completed",       stage:"completed",   dot:"#4CAC4C" }
+  ];
+  var ST = {};
+  STATUSES.forEach(function (s) { ST[s.key] = s; });
+  var STAGE_LABEL = { todo:"To Do", in_progress:"In Progress", revision:"Revision Needed",
+                      blocked:"Parked", completed:"Completed" };
+  var STAGE_DOT = { todo:"#8A939F", in_progress:"#2575FC", revision:"#E5413E",
+                    blocked:"#F2820C", completed:"#4CAC4C" };
+  var PRI_DOT = { Urgent:"#EF4444", Medium:"#F59E0B", Low:"#8A939F" };
+  var DEPT_LABEL = { acquisition:"Paid Media", lifecycle:"Organic",
+                     data:"Website", development:"Website" };
+  var LAB_COLOR = { "Paid Media":["#F1EFFE","#5C4BD0"], Organic:["#E9F7E6","#2F8A2C"],
+                    Website:["#EFF6FF","#3B82F6"] };
+  var DISC_CLASS = { "Paid Media":"lb-paid", Organic:"lb-organic", Website:"lb-web" };
+
+  /* ============================================================ seed state ==== */
+
+  function ph(title, subs) {
+    return { id:"m" + rid(), title:title, who:null,
+      subs:subs.map(function (s) {
+        return { id:"s" + rid(), text:s[0], dod:s[1], done:!!s[2], who:s[3] || null };
+      }) };
+  }
+  function rid() { return Math.random().toString(36).slice(2, 7); }
+
+  function seed() {
+    return {
+      seat:"charles", view:"board", open:447, atab:"progress", itab:0, bridgeUp:true,
+      nextId:452, freshAtrium:null,
+      lastPush:null, lastReverse:null,
+      intake:[
+        { id:"rq_7f21", client:"honeytribe", from:"Christina", at:"2026-08-02",
+          body:"Can we add a second static for the gift bundle before the drop?" },
+        { id:"rq_9c04", client:"tcs", from:"Paige", at:"2026-07-31",
+          body:"Please pull last month's blog numbers into the report." }
+      ],
+      tasks:[
+        {
+          id:447, createdBy:"charles", name:"Spring drop — Meta campaign", client:"honeytribe", dept:"acquisition",
+          service:"Google / Meta Campaign", contentType:"Campaign",
+          campaign:"Spring drop | Leads",
+          status:"in_progress", priority:"Urgent", team:"Acquisition", lead:"ehjay",
+          assignee:"justine", start:"2026-07-28", due:"2026-08-19", charge:"980",
+          clientNote:"Creatives are in production — first ads go live on the 19th.",
+          internalNote:"Watching CPL before we scale past $150/day.",
+          review:"none", reviewedBy:null,
+          onHold:false, holdReason:"", resumeTo:"",
+          published:true, atriumId:"t_ab12cd", archived:false, completedAt:"",
+          thread:[], history:[],
+          phases:[
+            ph("Campaign build", [
+              ["Audience, interest & budget research","Research sheet completed and linked on the card",true,"justine"],
+              ["Campaign structure plan","Objective + conversion event + CBO/ABO approved by the lead",true,"justine"],
+              ["Audience build","Custom / lookalike / interest audiences saved in Ads Manager",true,"zhen"],
+              ["Ad set configuration","Placements, schedule and budget set per the plan",false,"zhen"],
+              ["Load creatives + copy","All approved creatives, headlines, primary text and CTAs loaded",false,"justine"],
+              ["Compliance check","Client rules verified before launch",false,"ehjay"]
+            ]),
+            ph("Launch & verify", [
+              ["Tracking confirmation with Systems & Dev","Pixel / CAPI events verified firing before spend starts",false,"zhen"],
+              ["Launch","Campaign published; campaign ID logged on the card",false,"justine"],
+              ["Post-launch QA (24h)","Delivery, spend pacing and attribution confirmed",false,"ehjay"]
+            ])
+          ]
+        },
+        {
+          id:448, createdBy:"charles", name:"Welcome sequence — 5 emails", client:"rhe", dept:"lifecycle",
+          service:"Email Automation", contentType:"Email Automation",
+          campaign:"Welcome flow",
+          status:"todo", priority:"Medium", team:null, lead:null, assignee:null,
+          start:"2026-08-04", due:"2026-08-25", charge:"640",
+          clientNote:"", internalNote:"",
+          review:"none", reviewedBy:null,
+          onHold:false, holdReason:"", resumeTo:"",
+          /* Share-on-create was switched OFF for this one (D6 default is ON) — so it is
+             internal-only and has never existed in Atrium. */
+          published:false, atriumId:"", archived:false, completedAt:"",
+          thread:[], history:[],
+          phases:[
+            ph("Plan", [["Automation map (trigger, waits, if/else, exit)","Flow documented in plain language, handover-ready",false,null]]),
+            ph("Email production", [
+              ["Email 1 — copy","Copy drafted to the approved angle",false,null],
+              ["Email 2 — copy","Copy drafted to the approved angle",false,null]
+            ])
+          ]
+        },
+        {
+          id:451, createdBy:"charles", name:"Content cycle — August theme", client:"tcs", dept:"lifecycle",
+          service:"Content Cycle", contentType:"Content",
+          campaign:"",
+          status:"parked", priority:"Medium", team:"Acquisition", lead:"ehjay",
+          assignee:"zhen", start:"2026-07-20", due:"2026-08-12", charge:"1200",
+          clientNote:"Paused while we wait on your brand assets.",
+          internalNote:"",
+          review:"none", reviewedBy:null,
+          onHold:true, holdReason:"Waiting on the client's updated brand assets — chased twice.",
+          resumeTo:"in_progress",
+          published:true, atriumId:"t_77de1a", archived:false, completedAt:"",
+          thread:[], history:[],
+          phases:[
+            ph("Plan", [
+              ["Topic ideation approved","Theme and angle signed off",true,"zhen"],
+              ["Angle brief written","Brief on the card",true,"zhen"]
+            ]),
+            ph("Write", [
+              ["Anchor blog","Anchor drafted and reviewed",false,"zhen"],
+              ["Supporting blog 1","Drafted and reviewed against the angle brief",false,"zhen"]
+            ])
+          ]
+        },
+        {
+          id:445, createdBy:"charles", name:"Tracking infrastructure setup", client:"riverdance", dept:"development",
+          service:"Tracking Setup", contentType:"Tracking",
+          campaign:"",
+          status:"completed", priority:"Low", team:"Acquisition", lead:"ehjay",
+          assignee:"justine", start:"2026-06-10", due:"2026-07-02", charge:"450",
+          clientNote:"Tracking is live — every conversion is now attributed.",
+          internalNote:"",
+          review:"approved", reviewedBy:"ehjay",
+          onHold:false, holdReason:"", resumeTo:"",
+          published:true, atriumId:"t_31bb90", archived:true, completedAt:"2026-07-02",
+          thread:[], history:[],
+          phases:[
+            ph("Install", [
+              ["GTM container","Installed; publish access confirmed",true,"justine"],
+              ["GA4","Connected and receiving data",true,"justine"]
+            ])
+          ]
+        }
+      ]
+    };
+  }
+
+  var S = seed();
+
+  /* ============================================================ helpers ==== */
+
+  function $(i) { return document.getElementById(i); }
+  function E(t, c, h) {
+    var n = document.createElement(t);
+    if (c) n.className = c;
+    if (h !== undefined && h !== null) n.innerHTML = h;
+    return n;
+  }
+  function esc(s) {
+    return String(s === undefined || s === null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+  function me() { return P[S.seat]; }
+  /* Who leads a team is a QUERY, not a column — every user whose role is team_lead and whose
+     team matches. `notifications.notify_managers(db, team_id=...)` already does exactly this,
+     which is why no `Team.lead_id` is needed. Zero leads and three leads both work. */
+  function leadsOf(team) {
+    if (!team) return [];
+    return SEATS.filter(function (k) {
+      return P[k].role === "team_lead" && P[k].team === team;
+    });
+  }
+  function leadNames(team) {
+    var l = leadsOf(team).map(function (k) { return P[k].name; });
+    if (!l.length) return "";
+    if (l.length === 1) return l[0];
+    return l.slice(0, -1).join(", ") + " and " + l[l.length - 1];
+  }
+  function ini(k) { return P[k] ? P[k].name.slice(0, 2).toUpperCase() : "?"; }
+  function fmt(iso) {
+    if (!iso) return "—";
+    var m = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    var p = iso.split("-");
+    return m[parseInt(p[1], 10) - 1] + " " + parseInt(p[2], 10);
+  }
+  function toast(msg, bad) {
+    var t = E("div", "toast" + (bad ? " bad" : ""), esc(msg));
+    $("toasts").appendChild(t);
+    setTimeout(function () { t.remove(); }, 3600);
+  }
+  function task(id) {
+    for (var i = 0; i < S.tasks.length; i++) if (S.tasks[i].id === id) return S.tasks[i];
+    return null;
+  }
+  function cur() { return task(S.open); }
+  function hist(t, field, old, neu) {
+    t.history.unshift({ field:field, old:old, neu:neu, by:me().name, at:"just now" });
+  }
+  function cnt(t) {
+    var d = 0, n = 0;
+    t.phases.forEach(function (p) {
+      p.subs.forEach(function (s) { n++; if (s.done) d++; });
+    });
+    return { done:d, total:n };
+  }
+
+  /* ============================================================ permissions ==== */
+  /* Mirrors services/task_perms.py, PLUS the three fixes the plan calls for:
+       - 4.2  a card routed to a TEAM is visible to that team (today it is not)
+       - 4.1  a team lead may set priority (the server already allows it; the UI didn't)
+       - 4.4/D8  a viewer sees everything and writes nothing, tested FIRST            */
+
+  var FULL = { account_manager:1, admin:1, super_admin:1 };
+  function isFull() { return !!FULL[me().role]; }
+  function isViewer() { return me().role === "viewer"; }
+  function leadsTeam(t) { return me().role === "team_lead" && !!t.team && t.team === me().team; }
+  function assigned(t) {
+    if (t.assignee === S.seat) return true;
+    var hit = false;
+    t.phases.forEach(function (p) {
+      if (p.who === S.seat) hit = true;
+      p.subs.forEach(function (s) { if (s.who === S.seat) hit = true; });
+    });
+    return hit;
+  }
+  function onMyTeam(t) { return !!t.team && !!me().team && t.team === me().team; }
+
+  function canView(t) {
+    if (me().role === "client") return false;
+    if (isViewer() || isFull()) return true;
+    if (me().role === "team_lead") return leadsTeam(t) || assigned(t);
+    // 4.2: assignment OR the card's team. A card routed to Acquisition is Acquisition's work.
+    return assigned(t) || onMyTeam(t);
+  }
+  function canEdit(t)     { return !isViewer() && canView(t); }
+  function canMove(t)     { return canEdit(t); }
+  function canReassign(t) { return !isViewer() && (isFull() || leadsTeam(t)); }
+  function canPrio(t)     { return !isViewer() && (isFull() || leadsTeam(t)); }  // 4.1
+  function canReview(t)   { return !isViewer() && (isFull() || leadsTeam(t)); }
+  function canBridge()    { return !isViewer() && isFull(); }
+  function canTriage()    { return !isViewer() && (isFull() || me().role === "team_lead"); }
+
+  function visible() {
+    return S.tasks.filter(function (t) { return canView(t) && !t.archived; });
+  }
+
+  /* ============================================================ the projection push ==== */
+  /* D1/§4. The Sentinel row owns every field. On any change to a client-safe field of a
+     PUBLISHED row, the client-safe subset is pushed to Atrium. Nothing else crosses, and
+     nothing on the Atrium side ever authors. Internal fields are shown struck-through in
+     the inspector so "what did NOT cross" is as legible as what did. */
+
+  var SAFE = ["stage","title","client_note","launch_date","started","deliverable_url","phases"];
+
+  function safeSubset(t) {
+    return {
+      stage: ST[t.status].stage,
+      title: t.name,
+      client_note: t.clientNote || "",
+      started: t.start,
+      launch_date: t.due,
+      phases: t.phases.map(function (p) {
+        var d = p.subs.filter(function (s) { return s.done; }).length;
+        return { name:p.title, done:d, total:p.subs.length };
+      }),
+      "!assignee_id": P[t.assignee] ? P[t.assignee].id : null,
+      "!assigned_team": t.team,
+      "!priority": t.priority,
+      "!service_charge": t.charge,
+      "!internal_notes": t.internalNote || "",
+      "!hold_reason": t.holdReason || "",
+      "!review_state": t.review,
+      "!bounce_reason": t.bounce ? t.bounce.reason : "",
+      "!step_dod": "every step's 'done when'"
+    };
+  }
+
+  function push(t, why) {
+    if (!t.published) return true;
+    if (!S.bridgeUp) {
+      /* 0.2: a failed push is LOUD and retryable. Today's bug is the opposite — the AM gets
+         a success toast and the client's tab stays empty forever. */
+      S.lastPush = { ok:false, why:why, route:"POST /api/internal/task-update",
+        error:"502 — bridge unreachable", body:safeSubset(t) };
+      t.pushFailed = true;
+      S.itab = 1;
+      toast("Push failed — the client's card is now STALE. Retry from the card.", true);
+      return false;
+    }
+    t.pushFailed = false;
+    S.lastPush = { ok:true, why:why,
+      route: why === "move" ? "POST /api/internal/task-move" : "POST /api/internal/task-update",
+      client_key:t.client, task_id:t.atriumId, actor:me().name.toLowerCase() + "@agoradatadriven.com",
+      body:safeSubset(t) };
+    S.itab = 1;
+    return true;
+  }
+
+  /* Routing a card to a team. ONE place, because it has three consequences that must not drift
+     apart: the team's leads get told (D9), a refusal is answered (D11), and an assignee who is
+     not on the new team stops being the owner. */
+  function routeTo(t, team) {
+    var old = t.team;
+    t.team = team || null;
+    if (team) t.bounce = null;
+    var dropped = null;
+    if (t.assignee && team && P[t.assignee].team !== team) {
+      dropped = P[t.assignee].name;
+      t.assignee = null;
+    }
+    hist(t, "team", old || "—", team || "—");
+    if (!team) { toast("Un-routed — it belongs to no team now"); return; }
+    var told = leadNames(team);
+    toast((dropped ? dropped + " dropped as owner (not on " + team + "). " : "") +
+      (told ? team + " routed · " + told + " notified"
+            : team + " routed · no lead there, so admins were notified"));
+  }
+
+  /* Owner picker. The routed team's people first, everyone else after — never hidden, because
+     cross-team help is ordinary. Read-only seats and non-delegating roles get plain text. */
+  function ownerSelect(t, current, may, onPick, placeholder) {
+    if (!may) {
+      return E("span", "as", current ? P[current].name : (placeholder || "Unassigned"));
+    }
+    var sel = document.createElement("select");
+    sel.className = "own";
+    var mine = ROSTER.filter(function (k) { return t.team && P[k].team === t.team; });
+    var rest = ROSTER.filter(function (k) { return mine.indexOf(k) === -1; });
+    function opt(host, k, label) {
+      var o = document.createElement("option");
+      o.value = k;
+      o.textContent = label;
+      if (k === (current || "")) o.selected = true;
+      host.appendChild(o);
+    }
+    opt(sel, "", placeholder || "— unassigned —");
+    if (mine.length) {
+      var g1 = document.createElement("optgroup");
+      g1.label = t.team;
+      mine.forEach(function (k) { opt(g1, k, P[k].name); });
+      sel.appendChild(g1);
+    }
+    if (rest.length) {
+      var g2 = document.createElement("optgroup");
+      g2.label = mine.length ? "Other teams" : "Everyone";
+      rest.forEach(function (k) { opt(g2, k, P[k].name + " · " + (P[k].team || "—")); });
+      sel.appendChild(g2);
+    }
+    sel.onchange = function () { onPick(sel.value || null); };
+    return sel;
+  }
+
+  /* ============================================================ SENTINEL ==== */
+
+  function renderSentinel() {
+    var host = $("sent");
+    host.innerHTML = "";
+    $("surl").textContent = "/tasks" + (S.view === "board" ? "" : "?view=" + S.view);
+
+    /* ---- sidebar. D7: Task Board is its OWN nav item, not a slab inside Dashboard. ---- */
+    var side = E("div", "side");
+    var lg = E("div", "logo");
+    lg.appendChild(E("div", "m", "S"));
+    lg.appendChild(E("div", "n", "Sentinel"));
+    side.appendChild(lg);
+
+    var nav = E("div", "nav");
+    [["Dashboard","▤",0,null],["Task Board","▦",1,S.intake.length]].forEach(function (i) {
+      var d = E("div", "it" + (i[2] ? " on" : ""));
+      d.appendChild(E("span", "ic", i[1]));
+      d.appendChild(E("span", "", i[0]));
+      if (i[3]) d.appendChild(E("span", "bdg", String(i[3])));
+      nav.appendChild(d);
+    });
+    [["Attendance","◷"],["People","◉"]].forEach(function (i) {
+      var d = E("div", "it");
+      d.appendChild(E("span", "ic", i[1]));
+      d.appendChild(E("span", "", i[0]));
+      nav.appendChild(d);
+    });
+    nav.appendChild(E("div", "sec", "People ops"));
+    [["Leave","⊖"],["Payroll","₱"],["Reports","◍"],["Growth","△"]].forEach(function (i) {
+      var d = E("div", "it");
+      d.appendChild(E("span", "ic", i[1]));
+      d.appendChild(E("span", "", i[0]));
+      nav.appendChild(d);
+    });
+    side.appendChild(nav);
+
+    var uc = E("div", "usercard");
+    var av = E("div", "av", ini(S.seat));
+    av.style.background = me().c;
+    uc.appendChild(av);
+    var ub = E("div");
+    ub.appendChild(E("div", "n", me().name));
+    ub.appendChild(E("div", "r", RL[me().role]));
+    uc.appendChild(ub);
+    side.appendChild(uc);
+    host.appendChild(side);
+
+    /* ---- main ---- */
+    var ma = E("div", "mainarea");
+    var tb = E("div", "topbar");
+    tb.appendChild(E("h2", "", "Task Board"));
+    tb.appendChild(E("div", "sb", me().role === "client"
+      ? "Clients have no account here."
+      : isViewer()
+        ? "Everything the team is working on. You can look at all of it and change none of it."
+        : "Where work is created, assigned, moved and finished."));
+    ma.appendChild(tb);
+
+    var ct = E("div", "content");
+
+    if (me().role === "client") {
+      ct.appendChild(E("div", "sbanner no",
+        "<b>A client cannot open Sentinel at all.</b> There is no client role in this application — " +
+        "the whole app is staff-only. Their window onto the work is the Atrium tab below."));
+      ma.appendChild(ct);
+      host.appendChild(ma);
+      return;
+    }
+
+    if (isViewer()) {
+      ct.appendChild(E("div", "sbanner in",
+        "<b>Read-only seat (D8).</b> Every card, every client, no writes — the drawer renders its " +
+        "values as text, not inputs. In the real build this is <b>not</b> a UI state: " +
+        "<span style=\"font-family:var(--mono)\">can_edit</span> splits from " +
+        "<span style=\"font-family:var(--mono)\">can_view</span> and every write guard tests the " +
+        "viewer branch <b>first</b>, before the manager branch."));
+    }
+
+    /* view switcher — all three views kept (§2.4g), + Intake (D3) */
+    var seg = E("div", "seg");
+    var filedByMe = S.tasks.filter(function (t) {
+      return t.createdBy === S.seat && !canView(t);
+    });
+    var views = [["board","Board",null],["filed","Filed by me",filedByMe.length || null],
+                 ["employee","By Employee",null],
+                 ["monitor","Monitor",null],["intake","Intake",S.intake.length]];
+    views.forEach(function (v) {
+      if ((v[0] === "monitor" || v[0] === "employee" || v[0] === "intake") &&
+          !(isFull() || me().role === "team_lead" || isViewer())) return;
+      if (v[0] === "filed" && !filedByMe.length) return;
+      var b = E("button", S.view === v[0] ? "on" : "", esc(v[1]) +
+        (v[2] ? '<span class="n">' + v[2] + "</span>" : ""));
+      b.type = "button";
+      b.onclick = function () { S.view = v[0]; S.open = null; render(); };
+      seg.appendChild(b);
+    });
+
+    var barrow = E("div", "barrow");
+    barrow.appendChild(seg);
+    if (!isViewer()) {
+      var nb = E("button", "btn orange", "+ New service");
+      nb.type = "button";
+      nb.onclick = openCreate;
+      barrow.appendChild(nb);
+    }
+    ct.appendChild(barrow);
+
+    var mine = visible();
+
+    if (S.view === "filed")         renderFiled(ct, filedByMe);
+    else if (S.view === "intake")   renderIntake(ct);
+    else if (S.view === "monitor")  renderMonitor(ct);
+    else if (S.view === "employee") renderEmployee(ct, mine);
+    else                            renderBoard(ct, mine);
+
+    if (S.open && cur() && canView(cur()) && S.view !== "monitor" && S.view !== "intake") {
+      ct.appendChild(drawer(cur()));
+    }
+
+    /* Past work (M4) — ended and filed, off the board, still on the record. */
+    var filed = S.tasks.filter(function (t) { return t.archived && canView(t); });
+    if (filed.length && (S.view === "board")) {
+      var pw = E("div", "sdraw");
+      pw.style.marginTop = "16px";
+      var pwh = E("div", "dh");
+      pwh.appendChild(E("h3", "", "Past work"));
+      var note = E("span", "");
+      note.style.cssText = "font-size:12px;color:#5B6673";
+      note.textContent = "Ended and delivered. Off the board, still on the record — and still on the client's.";
+      pwh.appendChild(note);
+      pw.appendChild(pwh);
+      filed.forEach(function (t) {
+        var row = E("div", "df");
+        row.style.borderTop = "0";
+        row.style.background = "#fff";
+        var line = E("div", "");
+        line.style.cssText = "flex:1;font-size:13px;color:#2B333C";
+        line.innerHTML = "<b>" + esc(t.name) + "</b> · " + esc(CLIENTS[t.client].name) +
+          " · ended " + esc(fmt(t.completedAt || t.due));
+        row.appendChild(line);
+        if (canReview(t)) row.appendChild(btn("Reopen", "", function () {
+          t.archived = false;
+          hist(t, "reopened", "past work", "board");
+          push(t, "reopen");
+          toast("Reopened onto the active board");
+          render();
+        }));
+        pw.appendChild(row);
+      });
+      ct.appendChild(pw);
+    }
+
+    ma.appendChild(ct);
+    host.appendChild(ma);
+  }
+
+  function renderBoard(ct, tasks) {
+    if (!tasks.length) {
+      ct.appendChild(E("div", "empty", isFull()
+        ? "No services on the board."
+        : "Nothing assigned to you, and nothing routed to your team."));
+      return;
+    }
+    var board = E("div", "board");
+    STATUSES.forEach(function (st) {
+      var here = tasks.filter(function (t) { return t.status === st.key; });
+      var col = E("div", "col");
+      var ch = E("div", "col-head");
+      var t1 = E("span", "t");
+      var dot = E("i");
+      dot.style.background = st.dot;
+      t1.appendChild(dot);
+      t1.appendChild(document.createTextNode(st.label));
+      ch.appendChild(t1);
+      ch.appendChild(E("span", "c", String(here.length)));
+      col.appendChild(ch);
+      var cl = E("div", "col-list");
+      here.forEach(function (t) { cl.appendChild(tcard(t)); });
+      col.appendChild(cl);
+      board.appendChild(col);
+    });
+    ct.appendChild(board);
+  }
+
+  function renderEmployee(ct, tasks) {
+    var order = ["ehjay","justine","zhen"];
+    order.forEach(function (k) {
+      var mineT = tasks.filter(function (t) { return t.assignee === k; });
+      var lane = E("div", "lane");
+      var lh = E("div", "lh");
+      var av = E("div", "avatar sm", ini(k));
+      av.style.background = P[k].c;
+      lh.appendChild(av);
+      var nb = E("div");
+      nb.appendChild(E("div", "nm", P[k].name));
+      nb.appendChild(E("div", "rl", RL[P[k].role] + " · " + P[k].team));
+      lh.appendChild(nb);
+      lh.appendChild(E("div", "ct", mineT.length + " open"));
+      lane.appendChild(lh);
+      var lb = E("div", "lb");
+      if (!mineT.length) {
+        var em = E("div", "");
+        em.style.cssText = "font-size:12.5px;color:#8A939F";
+        em.textContent = "Nothing assigned.";
+        lb.appendChild(em);
+      }
+      mineT.forEach(function (t) {
+        var b = E("button", "mini");
+        b.type = "button";
+        b.innerHTML = "<b>" + esc(t.name) + "</b><span>" + esc(ST[t.status].label) + " · " +
+          esc(CLIENTS[t.client].name) + "</span>";
+        b.onclick = function () { S.view = "board"; S.open = t.id; render(); };
+        lb.appendChild(b);
+      });
+      lane.appendChild(lb);
+      ct.appendChild(lane);
+    });
+    var n = E("div", "sbanner in");
+    n.innerHTML = "<b>Kept, not merged.</b> I proposed folding this into Monitor; on reading them " +
+      "they answer different questions — Monitor is a numeric rollup for load-balancing, this is " +
+      "swimlanes you can drag <i>between</i>. Merging would cost the drag target.";
+    ct.appendChild(n);
+  }
+
+  function renderMonitor(ct) {
+    var order = ["ehjay","justine","zhen"];
+    var tbl = E("table", "mon");
+    tbl.innerHTML = "<thead><tr><th>Person</th><th>Open</th><th>Overdue</th>" +
+      "<th>Parked</th><th>Shipped this week</th></tr></thead>";
+    var tb = E("tbody");
+    order.forEach(function (k) {
+      var mineT = S.tasks.filter(function (t) { return t.assignee === k; });
+      var open = mineT.filter(function (t) { return t.status !== "completed"; }).length;
+      var parked = mineT.filter(function (t) { return t.status === "parked"; }).length;
+      var overdue = mineT.filter(function (t) {
+        return t.status !== "completed" && t.due < "2026-08-03";
+      }).length;
+      /* §2.4e: shipped-this-week counts from completed_at, NOT updated_at — so editing a
+         finished task can no longer re-date its completion and inflate the number. */
+      var shipped = mineT.filter(function (t) {
+        return t.completedAt && t.completedAt >= "2026-07-27";
+      }).length;
+      var tr = E("tr");
+      tr.innerHTML =
+        "<td><b>" + esc(P[k].name) + "</b> <span class=\"z\">· " + esc(RL[P[k].role]) + "</span></td>" +
+        "<td class=\"num\">" + open + "</td>" +
+        "<td class=\"num" + (overdue ? " od" : " z") + "\">" + overdue + "</td>" +
+        "<td class=\"num" + (parked ? "" : " z") + "\">" + parked + "</td>" +
+        "<td class=\"num" + (shipped ? "" : " z") + "\">" + shipped + "</td>";
+      tr.onclick = function () { S.view = "employee"; render(); };
+      tb.appendChild(tr);
+    });
+    tbl.appendChild(tb);
+    ct.appendChild(tbl);
+    var n = E("div", "sbanner in");
+    n.style.marginTop = "12px";
+    n.innerHTML = "<b>“Shipped this week” now counts <span style=\"font-family:var(--mono)\">" +
+      "completed_at</span>, not <span style=\"font-family:var(--mono)\">updated_at</span>.</b> " +
+      "Today it uses <span style=\"font-family:var(--mono)\">updated_at</span>, so editing a " +
+      "finished task re-dates its completion and inflates this week's throughput (§2.4e).";
+    ct.appendChild(n);
+  }
+
+  /* ---- Intake (D3): the client's quick-add lands HERE, as a request, not a task ---- */
+  function renderIntake(ct) {
+    if (!S.intake.length) {
+      ct.appendChild(E("div", "empty", "No open requests. Anything a client files lands here first."));
+      return;
+    }
+    var lead = E("div", "sbanner in");
+    lead.innerHTML = "<b>Client requests, untriaged.</b> The Atrium composer files a <b>request</b>, " +
+      "never a task — so a client can still capture something on a live call without writing " +
+      "into the board. Accepting it is what creates the Sentinel row.";
+    ct.appendChild(lead);
+
+    S.intake.forEach(function (r) {
+      var box = E("div", "intk");
+      var h = E("div", "ih2");
+      var who = E("span", "lp", "From " + esc(r.from));
+      who.style.background = "#F1EFFE";
+      who.style.color = "#5C4BD0";
+      h.appendChild(who);
+      var cl = E("span", "lp", esc(CLIENTS[r.client].name));
+      cl.style.background = "#EEF0F3";
+      cl.style.color = "#5B6472";
+      h.appendChild(cl);
+      var dt = E("span", "");
+      dt.style.cssText = "font-size:11.5px;color:#8A939F;margin-left:auto";
+      dt.textContent = fmt(r.at);
+      h.appendChild(dt);
+      box.appendChild(h);
+      box.appendChild(E("div", "bod", esc(r.body)));
+
+      if (canTriage()) {
+        var acts = E("div", "acts");
+        acts.appendChild(btn("Accept → new service", "primary sm", function () {
+          var t = blankTask();
+          t.name = r.body.length > 58 ? r.body.slice(0, 55) + "…" : r.body;
+          t.client = r.client;
+          t.clientNote = "";
+          t.reporter = r.from;
+          S.tasks.unshift(t);
+          S.intake = S.intake.filter(function (x) { return x !== r; });
+          S.view = "board";
+          S.open = t.id;
+          toast("Accepted — #" + t.id + " is on the board, unpublished until you share it");
+          render();
+        }));
+        acts.appendChild(btn("Decline", "sm", function () {
+          S.intake = S.intake.filter(function (x) { return x !== r; });
+          toast("Declined — the client is told, the board stays clean");
+          render();
+        }));
+        box.appendChild(acts);
+      } else {
+        var hint = E("div", "");
+        hint.style.cssText = "font-size:12px;color:#8A939F;margin-top:9px";
+        hint.textContent = isViewer()
+          ? "Triage is a write. Not yours."
+          : "A team lead or an AM triages these.";
+        box.appendChild(hint);
+      }
+      ct.appendChild(box);
+    });
+  }
+
+  /* Work you filed that then left your board. The creator tag deliberately does NOT grant
+     board visibility any more (an intern's raised-then-delegated card used to stay on their
+     board — fixed 2026-07-30). But "I filed it and now I cannot find it" is its own bug, so
+     the answer is a SEPARATE list showing only where it went — never the internal fields. */
+  function renderFiled(ct, rows) {
+    var lead = E("div", "sbanner in");
+    lead.innerHTML = "<b>You filed these; they are not your work.</b> Each one left your board " +
+      "the moment it was routed, so this list shows only <b>where it went</b> — no assignee, " +
+      "no priority, no notes, no charge. The creator tag grants this list, never a board card.";
+    ct.appendChild(lead);
+    rows.forEach(function (t) {
+      var box = E("div", "intk");
+      box.style.borderLeftColor = "#8A939F";
+      var h = E("div", "ih2");
+      h.appendChild(E("span", "ttl", esc(t.name)));
+      var st = E("span", "lp", ST[t.status].label);
+      st.style.background = "#EEF0F3";
+      st.style.color = "#5B6472";
+      h.appendChild(st);
+      box.appendChild(h);
+      var where = t.bounce
+        ? ("↩ Sent back by " + P[t.bounce.by].name + " — “" + t.bounce.reason + "”")
+        : t.team
+          ? ("With " + t.team + (t.assignee ? " · " + P[t.assignee].name + " owns it"
+              : (leadNames(t.team) ? " · " + leadNames(t.team) + " triages" : " · awaiting triage")))
+          : "Not routed yet";
+      if (t.bounce) box.style.borderLeftColor = "#EF4444";
+      box.appendChild(E("div", "bod", esc(where + " · " + CLIENTS[t.client].name)));
+      ct.appendChild(box);
+    });
+  }
+
+  function blankTask() {
+    var id = S.nextId++;
+    return { id:id, name:"Untitled service", client:"honeytribe", dept:"acquisition",
+      service:"Custom (blank)", contentType:null, campaign:"",
+      status:"todo", priority:"Medium",
+      team:null, lead:null, assignee:null, start:"2026-08-03", due:"", charge:"",
+      clientNote:"", internalNote:"", review:"none", reviewedBy:null,
+      onHold:false, holdReason:"", resumeTo:"", published:false, atriumId:"",
+      archived:false, completedAt:"", thread:[], history:[], phases:[],
+      createdBy:S.seat, bounce:null };
+  }
+
+  /* ---- card ---- */
+  function tcard(t) {
+    var b = E("button", "tcard" + (S.open === t.id ? " sel" : "") +
+      (S.freshAtrium === t.id ? " " : ""));
+    b.type = "button";
+    b.onclick = function () { S.open = (S.open === t.id ? null : t.id); render(); };
+
+    var lab = DEPT_LABEL[t.dept];
+    var labs = E("div", "labels");
+    var lp = E("span", "lp", lab);
+    lp.style.background = LAB_COLOR[lab][0];
+    lp.style.color = LAB_COLOR[lab][1];
+    labs.appendChild(lp);
+
+    if (t.review === "submitted") pill(labs, "In review", "#FFFBEB", "#92610B");
+    if (t.review === "approved" && t.status !== "completed") pill(labs, "Approved", "#E9F7E6", "#2F8A2C");
+    if (t.published) pill(labs, "Shared", "#E7F0FE", "#1856C9");
+    else pill(labs, "Internal only", "#EEF0F3", "#5B6472");
+    if (t.pushFailed) pill(labs, "⚠ Stale in Atrium", "#FEF2F2", "#B4322E");
+    if (t.onHold) pill(labs, "⏸ from " + ST[t.resumeTo || "in_progress"].label, "#FDF0E1", "#B4610A");
+    if (t.reporter) pill(labs, "Client req", "#F1EFFE", "#5C4BD0");
+    if (t.bounce) pill(labs, "↩ Sent back", "#FEF2F2", "#B4322E");
+    b.appendChild(labs);
+
+    b.appendChild(E("div", "t-title", esc(t.name)));
+
+    var m = E("div", "t-meta");
+    var dot = E("span", "pdot");
+    dot.style.background = PRI_DOT[t.priority];
+    m.appendChild(dot);
+    m.appendChild(E("span", "", esc(t.priority)));
+    if (t.due) m.appendChild(E("span", "", "· " + fmt(t.due)));
+    m.appendChild(E("span", "", "· " + esc(CLIENTS[t.client].name)));
+    b.appendChild(m);
+
+    var f = E("div", "t-foot");
+    var row = E("div", "row");
+    if (t.assignee) {
+      var av = E("div", "avatar sm", ini(t.assignee));
+      av.style.background = P[t.assignee].c;
+      row.appendChild(av);
+      row.appendChild(E("span", "", esc(P[t.assignee].name)));
+    } else if (t.team) {
+      row.appendChild(E("span", "", t.team + " · unassigned"));
+    } else {
+      row.appendChild(E("span", "", "Unassigned"));
+    }
+    f.appendChild(row);
+    var c = cnt(t);
+    f.appendChild(E("div", "icons", c.total ? c.done + "/" + c.total : ""));
+    b.appendChild(f);
+    return b;
+  }
+  function pill(host, text, bg, fg) {
+    var p = E("span", "lp", esc(text));
+    p.style.background = bg;
+    p.style.color = fg;
+    host.appendChild(p);
+    return p;
+  }
+
+  /* ---- drawer ---- */
+  function drawer(t) {
+    var d = E("div", "sdraw");
+    var dh = E("div", "dh");
+    dh.appendChild(E("div", "eyebrow", "Open card · #" + t.id));
+    dh.appendChild(E("h3", "", esc(t.name)));
+    var idp = E("span", "");
+    idp.style.cssText = "font-family:var(--mono);font-size:11px;color:#8A939F";
+    idp.textContent = t.published
+      ? "#" + t.id + "  →  atrium:" + t.client + ":" + t.atriumId
+      : "#" + t.id + "  ·  not in Atrium";
+    dh.appendChild(idp);
+    var x = E("button", "x", "✕");
+    x.type = "button";
+    x.onclick = function () { S.open = null; render(); };
+    dh.appendChild(x);
+    d.appendChild(dh);
+
+    var db = E("div", "db");
+    var L = E("div");
+
+    /* banners */
+    if (t.pushFailed) L.appendChild(bnr("no",
+      "<b>The client's card is stale.</b> The last push failed (502). Nothing was silently " +
+      "swallowed — the row knows, the board says so, and Retry is right here. <b>This is the " +
+      "opposite of today's bug</b>, where an AM presses Send to Atrium, gets a success toast, " +
+      "and the client's tab stays empty forever."));
+    else if (t.published) L.appendChild(bnr("ok",
+      "<b>Shared with the client.</b> This row owns every field; Atrium holds a copy of the " +
+      "client-safe subset and <b>nothing over there can author it</b>. Watch the " +
+      "<b>Projection push</b> tab as you change things."));
+    else L.appendChild(bnr("wa",
+      "<b>Internal only.</b> This service has never existed in Atrium — not hidden by CSS, not " +
+      "filtered on render: <b>never built into the response</b>. Share it and the card is minted."));
+
+    if (t.bounce) L.appendChild(bnr("no",
+      "<b>↩ Sent back by " + esc(P[t.bounce.by].name) + ".</b> “" + esc(t.bounce.reason) +
+      "” — <b>internal.</b><br><br>It is assigned to <b>" + esc(P[t.bounce.to].name) +
+      "</b> again, because refused work still has to be held by somebody. Route it somewhere " +
+      "else and this clears."));
+
+    if (t.review === "submitted") L.appendChild(bnr("wa",
+      "<b>Waiting on " + esc(t.lead ? P[t.lead].name : "the team lead") + ".</b> Review is a " +
+      "field, not a sixth column — the card has not moved."));
+
+    if (t.onHold) L.appendChild(bnr("wa",
+      "<b>⏸ Parked.</b> Reason: “" + esc(t.holdReason) + "” — <b>internal.</b> The client sees " +
+      "the card sitting in Parked and never learns why.<br><br>It came from <b>" +
+      esc(ST[t.resumeTo || "in_progress"].label) + "</b> and Resume puts it straight back — the " +
+      "column is stored, so nobody has to remember where the work had got to."));
+
+    L.appendChild(fld("Client", CLIENTS[t.client].name));
+    L.appendChild(fld("Service", t.service));
+    if (t.campaign) L.appendChild(fld("Campaign", t.campaign));
+
+    L.appendChild(sel("Status", STATUSES.map(function (s) { return [s.key, s.label]; }),
+      t.status, !canMove(t), function (v) {
+        var old = t.status;
+        t.status = v;
+        hist(t, "status", ST[old].label, ST[v].label);
+        if (v !== "parked") { t.onHold = false; t.holdReason = ""; t.resumeTo = ""; }
+        push(t, "move");
+        toast("Moved to " + ST[v].label);
+        render();
+      }));
+
+    L.appendChild(sel("Assignee", [["", "— unassigned —"]].concat(
+      ["ehjay","justine","zhen"].map(function (k) { return [k, P[k].name]; })),
+      t.assignee || "", !canReassign(t), function (v) {
+        t.assignee = v || null;
+        hist(t, "assignee", "", v ? P[v].name : "unassigned");
+        toast(v ? "Assigned to " + P[v].name + " — it's on their board now" : "Unassigned");
+        render();
+      }));
+
+    L.appendChild(sel("Priority", ["Urgent","Medium","Low"], t.priority, !canPrio(t), function (v) {
+      var old = t.priority;
+      t.priority = v;
+      hist(t, "priority", old, v);
+      /* Deliberately NO push: priority is internal and never crosses. */
+      toast("Priority set to " + v + " — internal, so nothing was pushed");
+      render();
+    }));
+
+    /* Routing is a CONTROL, not a button naming one team. An employee may route their own
+       un-routed card (D10); changing an already-routed card is delegation (can_reassign). */
+    var mayRoute = !isViewer() &&
+      (canReassign(t) || (!t.team && t.createdBy === S.seat));
+    var teamFld = E("div", "fld");
+    teamFld.appendChild(E("div", "lb", "Team"));
+    if (mayRoute) {
+      var tsel = document.createElement("select");
+      [["", "— not routed —"]].concat(TEAMS.map(function (x) { return [x, x]; }))
+        .forEach(function (o) {
+          var op = document.createElement("option");
+          op.value = o[0];
+          op.textContent = o[1];
+          if (o[0] === (t.team || "")) op.selected = true;
+          tsel.appendChild(op);
+        });
+      tsel.onchange = function () { routeTo(t, tsel.value); render(); };
+      teamFld.appendChild(tsel);
+    } else {
+      teamFld.appendChild(E("div", "vl", t.team || "— not routed —"));
+      teamFld.appendChild(hintLine("Routing is a lead or manager call."));
+    }
+    if (t.team && !t.assignee) {
+      var q = leadNames(t.team);
+      teamFld.appendChild(E("div", "qnote", "In " + esc(t.team) + "'s queue · " +
+        (q ? esc(q) + " triages it" : "no lead on that team, so admins triage")));
+    }
+    L.appendChild(teamFld);
+    L.appendChild(fld("Service charge", t.charge ? "$" + t.charge + "  🔒 internal" : "— 🔒 internal"));
+    L.appendChild(fld("Started → Launch", fmt(t.start) + "  →  " + fmt(t.due)));
+    if (t.internalNote) L.appendChild(fld("Internal notes 🔒", t.internalNote));
+
+    /* client thread — the reverse channel (D4) */
+    if (t.thread.length) {
+      var th = E("div", "fld");
+      th.appendChild(E("div", "lb", "From the client"));
+      var wrap = E("div", "thread");
+      t.thread.forEach(function (m) {
+        var cls = m.kind === "changes" ? (m.resolved ? "r" : "x") : "c";
+        var box = E("div", "msg " + cls);
+        box.appendChild(E("b", "", m.kind === "changes"
+          ? (m.resolved ? "Revision — resolved" : "Revision requested")
+          : "Comment"));
+        box.appendChild(document.createTextNode(m.body));
+        wrap.appendChild(box);
+      });
+      th.appendChild(wrap);
+      L.appendChild(th);
+    }
+    db.appendChild(L);
+
+    /* right: work breakdown.
+       🔴 Assigning a STEP to someone is delegation by another route, so it is gated the same
+       way. In the shipping code it is not: update_task guards `assigned_to_id` /
+       `assigned_team_id` only, while `maintasks` (which carries a per-step `assignee_id`)
+       passes straight through — and task_perms._assigned counts step owners for visibility,
+       so today an employee can push a card onto anyone's board. */
+    var mayDelegate = !isViewer() && (canReassign(t) || leadsTeam(t));
+    var R = E("div");
+    R.appendChild(E("div", "fld", '<div class="lb">Work breakdown</div>'));
+    var unowned = 0;
+    t.phases.forEach(function (p) {
+      p.subs.forEach(function (sb) { if (!sb.who) unowned++; });
+    });
+    if (mayDelegate && unowned) {
+      var bulk = E("div", "bulk");
+      bulk.appendChild(document.createTextNode("Assign the " + unowned + " unowned step" +
+        (unowned === 1 ? "" : "s") + " to"));
+      bulk.appendChild(ownerSelect(t, null, true, function (who) {
+        if (!who) return;
+        t.phases.forEach(function (p) {
+          p.subs.forEach(function (sb) { if (!sb.who) sb.who = who; });
+        });
+        hist(t, "delegated", unowned + " steps", P[who].name);
+        toast("Assigned " + unowned + " step" + (unowned === 1 ? "" : "s") + " to " + P[who].name);
+        render();
+      }, "— pick someone —"));
+      R.appendChild(bulk);
+    }
+    if (!t.phases.length) {
+      var none = E("div", "");
+      none.style.cssText = "font-size:12.5px;color:#8A939F";
+      none.textContent = "No breakdown yet.";
+      R.appendChild(none);
+    }
+    t.phases.forEach(function (p) {
+      var mt = E("div", "mt");
+      var h = E("div", "h");
+      h.appendChild(E("span", "", esc(p.title)));
+      var dn = p.subs.filter(function (s) { return s.done; }).length;
+      h.appendChild(E("span", "n", dn + "/" + p.subs.length));
+      h.appendChild(ownerSelect(t, p.who, mayDelegate, function (who) {
+        p.who = who;
+        hist(t, "phase owner", esc(p.title), who ? P[who].name : "unassigned");
+        render();
+      }, "— phase owner —"));
+      mt.appendChild(h);
+      p.subs.forEach(function (s) {
+        var r = E("div", "sub" + (s.done ? " done" : ""));
+        var may = !isViewer() && (s.who === S.seat || isFull() || leadsTeam(t)) &&
+                  t.status !== "completed";
+        var bx = E("span", "bx" + (s.done ? " on" : "") + (may ? "" : " dis"), s.done ? "✓" : "");
+        if (may) bx.onclick = function () {
+          s.done = !s.done;
+          push(t, "progress");
+          render();
+        };
+        r.appendChild(bx);
+        var tx = E("span", "tx", esc(s.text));
+        tx.appendChild(E("span", "dod", "done when · " + esc(s.dod)));
+        r.appendChild(tx);
+        r.appendChild(ownerSelect(t, s.who, mayDelegate, function (who) {
+          s.who = who;
+          hist(t, "step owner", esc(s.text), who ? P[who].name : "unassigned");
+          render();
+        }, "— assign —"));
+        mt.appendChild(r);
+      });
+      R.appendChild(mt);
+    });
+    db.appendChild(R);
+    d.appendChild(db);
+
+    /* ---- footer actions ---- */
+    var df = E("div", "df");
+    var c = cnt(t);
+
+    if (t.pushFailed && canBridge()) df.appendChild(btn("Retry the push", "orange", function () {
+      if (push(t, "retry")) toast("Pushed — the client's card is current again");
+      render();
+    }));
+
+    /* route to a team, then delegate — the two moves the plan calls for (§2.4c) */
+    /* ---- D11: send it back. Available to the receiving team's lead (or a manager) while the
+       card is still unassigned, and never on your own filing. Ownership is never left vague:
+       the card goes back to the FILER, assigned to them, with the reason on the record. ---- */
+    if (t.team && !t.assignee && !isViewer() && t.createdBy && t.createdBy !== S.seat &&
+        (leadsTeam(t) || isFull()) && !t.archived)
+      df.appendChild(btn("Send back to " + P[t.createdBy].name, "", function () {
+        var backTo = t.createdBy;
+        t.bounce = { by:S.seat, to:backTo,
+          reason:"Not ours — this is a Development fix, not an Acquisition task." };
+        t.team = null;
+        t.assignee = backTo;      /* somebody always holds it; nothing lands nowhere */
+        hist(t, "sent_back", "Acquisition queue", P[backTo].name);
+        toast("Sent back to " + P[backTo].name + " with a reason — it is on their board now");
+        render();
+      }));
+
+    /* share / publish (M1 + D6) */
+    if (!t.published && canBridge())
+      df.appendChild(btn("Share with the client…", "orange", function () { openShare(t); }));
+    if (!t.published && !canBridge() && !isViewer())
+      df.appendChild(hintSpan("Sharing with a client is an Account Manager action."));
+
+    /* review (M2 / D5) */
+    if (t.review === "none" && c.total && c.done === c.total && !isViewer() &&
+        (assigned(t) || canReview(t)))
+      df.appendChild(btn("Submit for review", "", function () {
+        t.review = "submitted";
+        hist(t, "review_state", "none", "submitted");
+        toast("Submitted to " + (t.lead ? P[t.lead].name : "the team lead"));
+        render();
+      }));
+
+    if (t.review === "submitted" && canReview(t)) {
+      df.appendChild(btn("Approve", "primary", function () {
+        t.review = "approved";
+        t.reviewedBy = S.seat;
+        hist(t, "review_state", "submitted", "approved");
+        toast("Approved — it may now be called done");
+        render();
+      }));
+      df.appendChild(btn("Request revision", "", function () {
+        t.review = "none";
+        t.status = "revision";
+        hist(t, "review_state", "submitted", "revision");
+        push(t, "move");
+        toast("Sent back — and the client sees it move to Revision Needed");
+        render();
+      }));
+    }
+
+    /* park / resume (M3) */
+    if (!t.archived && t.status !== "completed" && (canReview(t) || isFull()) && !isViewer()) {
+      if (!t.onHold) df.appendChild(btn("Park it", "", function () {
+        t.onHold = true;
+        t.holdReason = "Waiting on the client's brand assets.";
+        t.resumeTo = t.status;
+        t.status = "parked";
+        hist(t, "status", ST[t.resumeTo].label, "Parked");
+        push(t, "move");
+        toast("Parked — it'll come back to " + ST[t.resumeTo].label + " when you resume");
+        render();
+      }));
+      else df.appendChild(btn("Resume → " + ST[t.resumeTo || "in_progress"].label, "primary", function () {
+        var back = t.resumeTo || "in_progress";
+        t.onHold = false;
+        t.holdReason = "";
+        t.status = back;
+        t.resumeTo = "";
+        hist(t, "status", "Parked", ST[back].label);
+        push(t, "move");
+        toast("Resumed into " + ST[back].label + " — nothing had to be remembered");
+        render();
+      }));
+    }
+
+    /* resolve a change request (D4) */
+    var openCh = t.thread.filter(function (m) { return m.kind === "changes" && !m.resolved; });
+    if (openCh.length && canReview(t))
+      df.appendChild(btn("Resolve the change request", "", function () {
+        openCh.forEach(function (m) { m.resolved = true; });
+        hist(t, "change_request", "open", "resolved");
+        push(t, "resolve");
+        toast("Resolved — the flag clears on both boards");
+        render();
+      }));
+
+    /* complete — gated on approval (D5) */
+    if (t.status !== "completed" && !t.archived && canReview(t) && !isViewer()) {
+      var mc = btn("Mark complete", "primary", function () {
+        t.phases.forEach(function (p) {
+          p.subs.forEach(function (s) { s.done = true; });
+        });
+        t.status = "completed";
+        t.completedAt = "2026-08-03";     /* M4: a real completion date, not updated_at */
+        t.onHold = false;
+        hist(t, "status", "In Progress", "Completed");
+        push(t, "move");
+        toast("Completed — the client's card now reads Live");
+        render();
+      });
+      if (t.review !== "approved") {
+        mc.disabled = true;
+        mc.textContent = "Mark complete — needs a Team Lead's approval";
+      }
+      df.appendChild(mc);
+      if (c.total - c.done > 0 && t.review === "approved")
+        df.appendChild(hintSpan((c.total - c.done) + " step" + (c.total - c.done === 1 ? "" : "s") +
+          " still open — surfaced, not enforced.", "#92610B"));
+    }
+
+    /* file it (M4) */
+    if (t.status === "completed" && !t.archived && canReview(t) && !isViewer())
+      df.appendChild(btn("Mark ended & file", "", function () {
+        t.archived = true;
+        hist(t, "ended", "live", "past work");
+        push(t, "file");
+        toast("Ended and filed — still on the client's record under Past work");
+        render();
+      }));
+
+    if (!df.childNodes.length)
+      df.appendChild(hintSpan(isViewer()
+        ? "Nothing here is yours to change — that is the seat working correctly."
+        : "Nothing for you to do on this card."));
+    d.appendChild(df);
+    return d;
+  }
+
+  function hintLine(text) {
+    var n = E("div", "");
+    n.style.cssText = "font-size:11px;color:#8A939F;margin-top:3px";
+    n.textContent = text;
+    return n;
+  }
+  function bnr(kind, html) { return E("div", "sbanner " + kind, html); }
+  function fld(l, v) {
+    var f = E("div", "fld");
+    f.appendChild(E("div", "lb", l));
+    f.appendChild(E("div", "vl", esc(v)));
+    return f;
+  }
+  function sel(label, opts, val, disabled, on) {
+    var f = E("div", "fld");
+    f.appendChild(E("div", "lb", label));
+    if (disabled) {
+      /* A read-only seat gets TEXT, not a greyed input — a disabled control still says
+         "this is a thing you would change"; text says "this is a fact you are reading". */
+      var found = val;
+      opts.forEach(function (o) {
+        if (Array.isArray(o) && o[0] === val) found = o[1];
+      });
+      f.appendChild(E("div", "vl", esc(found)));
+      var n = E("div", "");
+      n.style.cssText = "font-size:11px;color:#8A939F;margin-top:3px";
+      n.textContent = isViewer() ? "Read-only seat." : "Not yours to change.";
+      f.appendChild(n);
+      return f;
+    }
+    var s = document.createElement("select");
+    opts.forEach(function (o) {
+      var k = Array.isArray(o) ? o[0] : o;
+      var txt = Array.isArray(o) ? o[1] : o;
+      var op = document.createElement("option");
+      op.value = k;
+      op.textContent = txt;
+      if (k === val) op.selected = true;
+      s.appendChild(op);
+    });
+    s.onchange = function () { on(s.value); };
+    f.appendChild(s);
+    return f;
+  }
+  function btn(label, cls, on) {
+    var b = E("button", "btn " + (cls || ""), esc(label));
+    b.type = "button";
+    b.onclick = on;
+    return b;
+  }
+  function hintSpan(text, color) {
+    var s = E("span", "");
+    s.style.cssText = "font-size:12px;color:" + (color || "#8A939F");
+    s.textContent = text;
+    return s;
+  }
+
+  /* ============================================================ modals ==== */
+
+  function modal(title, sub, bodyNode, footNode) {
+    var m = $("mod");
+    m.innerHTML = "";
+    var mh = E("div", "mh");
+    var box = E("div");
+    box.appendChild(E("h3", "", esc(title)));
+    if (sub) box.appendChild(E("p", "", esc(sub)));
+    mh.appendChild(box);
+    var x = E("button", "x", "✕");
+    x.type = "button";
+    x.onclick = closeModal;
+    mh.appendChild(x);
+    m.appendChild(mh);
+    var mb = E("div", "mb");
+    mb.appendChild(bodyNode);
+    m.appendChild(mb);
+    if (footNode) {
+      var mf = E("div", "mf");
+      mf.appendChild(footNode);
+      m.appendChild(mf);
+    }
+    m.classList.add("on");
+    $("veil").classList.add("on");
+  }
+  function closeModal() {
+    $("mod").classList.remove("on");
+    $("veil").classList.remove("on");
+  }
+  $("veil").onclick = closeModal;
+
+  /* ---- New service.
+     THREE fields and a switch on show; everything else one click away under "More options"
+     — the same progressive disclosure the real form already has (taskboard.js:687), which an
+     earlier draft of this prototype wrongly dropped. The optional block is where Campaign,
+     Service charge, Service type (the automated task creator) and the internal fields live.
+     D6: "Share with the client" defaults ON. ---- */
+  function openCreate() {
+    var body = E("div", "fgrp");
+    body.innerHTML =
+      '<div class="fl"><span class="l">Service name</span>' +
+      '<input class="fi" id="c-name" placeholder="What needs doing?" value=""></div>' +
+      '<div class="fr2">' +
+        '<div class="fl"><span class="l">Client</span><select class="fi" id="c-client">' +
+          Object.keys(CLIENTS).map(function (k) {
+            return '<option value="' + k + '">' + esc(CLIENTS[k].name) + "</option>";
+          }).join("") + "</select></div>" +
+        '<div class="fl"><span class="l">Launch date</span>' +
+        '<input class="fi" type="date" id="c-due" value="2026-09-01"></div>' +
+      "</div>" +
+      '<div class="fl"><span class="l">What the client will read</span>' +
+      '<input class="fi" id="c-note" placeholder="One line, client-safe" ' +
+      'value="We\'re getting started on this now."></div>';
+
+    /* ---- More options: collapsed by default, holds everything else ---- */
+    var more = E("div", "");
+    more.style.cssText = "border:1px solid #E7EAEE;border-radius:10px;overflow:hidden";
+    var mtog = E("button", "");
+    mtog.type = "button";
+    mtog.style.cssText = "width:100%;text-align:left;border:0;background:#F6F7F9;padding:10px 12px;" +
+      "font-size:12.5px;font-weight:700;color:#2B333C;display:flex;gap:8px;align-items:center";
+    var caret = E("span", "", "▸");
+    caret.style.cssText = "color:#8A939F;font-size:10px";
+    mtog.appendChild(caret);
+    mtog.appendChild(document.createTextNode("More options"));
+    var mhint = E("span", "");
+    mhint.style.cssText = "margin-left:auto;font-weight:600;color:#8A939F;font-size:11.5px";
+    mhint.textContent = "service type, campaign, charge, lead, priority…";
+    mtog.appendChild(mhint);
+    more.appendChild(mtog);
+
+    var mbody = E("div", "");
+    mbody.style.cssText = "display:none;padding:13px 12px;border-top:1px solid #E7EAEE";
+    mbody.innerHTML =
+      '<div class="fl" style="margin-bottom:11px"><span class="l">Service type ' +
+        '<span style="font-weight:600;text-transform:none;letter-spacing:0;color:#B4BAC3">' +
+        '— the automated task creator</span></span>' +
+        '<select class="fi" id="c-svc">' + TEMPLATES.map(function (t) {
+          return '<option value="' + esc(t.key) + '">' + esc(t.label) + "</option>";
+        }).join("") + "</select>" +
+        '<div id="c-svc-hint" style="font-size:11.5px;color:#8A939F;margin-top:5px;line-height:1.5">' +
+        "Custom (blank) starts with no breakdown.</div></div>" +
+      '<div id="c-svc-prev" style="margin-bottom:11px"></div>' +
+      '<div class="fl" id="c-campaign-wrap" style="margin-bottom:11px;display:none">' +
+        '<span class="l">Campaign <span style="font-weight:600;text-transform:none;' +
+        'letter-spacing:0;color:#B4BAC3">— optional grouping</span></span>' +
+        '<input class="fi" id="c-campaign" placeholder="e.g. Spring drop | Leads"></div>' +
+      '<div class="fr2" style="margin-bottom:11px">' +
+        '<div class="fl"><span class="l">Lead</span><select class="fi" id="c-lead">' +
+          '<option value="">— leave unassigned —</option>' +
+          ["ehjay","justine","zhen"].map(function (k) {
+            return '<option value="' + k + '">' + esc(P[k].name) + "</option>";
+          }).join("") + "</select></div>" +
+        '<div class="fl"><span class="l">Priority</span><select class="fi" id="c-prio">' +
+          ["Urgent","Medium","Low"].map(function (p) {
+            return "<option" + (p === "Medium" ? " selected" : "") + ">" + p + "</option>";
+          }).join("") + "</select></div>" +
+      "</div>" +
+      '<div class="fr2" style="margin-bottom:11px">' +
+        '<div class="fl"><span class="l">Content type</span>' +
+        '<input class="fi" id="c-ctype" placeholder="Auto-filled by the service"></div>' +
+        '<div class="fl"><span class="l">🔒 Service charge ($)</span>' +
+        '<input class="fi" id="c-charge" inputmode="decimal" placeholder="0"></div>' +
+      "</div>" +
+      '<div class="fl"><span class="l">🔒 Internal notes</span>' +
+      '<input class="fi" id="c-inotes" placeholder="Never leaves Sentinel"></div>';
+    more.appendChild(mbody);
+
+    var mopen = false;
+    mtog.onclick = function () {
+      mopen = !mopen;
+      mbody.style.display = mopen ? "block" : "none";
+      caret.textContent = mopen ? "▾" : "▸";
+      mhint.textContent = mopen ? "" : "service type, campaign, charge, lead, priority…";
+    };
+    body.appendChild(more);
+
+    /* ---- where it lands: the assignment ladder, stated before you commit ---- */
+    var land = E("div", "");
+    land.style.cssText = "margin-top:12px;padding:11px 13px;border-radius:10px;" +
+      "background:#F1EFFE;color:#5C4BD0;font-size:12.5px;line-height:1.55";
+    body.appendChild(land);
+
+    var shr = E("label", "shrow on");
+    shr.style.marginTop = "12px";
+    shr.innerHTML = '<input type="checkbox" id="c-share" checked>' +
+      '<div><div class="al">Share with the client now</div>' +
+      '<div class="ah">Default <b>ON</b> (D6). The card is minted in Atrium immediately and the ' +
+      'client watches it cross the board, instead of finding it already finished. Switch it off ' +
+      'and this service never exists over there until an AM shares it.</div></div>';
+    body.appendChild(shr);
+    var cb = shr.querySelector("#c-share");
+    if (cb) cb.onchange = function () { shr.className = "shrow" + (cb.checked ? " on" : ""); };
+
+    var foot = E("div");
+    foot.style.cssText = "display:flex;gap:9px;flex-wrap:wrap;width:100%";
+    var cancel = E("button", "btn", "Cancel");
+    cancel.type = "button";
+    cancel.onclick = closeModal;
+    foot.appendChild(cancel);
+    var create = E("button", "btn primary", "Create service");
+    create.type = "button";
+    create.onclick = function () {
+      var t = blankTask();
+      var chosen = tpl($("c-svc").value);
+      var nm = $("c-name").value.trim();
+      t.name = nm || "Untitled service";
+      t.client = $("c-client").value;
+      t.due = $("c-due").value;
+      t.clientNote = $("c-note").value.trim();
+      t.service = chosen.label;
+      t.contentType = $("c-ctype").value.trim() || chosen.ct;
+      /* The name is the NAME. Campaign is its own optional field, and only exists for a
+         campaign-shaped service — today one string is written to BOTH title and campaign. */
+      t.campaign = chosen.campaign ? ($("c-campaign").value.trim() || "") : "";
+      t.charge = $("c-charge").value.trim();
+      t.internalNote = $("c-inotes").value.trim();
+      t.priority = $("c-prio").value || "Medium";
+      /* 1. service -> department. The template already carries it (ServiceTemplate.dept). */
+      if (chosen.dept) {
+        t.dept = chosen.dept;
+        t.team = DEPT_TEAM[chosen.dept];
+      }
+      /* 2. a lead is a CHOICE, never derived — `teams` has no lead column, so "the team's
+            lead" cannot be looked up. Routed-and-unassigned is a real state. */
+      var lead = $("c-lead").value;
+      t.assignee = lead || null;
+      /* 3. A non-delegating role (employee / intern):
+              - no team implied  -> it is THEIR work, self-assigned (today's create_task rule)
+              - a team implied   -> FILED into that team's queue, owned by nobody yet.
+            Naming a person is delegation and stays a lead/manager act. Naming a team is not —
+            an Acquisition employee who spots a website bug should not have to own the fix.
+            Priority stays a manager call either way. */
+      if (!(isFull() || me().role === "team_lead")) {
+        t.priority = "Medium";
+        t.assignee = t.team ? null : S.seat;
+      }
+      t.phases = chosen.groups.map(function (g) {
+        return ph(g[0], g[1].map(function (s) { return [s[0], s[1], false, null]; }));
+      });
+      S.tasks.unshift(t);
+      S.open = t.id;
+      S.view = "board";
+      closeModal();
+      if (cb && cb.checked) {
+        publish(t, true);
+      } else {
+        toast("Created — internal only. Nothing exists in Atrium.");
+        S.itab = 0;
+      }
+      render();
+    };
+    foot.appendChild(create);
+    modal("New service",
+      "Three fields and a switch. Everything else is one click away — and editable on the card after.",
+      body, foot);
+
+    /* live wiring: the service type drives department, campaign, content type, priority and
+       the step preview; the landing line then restates where the card will actually go. */
+    function syncSvc() {
+      var chosen = tpl($("c-svc").value);
+      var prev = $("c-svc-prev");
+      var hint = $("c-svc-hint");
+      var wrap = $("c-campaign-wrap");
+      if (wrap) wrap.style.display = chosen.campaign ? "flex" : "none";
+      if (hint) hint.innerHTML = chosen.dept
+        ? "Department <b>" + esc(DEPT_TEAM[chosen.dept]) + "</b> comes from the service — you " +
+          "do not pick it twice."
+        : "Custom (blank) starts with no breakdown, and no department.";
+      var ct = $("c-ctype");
+      if (ct && chosen.ct) ct.value = chosen.ct;
+      var pr = $("c-prio");
+      if (pr && chosen.prio) pr.value = chosen.prio;
+      if (prev) {
+        if (!chosen.groups.length) {
+          prev.innerHTML = "";
+        } else {
+          var n = 0;
+          chosen.groups.forEach(function (g) { n += g[1].length; });
+          prev.innerHTML = '<div style="border:1px solid #E7EAEE;border-radius:10px;overflow:hidden">' +
+            '<div style="padding:7px 11px;background:#F6F7F9;font-size:10.5px;font-weight:800;' +
+            'letter-spacing:.06em;text-transform:uppercase;color:#8A939F">Creates ' +
+            chosen.groups.length + " phase" + (chosen.groups.length === 1 ? "" : "s") + " · " +
+            n + " steps, each with its own “done when”</div>" +
+            '<div style="padding:9px 11px;font-size:12px;color:#2B333C;line-height:1.65">' +
+            chosen.groups.map(function (g) {
+              return "<b>" + esc(g[0]) + "</b> — " + g[1].length + " steps";
+            }).join("<br>") + "</div></div>";
+        }
+      }
+      syncLand();
+    }
+    function syncLand() {
+      var chosen = tpl($("c-svc").value);
+      var lead = $("c-lead") ? $("c-lead").value : "";
+      var team = chosen.dept ? DEPT_TEAM[chosen.dept] : null;
+      if (!(isFull() || me().role === "team_lead")) {
+        if (team) {
+          var q = leadNames(team);
+          land.innerHTML = "<b>Files into " + esc(team) + "'s queue, owned by nobody.</b> " +
+            (q ? esc(q) + " is notified and triages it. " : "No lead on that team, so admins triage it. ") +
+            "You can name a <b>team</b> but not a <b>person</b> — that is delegation. " +
+            "⚠️ It leaves your board immediately; you'll find it under <b>Filed by me</b>.";
+        } else {
+          land.innerHTML = "<b>Lands on your board, assigned to you.</b> No service type means no " +
+            "team, so this is your own work — today's <span style=\"font-family:var(--mono)\">" +
+            "create_task</span> rule, kept.";
+        }
+        return;
+      }
+      if (lead) {
+        land.innerHTML = "<b>Lands on " + esc(P[lead].name) + "'s board</b>" +
+          (team ? " and on <b>" + esc(team) + "</b>'s" : "") +
+          ". You picked a person, so nothing is inferred.";
+        return;
+      }
+      if (team) {
+        var ql = leadNames(team);
+        land.innerHTML = "<b>Lands in " + esc(team) + "'s queue, assigned to nobody.</b> " +
+          (ql ? esc(ql) + " is notified and delegates the steps. "
+              : "That team has no lead, so admins are notified instead. ") +
+          "No person is auto-picked — leads are found by <b>query</b> " +
+          "(<span style=\"font-family:var(--mono)\">notify_managers(team_id=…)</span>), which " +
+          "handles zero or several. No <span style=\"font-family:var(--mono)\">Team.lead_id</span> " +
+          "column is needed.";
+        return;
+      }
+      land.innerHTML = "<b>Lands nowhere yet.</b> No service type and no lead, so it sits " +
+        "unrouted and only managers can see it. Pick a service type to route it.";
+    }
+    if ($("c-svc")) $("c-svc").onchange = syncSvc;
+    if ($("c-lead")) $("c-lead").onchange = syncLand;
+    syncSvc();
+
+    var nb = $("c-name");
+    if (nb) nb.focus();
+  }
+
+  /* ---- Share an existing service (M1 — the thing that does nothing today) ---- */
+  function openShare(t) {
+    var body = E("div", "fgrp");
+    var pre = E("div", "");
+    pre.innerHTML = "<div style=\"font-size:12.5px;color:#5B6673;line-height:1.6\">" +
+      "This mints a real card in <b>" + esc(CLIENTS[t.client].name) + "</b>'s workspace and links " +
+      "it to this row. <b>Today this button creates nothing</b> — it sets " +
+      "<span style=\"font-family:var(--mono)\">atrium_visible = True</span>, writes an approval " +
+      "row, and never calls <span style=\"font-family:var(--mono)\">add_task</span>. The AM gets " +
+      "a success toast and the client's tab stays empty.</div>";
+    body.appendChild(pre);
+    var f = E("div", "fl");
+    f.style.marginTop = "13px";
+    f.innerHTML = '<span class="l">What the client will read</span>' +
+      '<input class="fi" id="s-note" value="' + esc(t.clientNote) + '" ' +
+      'placeholder="One line, client-safe">';
+    body.appendChild(f);
+
+    var what = E("div", "");
+    what.style.cssText = "margin-top:14px;border:1px solid #E7EAEE;border-radius:10px;overflow:hidden";
+    what.innerHTML = '<div style="padding:8px 11px;background:#F6F7F9;font-size:10.5px;' +
+      'font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#8A939F">What crosses</div>' +
+      '<div style="padding:10px 12px;font-size:12.5px;line-height:1.7;color:#2B333C">' +
+      "stage · name · your client note · phase names + counts · started → launch<br>" +
+      '<span style="color:#B4322E;text-decoration:line-through">assignee · team · priority · ' +
+      "service charge · internal notes · every step's “done when”</span></div>";
+    body.appendChild(what);
+
+    var foot = E("div");
+    foot.style.cssText = "display:flex;gap:9px;flex-wrap:wrap;width:100%";
+    var cancel = E("button", "btn", "Cancel");
+    cancel.type = "button";
+    cancel.onclick = closeModal;
+    foot.appendChild(cancel);
+    var go = E("button", "btn primary", "Share with the client");
+    go.type = "button";
+    go.onclick = function () {
+      t.clientNote = $("s-note").value.trim();
+      closeModal();
+      publish(t, false);
+      render();
+    };
+    foot.appendChild(go);
+    modal("Share “" + t.name + "”", "One direction, client-safe fields only.", body, foot);
+  }
+
+  /* Stage 0.1 — publish for real, and FAIL LOUD if the bridge is down. */
+  function publish(t, fromCreate) {
+    if (!S.bridgeUp) {
+      S.lastPush = { ok:false, why:"publish", route:"POST /api/internal/task-add",
+        error:"502 — bridge unreachable", body:safeSubset(t) };
+      S.itab = 1;
+      toast("Could not share it — Atrium is unreachable. The row stays internal, and says so.", true);
+      return;
+    }
+    t.published = true;
+    t.atriumId = "t_" + rid() + rid().slice(0, 1);
+    t.pushFailed = false;
+    hist(t, "shared_with_client", "internal", "atrium:" + t.client + ":" + t.atriumId);
+    S.freshAtrium = t.id;
+    S.atab = "progress";
+    S.lastPush = { ok:true, why:"publish", route:"POST /api/internal/task-add",
+      client_key:t.client, returned_task_id:t.atriumId,
+      actor:me().name.toLowerCase() + "@agoradatadriven.com", body:safeSubset(t) };
+    S.itab = 1;
+    toast(fromCreate
+      ? "Created and shared — the client's card exists, id stored on the row"
+      : "Shared — atrium:" + t.client + ":" + t.atriumId + " is stored on this row");
+    setTimeout(function () { S.freshAtrium = null; }, 900);
+  }
+
+  /* ============================================================ ATRIUM ==== */
+
+  function renderAtrium() {
+    var host = $("atr");
+    host.innerHTML = "";
+    /* The client sees ONE workspace. Which one follows the open card, so the two frames agree. */
+    var focus = cur();
+    var ckey = focus ? focus.client : "honeytribe";
+    var c = CLIENTS[ckey];
+    $("aurl").innerHTML = "<b>portal.agoradatadriven.com</b>/w/" + esc(ckey) + "/progress";
+
+    var rail = E("div", "arail");
+    var br = E("div", "abrand");
+    br.appendChild(E("div", "m", "A"));
+    br.appendChild(E("div", "n", "Atrium"));
+    rail.appendChild(br);
+    var cr = E("div", "acrest");
+    var lg = E("div", "lg", c.name.slice(0, 2).toUpperCase());
+    lg.style.background = c.tint;
+    cr.appendChild(lg);
+    cr.appendChild(E("div", "cn", c.name));
+    cr.appendChild(E("div", "ck", ckey));
+    rail.appendChild(cr);
+
+    rail.appendChild(E("div", "agrp", "Working together"));
+    [["Dashboard","▤",0],["Communications","✉",0],["Tasks","▦",1]].forEach(function (i) {
+      var d = E("div", "ait" + (i[2] ? " on" : ""));
+      d.appendChild(E("span", "ic", i[1]));
+      d.appendChild(E("span", "", i[0]));
+      rail.appendChild(d);
+    });
+    rail.appendChild(E("div", "agrp", "Company"));
+    rail.appendChild(navPlain("Company", "◈"));
+    rail.appendChild(E("div", "agrp", "Campaigns"));
+    rail.appendChild(navPlain("Paid Media", "◐"));
+    rail.appendChild(navPlain("Organic Content", "◑"));
+    rail.appendChild(navPlain("Content Calendar", "▢"));
+    rail.appendChild(E("div", "agrp", "Insights"));
+    rail.appendChild(navPlain("Market Intelligence", "◎"));
+    rail.appendChild(navPlain("Reports", "▧"));
+
+    var af = E("div", "afoot");
+    var aav = E("div", "av", "CB");
+    aav.style.background = c.tint;
+    af.appendChild(aav);
+    var ab = E("div");
+    ab.appendChild(E("div", "n", "Christina B."));
+    ab.appendChild(E("div", "r", c.name));
+    af.appendChild(ab);
+    rail.appendChild(af);
+    host.appendChild(rail);
+
+    var main = E("div", "amain");
+    var top = E("div", "atop");
+    top.appendChild(E("h2", "", "Tasks"));
+    top.appendChild(E("div", "s",
+      "What we're working on for you, and where each piece has got to."));
+    main.appendChild(top);
+
+    var ro = E("div", "rochip");
+    ro.innerHTML = "🔒 Read-only — you can comment on any item, and file a request below.";
+    main.appendChild(ro);
+
+    /* Only this client's PUBLISHED, unarchived cards. */
+    var shown = S.tasks.filter(function (t) {
+      return t.client === ckey && t.published && !t.archived;
+    });
+    var filed = S.tasks.filter(function (t) {
+      return t.client === ckey && t.published && t.archived;
+    });
+
+    if (!shown.length && !filed.length) {
+      main.appendChild(E("div", "aempty",
+        "Nothing here yet. Your team is working on things that haven't been shared with you."));
+      main.appendChild(E("div", "anotice",
+        "<b>Held back on purpose.</b> Every service for this client was created with " +
+        "“Share with the client now” switched off, so none of them is here — not hidden by CSS, " +
+        "not filtered on render: <b>never built into the response</b>."));
+    } else {
+      var cols = E("div", "apgcols");
+      ["todo","in_progress","revision","blocked","completed"].forEach(function (stage) {
+        var here = shown.filter(function (t) { return ST[t.status].stage === stage; });
+        var col = E("div", "apgcol");
+        var h = E("div", "apgh");
+        var dot = E("span", "dot");
+        dot.style.background = STAGE_DOT[stage];
+        h.appendChild(dot);
+        h.appendChild(E("span", "t", STAGE_LABEL[stage]));
+        h.appendChild(E("span", "c", String(here.length)));
+        col.appendChild(h);
+        var lst = E("div", "apglist");
+        here.forEach(function (t) { lst.appendChild(pgcard(t)); });
+        col.appendChild(lst);
+        cols.appendChild(col);
+      });
+      main.appendChild(cols);
+    }
+
+    if (filed.length) {
+      var pw = E("div", "");
+      pw.style.marginTop = "18px";
+      var ph2 = E("div", "");
+      ph2.style.cssText = "font-size:12px;font-weight:800;letter-spacing:.06em;" +
+        "text-transform:uppercase;color:#6B7280;margin-bottom:11px";
+      ph2.textContent = "Past work";
+      pw.appendChild(ph2);
+      filed.forEach(function (t) {
+        var pc = E("div", "ax-pg-card");
+        var pr = E("div", "apgrow");
+        pr.appendChild(E("span", "ax-pg-stage completed", "Delivered"));
+        var lb = DEPT_LABEL[t.dept];
+        pr.appendChild(E("span", "ax-pg-chip " + DISC_CLASS[lb], lb));
+        pc.appendChild(pr);
+        pc.appendChild(E("div", "apgt", esc(t.name)));
+        if (t.clientNote) pc.appendChild(E("div", "apgn", esc(t.clientNote)));
+        var pm = E("div", "apgmeta");
+        var pv = E("span", "");
+        pv.style.cssText = "color:#3E8C3B;font-weight:700";
+        pv.textContent = "✓ Delivered " + fmt(t.completedAt || t.due);
+        pm.appendChild(pv);
+        pc.appendChild(pm);
+        pw.appendChild(pc);
+      });
+      main.appendChild(pw);
+    }
+
+    /* ---- the quick-add composer, D3: files a REQUEST ---- */
+    var qa = E("div", "qadd");
+    qa.innerHTML = "<h4>Ask us for something</h4>" +
+      "<p>Type it as you say it on a call. This files a <b>request</b> — your team triages it and " +
+      "turns it into real work. It does not create a task on this board.</p>";
+    var row2 = E("div", "row2");
+    var inp = E("input");
+    inp.id = "qa-in";
+    inp.placeholder = "e.g. can we add a second static for the gift bundle?";
+    row2.appendChild(inp);
+    var send = E("button", "abtn v", "Send request");
+    send.type = "button";
+    send.onclick = function () {
+      var v = $("qa-in").value.trim();
+      if (!v) { toast("Type something first"); return; }
+      S.intake.unshift({ id:"rq_" + rid(), client:ckey, from:"Christina",
+        at:"2026-08-03", body:v });
+      S.lastReverse = { dir:"a2s", route:"POST /api/internal/task-request",
+        body:{ atrium_client_key:ckey, kind:"request", body:v,
+               actor:"christina@" + ckey + ".com", reporter:"client" } };
+      S.itab = 2;
+      toast("Request filed — it's in Sentinel's Intake queue, not on the board");
+      render();
+    };
+    row2.appendChild(send);
+    qa.appendChild(row2);
+    main.appendChild(qa);
+
+    main.appendChild(E("div", "anotice warn",
+      "<b>What is NOT on this page, at all.</b> No drag targets, no delete ✕, no priority, no " +
+      "assignee, no team, no service charge, no internal notes, no “done when” under any step. " +
+      "The phases show a name and a count. <b>The team affordances are gone from the markup</b> — " +
+      "and deliberately not selected with an <span style=\"font-family:var(--mono)\">" +
+      "[data-admin=\"1\"]</span> attribute, because the stylesheet ships to every viewer and that " +
+      "literal string would then appear in a client's HTML and trip the no-leak check."));
+
+    main.appendChild(E("div", "anotice",
+      "<b>This board is a copy, not a source.</b> Every card here was written by Sentinel and is " +
+      "re-written by Sentinel on every change. Nothing on this side authors anything, so there is " +
+      "no second version of the truth to reconcile — which is why the console's Delivery → Task " +
+      "Board pane goes away entirely (D2)."));
+
+    host.appendChild(main);
+  }
+
+  function navPlain(label, icon) {
+    var d = E("div", "ait");
+    d.appendChild(E("span", "ic", icon));
+    d.appendChild(E("span", "", label));
+    return d;
+  }
+
+  function pgcard(t) {
+    var b = E("div", "ax-pg-card" + (S.freshAtrium === t.id ? " fresh" : ""));
+    var row = E("div", "apgrow");
+    var stage = ST[t.status].stage;
+    row.appendChild(E("span", "ax-pg-stage " + stage, STAGE_LABEL[stage]));
+    var lab = DEPT_LABEL[t.dept];
+    row.appendChild(E("span", "ax-pg-chip " + DISC_CLASS[lab], lab));
+    b.appendChild(row);
+
+    b.appendChild(E("div", "apgt", esc(t.name)));
+    if (t.clientNote) b.appendChild(E("div", "apgn", esc(t.clientNote)));
+
+    var c = cnt(t);
+    var bar = E("div", "apgbar");
+    var i = E("i");
+    i.style.width = (c.total ? Math.round(100 * c.done / c.total) : 0) + "%";
+    bar.appendChild(i);
+    b.appendChild(bar);
+
+    var phw = E("div", "apgph");
+    t.phases.forEach(function (p) {
+      var dn = p.subs.filter(function (s) { return s.done; }).length;
+      var r = E("div", "apgphr");
+      var full = dn === p.subs.length && p.subs.length;
+      var k = E("span", "k" + (full ? " on" : ""), full ? "✓" : "");
+      r.appendChild(k);
+      r.appendChild(E("span", "", esc(p.title)));
+      r.appendChild(E("span", "n", dn + "/" + p.subs.length));
+      phw.appendChild(r);
+    });
+    b.appendChild(phw);
+
+    var m = E("div", "apgmeta");
+    if (t.status === "completed") {
+      var lv = E("span", "");
+      lv.style.cssText = "color:#3E8C3B;font-weight:700";
+      lv.textContent = "✓ Live since " + fmt(t.completedAt || t.due);
+      m.appendChild(lv);
+    } else {
+      m.appendChild(E("span", "", "Launching " + fmt(t.due)));
+    }
+    b.appendChild(m);
+
+    t.thread.forEach(function (msg) {
+      var cls = msg.kind === "changes" ? (msg.resolved ? "r" : "x") : "c";
+      var mm = E("div", "amsg " + cls);
+      mm.appendChild(E("b", "", msg.kind === "changes"
+        ? (msg.resolved ? "Revision — resolved" : "Revision requested")
+        : "Comment"));
+      mm.appendChild(document.createTextNode(msg.body));
+      b.appendChild(mm);
+    });
+
+    /* The client's two writes — the ONLY ones that survive on this surface. */
+    if (me().role === "client") {
+      var acts = E("div", "acta");
+      acts.appendChild(abtn("Comment", "", function () { say(t, "comment"); }));
+      acts.appendChild(abtn("Request a revision", "", function () { say(t, "changes"); }));
+      b.appendChild(acts);
+    } else {
+      var hint = E("div", "");
+      hint.style.cssText = "margin-top:13px;padding:9px 11px;border:1px dashed #E9EAEE;" +
+        "border-radius:5px;font-size:11.5px;color:#6B7280;line-height:1.5";
+      hint.innerHTML = "You're viewing as <b>" + esc(me().name) + "</b>. Switch the seat to " +
+        "<b>Client</b> for Christina's two buttons — <b>Comment</b> and <b>Request a revision</b>. " +
+        "They are the only writes she has on a card.";
+      b.appendChild(hint);
+    }
+    return b;
+  }
+  function abtn(label, cls, on) {
+    var b = E("button", "abtn " + cls, esc(label));
+    b.type = "button";
+    b.onclick = on;
+    return b;
+  }
+
+  /* The reverse channel (D4): reaches the Sentinel ROW and flags it there. */
+  function say(t, kind) {
+    var body = kind === "changes"
+      ? "The colour on frame 2 is off-brand — can we warm it up?"
+      : "Looking good. Can we see it on mobile too?";
+    t.thread.push({ kind:kind, resolved:false, body:body });
+    if (kind === "changes") {
+      t.status = "revision";
+      t.review = "none";
+      hist(t, "client", "", "requested a revision");
+    } else {
+      hist(t, "client", "", "commented");
+    }
+    S.lastReverse = { dir:"a2s", route:"POST /api/internal/task-response",
+      body:{ sentinel_task_id:t.id, atrium_client_key:t.client, atrium_task_id:t.atriumId,
+             response:kind === "changes" ? "changes" : "comment", notes:body,
+             actor:"christina@" + t.client + ".com" } };
+    S.itab = 2;
+    S.open = t.id;
+    toast(kind === "changes"
+      ? "Revision requested — it flags the Sentinel row and moves the card"
+      : "Comment sent — it lands on the Sentinel row's thread");
+    render();
+  }
+
+  /* ============================================================ inspector ==== */
+
+  var ITABS = [
+    ["Sentinel record", "The full task row — the ONE authority for every field."],
+    ["Projection push", "The exact body Sentinel POSTs. Struck-through keys never leave."],
+    ["Reverse channel", "The client's only two writes, plus a filed request."],
+    ["Client render", "What Atrium builds for the client's page."]
+  ];
+
+  function renderInspector() {
+    var tb = $("itabs");
+    tb.innerHTML = "";
+    ITABS.forEach(function (t, i) {
+      var b = E("button", "itab", t[0]);
+      b.type = "button";
+      b.setAttribute("role", "tab");
+      b.setAttribute("aria-selected", i === S.itab ? "true" : "false");
+      b.onclick = function () { S.itab = i; renderInspector(); };
+      tb.appendChild(b);
+    });
+    $("inote").innerHTML = noteFor(S.itab);
+    $("icode").innerHTML = codeFor(S.itab);
+  }
+
+  function j(o, ind) {
+    ind = ind || "";
+    /* undefined and null both render as null. A task-add has no task_id yet, so the payload
+       legitimately carries absent keys — falling through to Object.keys(undefined) threw. */
+    if (o === null || o === undefined) return '<span class="b">null</span>';
+    if (typeof o === "boolean") return '<span class="b">' + o + "</span>";
+    if (typeof o === "number") return '<span class="n2">' + o + "</span>";
+    if (typeof o === "string") return '<span class="s">"' + esc(o) + '"</span>';
+    if (Array.isArray(o)) {
+      if (!o.length) return "[]";
+      return "[\n" + o.map(function (v) {
+        return ind + "  " + j(v, ind + "  ");
+      }).join(",\n") + "\n" + ind + "]";
+    }
+    var ks = Object.keys(o);
+    if (!ks.length) return "{}";
+    return "{\n" + ks.map(function (k) {
+      var struck = k.charAt(0) === "!";
+      var kk = struck ? k.slice(1) : k;
+      var key = struck
+        ? '<span class="strike">"' + esc(kk) + '"</span>'
+        : '<span class="k">"' + esc(kk) + '"</span>';
+      return ind + "  " + key + ": " + j(o[k], ind + "  ");
+    }).join(",\n") + "\n" + ind + "}";
+  }
+
+  function codeFor(i) {
+    var t = cur();
+
+    if (i === 0) {
+      if (!t) return '<span class="cmt">// No card open. Click one on the Sentinel board.</span>';
+      return j({
+        id:t.id, name:t.name, description:null,
+        client_id:CLIENTS[t.client].id, client_name:CLIENTS[t.client].name,
+        content_type:t.contentType, service:t.service,
+        campaign:t.campaign || null,
+        status_key:t.status, status_label:ST[t.status].label,
+        priority:t.priority,
+        on_hold:t.onHold, hold_reason:t.holdReason || null, resume_to:t.resumeTo || null,
+        start_date:t.start, due_date:t.due || null,
+        completed_at:t.completedAt || null, archived:t.archived,
+        assigned_team:t.team, team_lead_id:P[t.lead] ? P[t.lead].id : null,
+        assigned_to_id:P[t.assignee] ? P[t.assignee].id : null,
+        service_charge:t.charge || null,
+        labels:[DEPT_LABEL[t.dept]],
+        internal_notes:t.internalNote || null,
+        client_facing_notes:t.clientNote || null,
+        review_state:t.review, reviewer_id:P[t.reviewedBy] ? P[t.reviewedBy].id : null,
+        created_by_id:P[t.createdBy] ? P[t.createdBy].id : null,
+        sent_back_by_id:t.bounce ? P[t.bounce.by].id : null,
+        sent_back_reason:t.bounce ? t.bounce.reason : null,
+        client_facing:t.published,
+        atrium_task_id:t.atriumId || null,
+        push_stale:!!t.pushFailed,
+        maintasks:t.phases.map(function (p) {
+          return { id:p.id, title:p.title,
+            subs:p.subs.slice(0, 2).map(function (s) {
+              return { id:s.id, text:s.text, done:s.done,
+                assignee_id:P[s.who] ? P[s.who].id : null };
+            }).concat(p.subs.length > 2 ? ["…" + (p.subs.length - 2) + " more"] : []) };
+        })
+      });
+    }
+
+    if (i === 1) {
+      if (!S.lastPush) return '<span class="cmt">// Nothing pushed yet.\n' +
+        "// Move a card, tick a step, park it, or share an unpublished one.</span>";
+      var p = S.lastPush;
+      var head = '<span class="cmt">// ' + (p.ok ? "sent" : "FAILED") + " · " + esc(p.why) +
+        "\n// " + esc(p.route) + "</span>\n";
+      /* Only keys that actually exist on this call. A task-add has no task_id to send --
+         it RETURNS one, which is the whole point of Stage 0.1. */
+      var payload = { client_key:p.client_key };
+      if (p.task_id) payload.task_id = p.task_id;
+      payload.actor = p.actor;
+      if (p.returned_task_id) payload.returned_task_id = p.returned_task_id;
+      if (p.error) payload.error = p.error;
+      Object.keys(p.body).forEach(function (k) { payload[k] = p.body[k]; });
+      return head + j(payload);
+    }
+
+    if (i === 2) {
+      if (!S.lastReverse) return '<span class="cmt">// Nothing from the client yet.\n' +
+        "// Switch to the Client seat, then Comment / Request a revision — or file a request.</span>";
+      return '<span class="cmt">// Atrium → Sentinel\n// ' + esc(S.lastReverse.route) +
+        "</span>\n" + j(S.lastReverse.body);
+    }
+
+    if (!t || !t.published) return '<span class="cmt">// This service is not shared, so Atrium ' +
+      "holds NOTHING for it.\n// Not an empty card — no card at all.</span>";
+    var c = cnt(t);
+    return j({
+      id:t.atriumId,
+      stage:ST[t.status].stage,
+      stage_label:STAGE_LABEL[ST[t.status].stage],
+      title:t.name,
+      client_note:t.clientNote || "",
+      started:t.start, launch_date:t.due,
+      progress:{ done:c.done, total:c.total },
+      phases:t.phases.map(function (p) {
+        return { name:p.title, done:p.subs.filter(function (s) { return s.done; }).length,
+          total:p.subs.length };
+      }),
+      comments:t.thread.map(function (m) {
+        return { kind:m.kind, resolved:m.resolved, body:m.body };
+      }),
+      "!owner": "absent — never sent",
+      "!priority": "absent — never sent",
+      "!dod": "absent — never sent"
+    });
+  }
+
+  function noteFor(i) {
+    if (i === 0) return "<b>One authority.</b> Every field lives here, including the ones Atrium " +
+      "used to own — <span style=\"font-family:var(--mono)\">on_hold</span>, " +
+      "<span style=\"font-family:var(--mono)\">resume_to</span>, " +
+      "<span style=\"font-family:var(--mono)\">start_date</span>, " +
+      "<span style=\"font-family:var(--mono)\">review_state</span>, " +
+      "<span style=\"font-family:var(--mono)\">completed_at</span>. " +
+      "<span style=\"font-family:var(--mono)\">status_key</span> is stable; the label is free to " +
+      "change — that split is what makes Blocked → Parked a label edit instead of a migration.";
+    if (i === 1) return "<b>Struck-through keys never leave Sentinel.</b> The push is the narrowest " +
+      "place to enforce the client-safe split, and it is one direction only — Atrium never answers " +
+      "with a field. Turn the bridge off (top right) and watch a failure become <b>loud and " +
+      "retryable</b> instead of a success toast over an empty client tab.";
+    if (i === 2) return "<b>Three writes reach Sentinel from the client, and no more.</b> A comment " +
+      "and a revision request land on the row; the composer files a <b>request</b> into Intake. " +
+      "None of them edits the board. This replaces <span style=\"font-family:var(--mono)\">" +
+      "AtriumApproval</span>'s three columns, which no code has ever written.";
+    return "<b>A copy, not a source.</b> This is the whole of what Atrium holds for the card. " +
+      "There is no field here that Sentinel does not own, so there is nothing to reconcile — " +
+      "which is what lets every writer on the Atrium side be deleted.";
+  }
+
+  /* ============================================================ legend ==== */
+
+  var LEGEND = [
+    ["D1", "Atrium keeps the store, but the card is a <b>projection</b> — watch the push tab."],
+    ["0.1", "<b>Share</b> mints a real card and stores the returned id. Today it creates nothing."],
+    ["0.2", "Turn the bridge off: a failed push is <b>loud and retryable</b>, never a success toast."],
+    ["D2", "The client page has <b>no</b> drag target, no delete ✕. Gone from the markup."],
+    ["D3", "The client composer files a <b>request</b> into Intake, not a task."],
+    ["D4", "Comment / request-a-revision reach the Sentinel row and flag it there."],
+    ["D5", "<b>Mark complete</b> stays disabled until a Team Lead approves."],
+    ["D6", "New service: <b>Share with the client</b> defaults ON."],
+    ["D7", "Task Board is its <b>own</b> nav item, not a slab inside Dashboard."],
+    ["D8", "Seat <b>Dana</b> — sees everything, writes nothing, reads as text not greyed inputs."],
+    ["M3", "<b>Park it</b> stores a reason + the column it left; Resume names that column."],
+    ["M4", "<b>Mark ended &amp; file</b> → Past work, on both boards. Ended ≠ deleted."],
+    ["4.1", "Seat <b>Ehjay</b> (Team Lead) can set priority — the server always allowed it."],
+    ["4.2", "<b>Route to Acquisition</b>, then seat <b>Justine</b>: the card is on her board."],
+    ["§1", "Statuses carry a stable key; the label is free. Blocked → <b>Parked</b> shown live."],
+    ["§2.4e", "Monitor's “shipped this week” counts <code>completed_at</code>, not <code>updated_at</code>."],
+    ["D9", "<b>Route to Acquisition</b> notifies Ehjay — leads are found by query, no new column."],
+    ["D10", "Seat <b>Justine</b> → New service → a Website service: it <b>files</b> to that team, not to her."],
+    ["D10", "What you filed but no longer own appears under <b>Filed by me</b>, never back on your board."],
+    ["D11", "Route #448, then seat <b>Ehjay</b>: <b>Send back to Charles</b> — with a reason, and ownership never vague."],
+    ["D11", "Bounce is offered only while the card is still <b>unassigned</b>. Once someone picks it up, you reassign instead."],
+    ["D12", "<b>Team</b> is a select over every team — not a button naming one. Route #448 to Development."],
+    ["D12", "Every phase and every step has an <b>owner picker</b>, the routed team first, everyone else still reachable."],
+    ["D12", "<b>Assign the N unowned steps to…</b> replaces the old hardcoded “Delegate to Justine & Zhen”."],
+    ["🔴", "Step owners are gated like any delegation — <code>update_task</code> does not gate them today."]
+  ];
+
+  function renderLegend() {
+    var ul = $("legend");
+    ul.innerHTML = "";
+    LEGEND.forEach(function (row) {
+      var li = E("li");
+      li.appendChild(E("code", "", esc(row[0])));
+      li.appendChild(E("span", "", row[1]));
+      ul.appendChild(li);
+    });
+  }
+
+  /* ============================================================ chrome ==== */
+
+  function renderSeats() {
+    var host = $("seats");
+    host.innerHTML = "";
+    SEATS.forEach(function (k) {
+      var b = E("button", "seat");
+      b.type = "button";
+      b.setAttribute("aria-pressed", S.seat === k ? "true" : "false");
+      var i = E("i", "", ini(k));
+      i.style.background = P[k].c;
+      b.appendChild(i);
+      b.appendChild(document.createTextNode(P[k].name));
+      b.onclick = function () {
+        S.seat = k;
+        if (P[k].role === "client") S.view = "board";
+        if (!(P[k].role === "account_manager" || P[k].role === "team_lead" ||
+              P[k].role === "viewer") && (S.view !== "board")) S.view = "board";
+        render();
+      };
+      host.appendChild(b);
+    });
+  }
+
+  $("bridge").onclick = function () {
+    S.bridgeUp = !S.bridgeUp;
+    toast(S.bridgeUp ? "Bridge up" : "Bridge DOWN — now try sharing or moving a shared card", !S.bridgeUp);
+    render();
+  };
+  $("reset").onclick = function () { S = seed(); render(); };
+
+  /* The inspector is the demo's evidence, so it stays open by default — but it can be folded
+     away when you just want to look at the board. */
+  var inspOpen = true;
+  var itog = $("insp-toggle");
+  if (itog) itog.onclick = function () {
+    inspOpen = !inspOpen;
+    $("insp").className = "insp" + (inspOpen ? "" : " off");
+    itog.textContent = inspOpen ? "Hide" : "Show";
+  };
+
+  function render() {
+    $("bridge").textContent = S.bridgeUp ? "Bridge: up" : "Bridge: DOWN";
+    $("bridge").className = "gbtn" + (S.bridgeUp ? "" : " hot");
+    renderSeats();
+    renderSentinel();
+    renderAtrium();
+    renderInspector();
+  }
+
+  renderLegend();
+  render();
+})();
+</script>
+</body>
+</html>

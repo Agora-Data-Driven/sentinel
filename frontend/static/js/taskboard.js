@@ -4,18 +4,41 @@
    read from the CURRENT page URL, so they work at /dashboard; the old /tasks URL 302s there. */
 window.TaskBoard = {
   async mount(S, root) {
-  const canCreate = true;                   // all staff can add + edit tasks (internal employee tool)
+  // 🔴 The read-only seat (decision D8). `S.can()` is RANK-based and a viewer sits at the floor, so
+  // every rank check already refuses it — but rank cannot express "sees everything, writes nothing",
+  // so the seat is named explicitly here exactly as it is server-side (constants.VIEW_ALL_ROLES).
+  // The server enforces all of this; hiding the controls is so a viewer is not offered buttons that
+  // can only ever answer 403.
+  const readOnly = S.user.role === "viewer";
+  const canCreate = !readOnly;              // all other staff can add + edit tasks (internal tool)
   const canManage = S.can("account_manager"); // AM+ only: the Atrium bridge
-  const canMonitor = S.can("team_lead");    // team leads and up get the Monitor / employee overview
-  const isAM = canManage;   // priority is settable by AM + admin + super_admin (not team leads/staff)
+  // Monitor is a READ, and monitoring is the viewer's entire purpose — so it is a rank check OR the
+  // seat, matching `employee_summary`'s guard.
+  const canMonitor = S.can("team_lead") || readOnly;
+  // 🔴 PRIORITY: the server has always let a team lead set it within their own team
+  // (task_perms.can_prioritize), and this file gated on `isAM` — so a lead saw a read-only value and
+  // had to ask an AM to change a number they are trusted to own (§2.4f). The server was right; this
+  // was the bug. `isAM` survives ONLY for Atrium-owned cards, where the server really is AM+
+  // (can_manage_atrium): such a card has no Sentinel team for a lead to be the lead OF.
+  const isAM = canManage;
+  const canPrioritize = (t) => t.source === "atrium" ? canManage : (canManage
+    || (canMonitor && t.assigned_team_id != null && t.assigned_team_id === S.user.team_id));
+  // On the create/edit FORM there may be no team yet (it is a field on the form), so this mirrors
+  // create_task's `may_delegate` instead: a lead may set priority on work they raise.
+  const canPrioritizeOnForm = canManage || canMonitor;
   // Mirrors task_perms.can_delete (the server enforces it): AM+ anywhere, team lead in their
   // team, and the creator for their own tasks. Drives the ✕ on cards + Delete in the drawer.
   // An Atrium-owned card (t.source === "atrium") has no assignee, team or creator tag to test, so
   // it follows task_perms.can_manage_atrium instead: managers only, since deleting it removes a
   // client's card (into Atrium's Bin, restorable for 30 days).
-  const canDelete = (t) => t.source === "atrium" ? canManage : (canManage
+  const canDelete = (t) => readOnly ? false : (t.source === "atrium" ? canManage : (canManage
     || (canMonitor && t.assigned_team_id != null && t.assigned_team_id === S.user.team_id)
-    || (t.created_by_id != null && t.created_by_id === S.user.id));
+    || (t.created_by_id != null && t.created_by_id === S.user.id)));
+  // Mirrors task_perms.can_review (the server enforces it): AM+ anywhere, a team lead within their
+  // own team. Deciding a review is a management call; ASKING for one is not (that's can_edit).
+  // Atrium-owned cards have no review state — there is no local row to hold one.
+  const canReview = (t) => !readOnly && t.source !== "atrium" && (canManage
+    || (canMonitor && t.assigned_team_id != null && t.assigned_team_id === S.user.team_id));
 
   // Board-only styles (styles.css stays untouched): the hover ✕ on cards. Injected once,
   // same pattern as the Coach FAB styles in app.js — CSP allows style elements, not inline JS.
@@ -23,13 +46,51 @@ window.TaskBoard = {
     const st = document.createElement("style");
     st.id = "tb-style";
     st.textContent = `
+      /* 🔴 The task detail is a WIDE CENTRED MODAL, not a side panel.
+         A split view was tried on 2026-08-03 and REMOVED the same day, because the board's own
+         dimensions make it impossible: 5 columns x 288px + gaps = 1496px, plus a 248px sidebar and a
+         ~340px panel = ~2150px before anything breathes. The board already scrolls horizontally at
+         1800px, so the panel squeezed the columns AND cramped itself -- and at 340px wide the
+         '.spread' field grid (minmax 220px) collapsed to ONE column, so eleven label/value pairs
+         stacked up before you reached the work breakdown. In '.modal.wide' (920px) that same grid
+         gives four columns. Don't re-add a docked panel without doing this arithmetic first.
+         🔴 NO BACKTICKS ANYWHERE IN THIS COMMENT: it lives inside a template literal, so a
+         markdown-style code span would CLOSE the string and the rest parses as a tagged template
+         call ("...".spread is not a function). node --check does NOT catch it -- it is valid
+         syntax, and it only blows up at mount() time. Quote selectors with ' instead.
+         The body is two columns: the record on the left, the work + conversation on the right --
+         which is also what makes the modal shorter than the panel ever was. */
+      .tb-cols{display:grid;grid-template-columns:1.05fr .95fr;gap:26px;align-items:start}
+      .tb-cols > *{min-width:0}
+      /* One column on a narrow screen (or a phone), where 920px is not available anyway. */
+      @media (max-width:820px){.tb-cols{grid-template-columns:1fr;gap:22px}}
       .tcard{position:relative}
       .tcard .t-del{position:absolute;top:7px;right:7px;width:24px;height:24px;border:none;border-radius:7px;
         background:transparent;color:var(--muted);font-size:13px;line-height:1;cursor:pointer;
         display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .12s ease,background .12s ease,color .12s ease}
       .tcard:hover .t-del,.tcard .t-del:focus-visible{opacity:1}
       .tcard .t-del:hover{background:var(--danger);color:#fff}
-      @media (hover: none){.tcard .t-del{opacity:.55}}`;
+      @media (hover: none){.tcard .t-del{opacity:.55}}
+
+      /* MOBILE MOVE CONTROL (WP 5.5, problem 2.2.6). Drag-and-drop was the board's ONLY move
+         affordance, so on a phone the board is a horizontal scroll of cards that cannot be
+         moved at all -- the drawer's status select was the only way, three taps away.
+         A native select is deliberate: it hands phones the OS picker, it is keyboard and
+         screen-reader operable for free, and it needs no popup layer.
+         Hidden wherever a real pointer exists, because dragging is better there and a second
+         control on every card is clutter. Still reachable by KEYBOARD on the desktop -- it
+         appears on focus, which is the only move affordance a keyboard user has ever had. */
+      .tcard .t-move{position:absolute;left:8px;right:34px;bottom:6px;width:auto;height:26px;
+        font-size:11px;padding:0 6px;border-radius:7px;border:1px solid var(--line);
+        background:var(--card);color:var(--muted);cursor:pointer;
+        opacity:0;pointer-events:none}
+      .tcard .t-move:focus-visible{opacity:1;pointer-events:auto;color:var(--fg);border-color:var(--accent)}
+      @media (hover: none){
+        .tcard .t-move{position:static;display:block;width:100%;margin-top:8px;opacity:1;
+          pointer-events:auto;height:32px;font-size:12px}
+        /* The delete affordance already sits top-right; keep it clear of the select. */
+        .tcard{padding-bottom:10px}
+      }`;
     document.head.appendChild(st);
   }
 
@@ -38,6 +99,11 @@ window.TaskBoard = {
     S.api("/api/tasks/templates"),
   ]);
   const STATUSES = vocab.task_statuses;
+  // Every status carries the client stage it projects onto (task_status_meta, decision D13), which
+  // is how the UI asks "is this a DONE column?" without ever naming "Completed" — that label is
+  // renameable in Manage and nothing may key off it (AGENTS.md §5).
+  const STAGE_OF = Object.fromEntries((vocab.task_status_meta || []).map((s) => [s.name, s.stage]));
+  const isDoneStatus = (st) => STAGE_OF[st] === "completed";
   const peopleById = Object.fromEntries(people.map((p) => [p.id, p]));
   const teamsById = Object.fromEntries(teams.map((t) => [t.id, t]));
   // Service templates that match a chosen department (team), by team name.
@@ -67,6 +133,8 @@ window.TaskBoard = {
           <button type="button" data-view="employee" role="tab">By Employee</button>
           <button type="button" data-view="monitor" role="tab">Monitor</button>
         </div>` : ""}
+        <button class="btn ghost" id="filed-by-me" title="Work you raised for another team, and where it went">Filed by me</button>
+        <button class="btn ghost" id="past-work" title="Completed work that has been filed">Past work</button>
         ${canCreate ? `<button class="btn primary" id="new-task">${S.ICON.plus}New Task</button>` : ""}
       </div></div>
     <div class="filters">
@@ -92,6 +160,8 @@ window.TaskBoard = {
   S.qs("#f-priority").onchange = (e) => { filters.priority = e.target.value; load(); };
   if (S.qs("#f-assignee")) S.qs("#f-assignee").onchange = (e) => { filters.assignee_id = e.target.value; load(); };
   if (canCreate) S.qs("#new-task").onclick = () => taskForm(null);
+  S.qs("#past-work").onclick = () => showPastWork();
+  S.qs("#filed-by-me").onclick = () => showFiledByMe();
 
   S.qsa("#view-seg button").forEach((b) => b.onclick = () => setMode(b.dataset.view));
 
@@ -146,6 +216,7 @@ window.TaskBoard = {
     wireDnD();
     wireAddButtons();
     wireCardClicks();
+    wireMoveSelects();
   }
 
   // Swimlanes: one lane per person that has tasks, plus an Unassigned lane. Cards sit in mini
@@ -185,6 +256,7 @@ window.TaskBoard = {
     }).join("");
     wireDnD({ sameLane: true });
     wireCardClicks();
+    wireMoveSelects({ sameLane: true });
   }
 
   async function renderMonitor(board) {
@@ -258,6 +330,21 @@ window.TaskBoard = {
     return days <= 2 ? "soon" : "";
   }
 
+  // Where the review stands, small enough for a card. Nothing for a task nobody has submitted —
+  // most tasks, most of the time, and a pill on all of them would say nothing.
+  const REVIEW_PILL = {
+    pending: '<span class="pill amber" style="font-size:9px" title="Waiting on a lead\'s approval">◷ review</span>',
+    approved: '<span class="pill green" style="font-size:9px" title="Approved — it can be completed">✓ approved</span>',
+    changes_requested: '<span class="pill red" style="font-size:9px" title="Changes requested">↺ changes</span>',
+  };
+
+  // Filing only makes sense at the two ends: a finished task can be filed, a filed one can come
+  // back. Unfinished work that has to leave the board gets PARKED — the server refuses to file it.
+  function filingBtn(t, done) {
+    if (t.archived) return `<button class="btn ghost" id="d-unarchive">Back on the board</button>`;
+    return done ? `<button class="btn ghost" id="d-archive">File to Past work</button>` : "";
+  }
+
   function card(t) {
     const dueCls = dueClass(t.due_date);
     return `<div class="tcard" draggable="true" data-id="${t.id}">
@@ -269,9 +356,34 @@ window.TaskBoard = {
         ${t.created_by ? `<span class="muted" title="Created by ${S.esc(t.created_by.name)}">· by ${S.esc(t.created_by.name.split(" ")[0])}</span>` : ""}</div>
       <div class="t-foot">
         <div class="row">${t.assignee ? S.avatar(t.assignee, "sm") + `<span class="sub" style="font-size:12px">${S.esc(t.assignee.name.split(" ")[0])}</span>` : '<span class="muted" style="font-size:12px">Unassigned</span>'}</div>
-        <div class="icons">${t.comment_count ? S.ICON.comment + t.comment_count : ""} ${t.attachment_count ? S.ICON.paperclip + t.attachment_count : ""} ${t.checklist_total ? `<span title="checklist">${t.checklist_done}/${t.checklist_total}</span>` : ""}</div>
+        <div class="icons">${t.on_hold ? '<span class="pill amber" style="font-size:9px" title="Parked — see the card for why">⏸ parked</span>' : ""}${REVIEW_PILL[t.review_state] || ""}${t.atrium_sync_error ? '<span class="pill red" style="font-size:9px" title="The client copy of this card is out of date">⚠ stale</span>' : ""}${t.comment_count ? S.ICON.comment + t.comment_count : ""} ${t.attachment_count ? S.ICON.paperclip + t.attachment_count : ""} ${t.checklist_total ? `<span title="checklist">${t.checklist_done}/${t.checklist_total}</span>` : ""}</div>
       </div>
-      ${canDelete(t) ? `<button class="t-del" data-del="${t.id}" title="Delete task" aria-label="Delete task">✕</button>` : ""}</div>`;
+      ${canDelete(t) ? `<button class="t-del" data-del="${t.id}" title="Delete task" aria-label="Delete task">✕</button>` : ""}
+      ${!readOnly ? `<select class="t-move" data-move="${t.id}" aria-label="Move ${S.esc(t.title)} to another column">${STATUSES.map((s) => `<option ${s === t.status ? "selected" : ""}>${S.esc(s)}</option>`).join("")}</select>` : ""}</div>`;
+  }
+
+  // The mobile/keyboard twin of drag-and-drop (WP 5.5). It routes through the SAME `moveCard`, so
+  // the optimistic reposition, the Undo toast and the roll-back on failure are identical however
+  // the move was made — there is no second move path to keep in step.
+  function wireMoveSelects(opts = {}) {
+    S.qsa(".t-move").forEach((sel) => {
+      // Interacting with the control must never open the card underneath it.
+      sel.onclick = (e) => e.stopPropagation();
+      sel.onchange = (e) => {
+        e.stopPropagation();
+        const cardEl = sel.closest(".tcard");
+        const fromList = cardEl.closest(".col-list");
+        if (!fromList || fromList.dataset.status === sel.value) return;
+        // In swimlanes every lane repeats the same columns, so the target has to be matched
+        // WITHIN this card's lane — otherwise the card would jump to another person's row, which
+        // is a reassignment, and those belong in the drawer (same rule wireDnD enforces).
+        const scope = opts.sameLane ? cardEl.closest(".lane") : document;
+        const toList = [...scope.querySelectorAll(".col-list")]
+          .find((l) => l.dataset.status === sel.value);
+        if (!toList) return;
+        moveCard(cardEl, toList, sel.value, fromList, fromList.dataset.status);
+      };
+    });
   }
 
   function wireDnD(opts = {}) {
@@ -315,6 +427,11 @@ window.TaskBoard = {
   async function moveCard(cardEl, toList, toStatus, fromList, fromStatus, opts = {}) {
     const id = cardEl.dataset.id;
     toList.appendChild(cardEl);
+    // Keep the card's own move control showing where the card now IS. Without this a drag (or an
+    // Undo) leaves the select reading the previous column, and the next change event can look
+    // like a no-op and be swallowed by the equality guard in wireMoveSelects.
+    const sel = cardEl.querySelector(".t-move");
+    if (sel) sel.value = toStatus;
     updateCounts();
     cardEl.classList.remove("just-moved");
     requestAnimationFrame(() => cardEl.classList.add("just-moved"));   // restart the flash
@@ -339,6 +456,34 @@ window.TaskBoard = {
     S.qsa(".col-add").forEach((btn) => btn.onclick = () => taskForm(null, btn.dataset.status));
   }
 
+  // --- Opening a task -----------------------------------------------------------------------------
+  // A wide centred modal (see the CSS note above for why not a docked panel). The URL still carries
+  // `?open=<id>` — that is the param every task notification uses, so a shared link, a notification
+  // and a click all land on the same card, and refreshing keeps the task open.
+  function setOpenParam(id) {
+    const u = new URLSearchParams(location.search);
+    if (id) u.set("open", id); else u.delete("open");
+    // replaceState, not pushState: opening six cards in a row must not bury the page under six
+    // back-button steps.
+    history.replaceState(null, "", location.pathname + (u.toString() ? "?" + u : ""));
+  }
+
+  // S.modal's ✕ / overlay-click / Esc all call ITS internal close directly, so wrapping the returned
+  // `close` is not enough — the param would survive those three paths. Re-point them here instead.
+  function openTaskModal(title, body, footer, id) {
+    const m0 = S.modal({ title, body, footer, wide: true });
+    const close = () => { setOpenParam(null); m0.close(); };
+    if (S.qs("#modal-x")) S.qs("#modal-x").onclick = close;
+    m0.root.onclick = (e) => { if (e.target === m0.root) close(); };
+    document.addEventListener("keydown", function esc(e) {
+      if (e.key !== "Escape") return;
+      document.removeEventListener("keydown", esc);
+      setOpenParam(null);          // S.modal's own Esc handler does the closing
+    });
+    setOpenParam(id);
+    return { close };
+  }
+
   async function openDetail(id) {
     let t;
     try { t = await S.api("/api/tasks/" + id); }
@@ -352,25 +497,54 @@ window.TaskBoard = {
     const isAtrium = t.source === "atrium";
     const owners = isAtrium ? (t.atrium_roster || []) : people;
     const ownerId = (v) => (isAtrium ? (v || "") : (v ? +v : null));
-    const prioritySelect = isAM
+    const prioritySelect = canPrioritize(t)
       ? `<select id="d-priority" style="margin-top:6px">${vocab.priorities.map((p) => `<option ${p === t.priority ? "selected" : ""}>${p}</option>`).join("")}</select>`
       : `<div style="margin-top:6px">${S.priorityDot(t.priority)} ${S.esc(t.priority)}</div>`;
+    // The projection's state, said out loud. A push that failed leaves the CLIENT's copy stale
+    // while ours is current, and a pre-fix row claims a share that never happened — neither may
+    // look like a healthy share (see sentinel/AGENTS.md §5, "Send to Atrium used to publish NOTHING").
+    // `.form-hint` is the house inline-notice box (styles.css:198); the amber edge is the
+    // file's usual one-off inline style rather than a new class nobody else uses.
+    const WARN = 'class="form-hint" style="margin-bottom:14px;border-left:3px solid var(--warn)"';
+    const staleNote = (!isAtrium && t.atrium_sync_error)
+      ? `<div ${WARN}><strong>The client's copy is out of date.</strong>
+           ${S.esc(t.atrium_sync_error)} Your edits saved here — press <em>Retry the client push</em> to send them.</div>`
+      : (!isAtrium && t.atrium_visible && !t.atrium_shared)
+        ? `<div ${WARN}><strong>This was never actually shared.</strong>
+             It is flagged as shared but no client card exists — a row predating the 2026-08-03 fix.
+             Press <em>Share with the client</em> to create it for real.</div>`
+        : "";
+    // Park REMEMBERS the column the card left (tasks.resume_to), so say where Resume will put it —
+    // otherwise the button is a guess. An Atrium card's hold has no such memory to show.
+    const resumeHint = (!isAtrium && t.resume_to)
+      ? ` · Resume puts it back in ${S.esc(t.resume_to)}` : "";
     const chips = [
       isAtrium ? `<span class="pill blue">Client card · ${S.esc(t.client_name || "Atrium")}</span>` : "",
+      (!isAtrium && t.atrium_shared) ? `<span class="pill blue">Shared with the client</span>` : "",
+      (!isAtrium && t.atrium_sync_error) ? `<span class="pill red">⚠ Client copy stale</span>` : "",
       t.on_hold ? `<span class="pill amber">On hold</span>` : "",
+      t.archived ? `<span class="pill">Filed · Past work</span>` : "",
+      t.review_state === "pending" ? `<span class="pill amber">Awaiting approval</span>` : "",
+      t.review_state === "approved" ? `<span class="pill green">Approved${t.reviewer ? " by " + S.esc(t.reviewer.name) : ""}</span>` : "",
+      t.review_state === "changes_requested" ? `<span class="pill red">Changes requested</span>` : "",
       t.open_changes ? `<span class="pill red">${t.open_changes} change request${t.open_changes > 1 ? "s" : ""}</span>` : "",
       (isAtrium && t.reporter === "client") ? `<span class="pill violet">Requested by ${S.esc(t.reporter_name || "the client")}</span>` : "",
     ].join("");
-    const body = `<div class="stack" style="gap:22px">
+    const body = `<div class="tb-cols">
       <div>
+        ${staleNote}
         <div class="labels" style="margin-bottom:8px">${S.labelPills(t.labels)}${chips}</div>
         <h2 style="margin-bottom:6px">${S.esc(t.title)}</h2>
         <div class="sub">${S.esc(t.description || "")}</div>
         <div class="spread" style="margin-top:16px">
-          ${field("Client", t.client_name)}${field("Campaign", t.campaign)}
+          ${field("Client", t.client_name)}
+          ${/* Optional grouping field — shown only when set, so a task that is not part of a
+                campaign does not carry an empty row (it used to echo the title back). */
+            t.campaign ? field("Campaign", t.campaign) : ""}
           ${field("Content type", t.content_type)}
           ${field(isAtrium ? "Launch date" : "Due date", t.due_date ? S.fmtDateFull(t.due_date + "T00:00:00+08:00") : "—")}
-          ${isAtrium ? field("Started", t.start_date ? S.fmtDateFull(t.start_date + "T00:00:00+08:00") : "—") : ""}
+          ${field("Started", t.start_date ? S.fmtDateFull(t.start_date + "T00:00:00+08:00") : "—")}
+          ${t.completed_at ? field("Completed", S.fmtDateFull(t.completed_at)) : ""}
           ${t.service_charge_label ? field("Service charge", t.service_charge_label) : ""}
         </div>
         ${t.deliverable_url ? `<div style="margin-top:12px"><div class="section-label">Deliverable</div><a href="${S.esc(t.deliverable_url)}" target="_blank" class="btn sm ghost" style="margin-top:6px">Open deliverable →</a></div>` : ""}
@@ -391,7 +565,7 @@ window.TaskBoard = {
             `}
             <div><div class="section-label">Priority</div>${prioritySelect}</div>
           </div>
-          ${(isAtrium && t.on_hold && t.hold_reason) ? `<div style="margin-top:12px"><div class="section-label">On hold because</div><div class="sub">${S.esc(t.hold_reason)}</div></div>` : ""}
+          ${(t.on_hold && t.hold_reason) ? `<div style="margin-top:12px"><div class="section-label">On hold because${resumeHint}</div><div class="sub">${S.esc(t.hold_reason)}</div></div>` : ""}
           ${t.internal_notes ? `<div style="margin-top:12px"><div class="section-label">Internal notes</div><div class="sub">${S.esc(t.internal_notes)}</div></div>` : ""}
         </div>
       </div>
@@ -399,10 +573,10 @@ window.TaskBoard = {
         <div class="spread" style="align-items:center;margin-bottom:2px"><div class="section-label">Work breakdown <span id="d-bd-count"></span></div></div>
         <div class="progress" style="margin:8px 0 12px"><i id="d-bd-bar" style="width:0%"></i></div>
         <div id="d-breakdown"></div>
-        <button class="btn sm ghost" id="d-bd-addmain" style="margin-top:10px">${S.ICON.plus}Add main task</button>
+        ${readOnly ? "" : `<button class="btn sm ghost" id="d-bd-addmain" style="margin-top:10px">${S.ICON.plus}Add main task</button>`}
         <div class="section-label" style="margin-top:18px">Comments${(isAtrium && t.atrium_visible) ? ' <span class="muted" style="font-weight:400">· this card is shared, so the client sees these</span>' : ""}</div>
         <div class="thread" id="d-thread" style="margin:10px 0">${t.comments.map(cmt).join("") || '<div class="muted">No comments yet.</div>'}</div>
-        <div class="row" style="gap:8px"><input id="d-comment" placeholder="Write a comment… use @name to mention"><button class="btn primary sm" id="d-send">Send</button></div>
+        ${readOnly ? "" : `<div class="row" style="gap:8px"><input id="d-comment" placeholder="Write a comment… use @name to mention"><button class="btn primary sm" id="d-send">Send</button></div>`}
         <div class="section-label" style="margin-top:18px">Activity</div>
         <ul class="activity">${t.history.map((h) => `<li><span>${h.actor ? S.esc(h.actor.name) : "System"}</span> ${S.esc(h.field)} ${h.old_value ? `<span class="muted">${S.esc(h.old_value)} → </span>` : ""}<strong>${S.esc(h.new_value || "")}</strong> <span class="muted">· ${S.timeAgo(h.changed_at)}</span></li>`).join("")}</ul>
       </div></div>`;
@@ -411,17 +585,45 @@ window.TaskBoard = {
     // just decides whether the client can see it.
     // No "Move to Review" shortcut — the For Review column was removed 2026-07-30 (statuses live in
     // task_vocab; a hardcoded status here would be a name the board no longer has a column for).
-    const footer = `<button class="btn ghost" id="d-edit">Edit</button>
+    // The lifecycle controls (Stage 2). All Sentinel-only: an Atrium-owned card has no local row to
+    // hold a hold, a review or a filing, and faking one would split ownership of the record again.
+    // Only the buttons that CAN act appear — the server enforces the same rules either way.
+    const done = isDoneStatus(t.status);
+    const lifecycle = (isAtrium || readOnly) ? "" : [
+      t.on_hold ? `<button class="btn ghost" id="d-resume">Resume</button>`
+                : `<button class="btn ghost" id="d-park">Park…</button>`,
+      // Nothing to submit once it is approved, and nothing to submit about filed work.
+      (!t.archived && t.review_state !== "approved" && t.review_state !== "pending")
+        ? `<button class="btn ghost" id="d-submit">Submit for review</button>` : "",
+      (canReview(t) && t.review_state === "pending")
+        ? `<button class="btn ghost" id="d-approve">Approve</button>
+           <button class="btn ghost" id="d-changes">Request changes…</button>` : "",
+      filingBtn(t, done),
+      // Send back (D11) — refuse queued work and return it to whoever filed it. Offered ONLY in the
+      // exact state the rule allows: still unassigned, routed to a team, filed by somebody else, and
+      // I am the one who could triage it. Once anyone owns it, reassigning is the honest move.
+      (canReview(t) && !t.assigned_to_id && t.assigned_team_id && t.created_by_id
+        && t.created_by_id !== S.user.id)
+        ? `<button class="btn ghost" id="d-sendback">Not ours…</button>` : "",
+    ].join("");
+    const footer = `${readOnly ? "" : `<button class="btn ghost" id="d-edit">Edit</button>`}${lifecycle}
       ${canManage ? `<button class="btn ghost" id="d-atrium">${isAtrium
           ? (t.atrium_visible ? "✓ Client can see this" : "Share with client")
-          : (t.atrium_visible ? "✓ In Atrium" : "Send to Atrium")}</button>` : ""}
+          : (t.atrium_shared ? "✓ Shared with the client" : "Share with the client")}</button>` : ""}
+      ${(canManage && !isAtrium && t.atrium_sync_error) ? `<button class="btn danger" id="d-atrium-retry">Retry the client push</button>` : ""}
       ${canDelete(t) ? `<button class="btn danger" id="d-delete">Delete</button>` : ""}
       <button class="btn primary" id="d-close">Close</button>`;
-    const m = S.modal({
-      title: isAtrium ? "Client card · " + (t.client_name || "Atrium") : "Task #" + t.id,
-      body, footer, drawer: true,
-    });
+    const m = openTaskModal(
+      isAtrium ? "Client card · " + (t.client_name || "Atrium") : "Task #" + t.id,
+      body, footer, id);
     S.qs("#d-close").onclick = m.close;
+    if (S.qs("#d-atrium-retry")) S.qs("#d-atrium-retry").onclick = async () => {
+      try {
+        await S.api(`/api/tasks/${id}/atrium-retry`, { method: "POST" });
+        S.toast("Sent — the client's card is current again", "ok");
+        m.close(); load();
+      } catch (err) { S.toast(err.detail || "Couldn't reach Atrium", "err"); }
+    };
 
     // ---- Two-level work breakdown (main tasks -> sub-tasks, each optionally assigned) ----
     const mById = (mid) => t.maintasks.find((m) => m.id === mid);
@@ -486,6 +688,13 @@ window.TaskBoard = {
 
     function wireBreakdown() {
       const q = (act) => S.qsa(`#d-breakdown [data-act="${act}"]`);
+      // A viewer's breakdown is inert: disable the controls rather than let them look editable and
+      // then 403 on blur. (The server refuses either way — this is about not lying to the user.)
+      if (readOnly) {
+        S.qsa("#d-breakdown input, #d-breakdown select, #d-breakdown button")
+          .forEach((el) => { el.disabled = true; });
+        return;
+      }
       q("mt-title").forEach((el) => el.onchange = () => { const m = mById(el.dataset.mid); if (m) { m.title = el.value.trim() || "Untitled"; commit(); } });
       q("mt-assignee").forEach((el) => el.onchange = () => { const m = mById(el.dataset.mid); if (m) { m.assignee_id = ownerId(el.value); commit(); } });
       q("mt-del").forEach((el) => el.onclick = () => { t.maintasks = t.maintasks.filter((m) => m.id !== el.dataset.mid); commit(); });
@@ -501,13 +710,13 @@ window.TaskBoard = {
       });
     }
 
-    S.qs("#d-bd-addmain").onclick = () => {
+    if (S.qs("#d-bd-addmain")) S.qs("#d-bd-addmain").onclick = () => {
       t.maintasks.push({ id: "mt_new_" + Date.now(), title: "New main task", assignee_id: null, subs: [] });
       commit();
     };
     renderBreakdown();
     // Comment
-    S.qs("#d-send").onclick = async () => {
+    if (S.qs("#d-send")) S.qs("#d-send").onclick = async () => {
       const val = S.qs("#d-comment").value.trim(); if (!val) return;
       try {
         const c = await S.api(`/api/tasks/${id}/comments`, { method: "POST", body: { body: val } });
@@ -529,7 +738,7 @@ window.TaskBoard = {
       });
     }
     // Priority (AM only)
-    if (isAM && S.qs("#d-priority")) S.qs("#d-priority").onchange = async (e) => {
+    if (S.qs("#d-priority")) S.qs("#d-priority").onchange = async (e) => {
       try { await S.api(`/api/tasks/${id}/priority`, { method: "PATCH", body: { priority: e.target.value } }); S.toast("Priority updated", "ok"); }
       catch (err) { S.toast(err.detail, "err"); }
     };
@@ -546,8 +755,157 @@ window.TaskBoard = {
         m.close(); load();
       } catch (err) { S.toast(err.detail, "err"); }
     };
+    // ---- Lifecycle: park / resume / file / review (Stage 2) ----
+    // One helper: POST, tell the user what happened, then reopen the drawer so every chip, field
+    // and button reflects the new state (the buttons themselves depend on it).
+    const act = async (path, body, msg) => {
+      try {
+        await S.api(`/api/tasks/${id}/${path}`, { method: "POST", body });
+        S.toast(msg, "ok");
+        m.close(); load(); openDetail(id);
+      } catch (err) { S.toast(err.detail || "Couldn't do that", "err"); }
+    };
+    if (S.qs("#d-park")) S.qs("#d-park").onclick = () => askReason({
+      title: "Park this task?",
+      hint: `It moves to the ${S.esc(pausedColumn())} column and comes back to <strong>${S.esc(t.status)}</strong> when you resume it.`,
+      label: "Why is it paused? (internal — the client never sees this)",
+      confirm: "Park it",
+      onSubmit: (reason) => act("park", { reason }, "Parked"),
+    });
+    if (S.qs("#d-resume")) S.qs("#d-resume").onclick = () =>
+      act("resume", {}, "Back on the board");
+    if (S.qs("#d-submit")) S.qs("#d-submit").onclick = () =>
+      act("review/submit", {}, "Sent for review — your lead has been notified");
+    if (S.qs("#d-approve")) S.qs("#d-approve").onclick = () =>
+      act("review/approve", {}, "Approved — it can be completed now");
+    if (S.qs("#d-changes")) S.qs("#d-changes").onclick = () => askReason({
+      title: "Request changes",
+      hint: "The card moves back to the revision column and whoever holds it is notified.",
+      label: "What needs changing?",
+      confirm: "Request changes",
+      onSubmit: (note) => act("review/request-changes", { note }, "Sent back with your note"),
+    });
+    if (S.qs("#d-archive")) S.qs("#d-archive").onclick = () =>
+      act("archive", {}, "Filed to Past work");
+    if (S.qs("#d-sendback")) S.qs("#d-sendback").onclick = () => askReason({
+      title: "Send this back?",
+      hint: `It leaves your team's queue and goes back to <strong>${S.esc((t.created_by && t.created_by.name) || "whoever filed it")}</strong>, assigned to them.
+             You will not see it here afterwards — that is the point.`,
+      label: "Why isn't this yours? (internal — the client never sees it)",
+      confirm: "Send it back",
+      onSubmit: (reason) => act("send-back", { reason }, "Sent back"),
+    });
+    if (S.qs("#d-unarchive")) S.qs("#d-unarchive").onclick = () =>
+      act("unarchive", {}, "Back on the board");
+
     if (S.qs("#d-edit")) S.qs("#d-edit").onclick = () => { m.close(); taskForm(t); };
     if (S.qs("#d-delete")) S.qs("#d-delete").onclick = () => confirmDelete(t, m);
+  }
+
+  // The column parked work sits in, BY STAGE — never the literal "Blocked". That label is
+  // renameable in Manage (Blocked → Parked is the planned rename), and the whole point of
+  // task_status_meta is that no name is hardcoded here (decision D13).
+  const pausedColumn = () =>
+    Object.keys(STAGE_OF).find((n) => STAGE_OF[n] === "blocked") || "the blocked";
+
+  // A small "why?" prompt, shared by Park and Request changes. Both write prose that has to be
+  // recorded, and both are refusals of a sort, so they ask the same way.
+  function askReason({ title, hint, label, confirm, onSubmit }) {
+    const rm = S.modal({
+      title,
+      body: `<div class="stack" style="gap:12px">
+        <div class="form-hint">${hint}</div>
+        <label class="field"><span>${label}</span><textarea id="rz-text" rows="3"></textarea></label>
+      </div>`,
+      footer: `<button class="btn ghost" id="rz-cancel">Cancel</button><button class="btn primary" id="rz-ok">${S.esc(confirm)}</button>`,
+    });
+    S.qs("#rz-cancel").onclick = rm.close;
+    S.qs("#rz-text").focus();
+    S.qs("#rz-ok").onclick = () => {
+      const text = S.qs("#rz-text").value.trim();
+      rm.close();
+      onSubmit(text);
+    };
+  }
+
+  // Past work: the filed tasks, out of the way but never lost (M4). A separate fetch rather than a
+  // filter on the board's list — `?archived=1` returns filed rows ONLY, and the two never mix.
+  async function showPastWork() {
+    const pm = S.modal({
+      title: "Past work",
+      drawer: true,
+      body: `<div class="skeleton-row">Loading…</div>`,
+      footer: `<button class="btn primary" id="pw-close">Close</button>`,
+    });
+    S.qs("#pw-close").onclick = pm.close;
+    // app.js:298 — the modal's body container. The LAST one: a task drawer may already be open
+    // behind this, and qs() would hand back its body instead of ours.
+    const box = S.qsa(".overlay.drawer-ov .modal-body").pop();
+    let rows;
+    try { rows = await S.api("/api/tasks?archived=1"); }
+    catch (err) { box.innerHTML = `<div class="empty">${S.esc(err.detail || "Couldn't load past work.")}</div>`; return; }
+    if (!rows.length) {
+      box.innerHTML = `<div class="empty">Nothing filed yet. Completed work gets filed here so the
+        board's Completed column stays a working column, not a graveyard.</div>`;
+      return;
+    }
+    box.innerHTML = `<div class="lead" style="margin-bottom:12px">${rows.length} filed task${rows.length > 1 ? "s" : ""}.
+        Filing is internal — a client's card stays exactly where it is.</div>
+      <table class="mon-tbl"><thead><tr><th>Task</th><th>Client</th><th>Completed</th><th></th></tr></thead>
+      <tbody>${rows.map((r) => `<tr data-id="${r.id}">
+        <td><div class="n">${S.esc(r.title)}</div><div class="r muted">${S.esc(r.status)}</div></td>
+        <td>${S.esc(r.client_name || "—")}</td>
+        <td>${r.completed_at ? S.fmtDate(r.completed_at) : '<span class="muted">—</span>'}</td>
+        <td><button class="btn sm ghost" data-restore="${r.id}">Restore</button></td>
+      </tr>`).join("")}</tbody></table>`;
+    S.qsa("[data-restore]").forEach((b) => b.onclick = async (e) => {
+      e.stopPropagation();
+      b.disabled = true;
+      try {
+        await S.api(`/api/tasks/${b.dataset.restore}/unarchive`, { method: "POST" });
+        S.toast("Back on the board", "ok"); pm.close(); load();
+      } catch (err) { b.disabled = false; S.toast(err.detail || "Couldn't restore that", "err"); }
+    });
+    S.qsa(".mon-tbl tbody tr").forEach((tr) => tr.onclick = () => { pm.close(); openDetail(tr.dataset.id); });
+  }
+
+  // "Filed by me" (§2.4d, decision D10): work you raised that is now somebody else's. It is NOT
+  // on your board -- routing a card to another team takes it off yours, deliberately -- so this
+  // answers the one question that leaves behind: where did it go? Team, current owner or "awaiting
+  // triage", and whether it was sent back. No internal fields: it may be another department's now.
+  async function showFiledByMe() {
+    const fm = S.modal({
+      title: "Filed by me",
+      drawer: true,
+      body: `<div class="skeleton-row">Loading…</div>`,
+      footer: `<button class="btn primary" id="fm-close">Close</button>`,
+    });
+    S.qs("#fm-close").onclick = fm.close;
+    const box = S.qsa(".overlay.drawer-ov .modal-body").pop();
+    let rows;
+    try { rows = await S.api("/api/tasks/filed-by-me"); }
+    catch (err) { box.innerHTML = `<div class="empty">${S.esc(err.detail || "Couldn't load that list.")}</div>`; return; }
+    if (!rows.length) {
+      box.innerHTML = `<div class="empty">Nothing here. Work you raise and keep stays on your board;
+        this list is for what you routed to another team.</div>`;
+      return;
+    }
+    const where = (r) => {
+      if (r.sent_back_reason) return `<span class="pill red">Sent back</span> <span class="muted">${S.esc(r.sent_back_reason)}</span>`;
+      if (r.awaiting_triage) return `<span class="pill amber">Awaiting triage</span> <span class="muted">in ${S.esc(r.team_name || "a team")}</span>`;
+      if (r.owner_name) return `<span class="muted">with ${S.esc(r.owner_name)}${r.team_name ? " · " + S.esc(r.team_name) : ""}</span>`;
+      return `<span class="muted">unrouted</span>`;
+    };
+    box.innerHTML = `<div class="lead" style="margin-bottom:12px">${rows.length} item${rows.length > 1 ? "s" : ""} you
+        raised for someone else — where it went, not the internal detail, which is theirs now.</div>
+      <div class="card">${rows.map((r) => `<div style="padding:12px 14px;border-bottom:1px solid var(--line-soft)">
+        <div class="row" style="justify-content:space-between;gap:10px">
+          <strong style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${S.esc(r.title)}</strong>
+          <span class="sub" style="flex:none;font-size:12px">${S.esc(r.status)}${r.on_hold ? " · ⏸" : ""}</span>
+        </div>
+        <div style="margin-top:5px;font-size:12.5px">${where(r)}${r.client_name
+          ? `<span class="muted"> · ${S.esc(r.client_name)}</span>` : ""}</div>
+      </div>`).join("")}</div>`;
   }
 
   // Confirm-then-delete. A Sentinel row is gone for good (no bin); an Atrium card soft-deletes into
@@ -670,8 +1028,21 @@ window.TaskBoard = {
     // values -- otherwise editing would silently hide something the user themselves set. A new
     // task always starts collapsed. (Status is excluded: the column's Add card presets it.)
     const extrasOpen = !!existing && !!(e.client_id || e.assigned_team_id || e.assigned_to_id
-      || e.service_charge || e.content_type || e.deliverable_url || e.internal_notes
+      || e.service_charge || e.content_type || e.deliverable_url || e.internal_notes || e.campaign
       || (e.priority && e.priority !== "Medium"));
+    // 🔴 Campaign is a GROUPING field, not the name (§7 of docs/TASKBOARD_REBUILD.md, built
+    // 2026-08-04). Until then ONE input wrote into both `title` and `campaign`, so the detail
+    // modal's Campaign row just echoed the title back on every task. The name field is now the
+    // name; Campaign is optional and only OFFERED when the service is campaign-shaped, which is
+    // derived from the template's content type — no flag column, no migration (the alternative
+    // the doc floated). Existing rows keep their duplicated value until someone edits them.
+    const isCampaignType = (ct) => (ct || "").trim().toLowerCase() === "campaign";
+    // 🔴 "What the client will read" (#t-cnote) sits UP FRONT with the dates, not behind More
+    // options: it is the entire content of the client's card. It had no field ANYWHERE in this form
+    // until 2026-08-03, so every task published by Send to Atrium reached the client's board with an
+    // empty note — the bridge sends `client_facing_notes`, and nothing here could set it. It sits
+    // beside the internal Description on purpose: the pair reads as "what we tell ourselves" vs
+    // "what they read", which is the whole client-safe split in two adjacent boxes.
     const m = S.modal({
       title: existing ? "Edit task" : "New task",
       wide: true,
@@ -681,22 +1052,31 @@ window.TaskBoard = {
       // surfaces feel identical. The collapsed block auto-opens when editing a task that already
       // uses those fields, so nothing is ever hidden from the person who set it.
       body: `<div class="grid" style="grid-template-columns:1fr 1fr;gap:16px">
-        <label class="field" style="grid-column:1/-1"><span>Task name</span><input id="t-campaign" value="${S.esc(e.campaign || e.title || "")}" placeholder="What needs doing?" autofocus></label>
+        <label class="field" style="grid-column:1/-1"><span>Task name</span><input id="t-name" value="${S.esc(e.title || "")}" placeholder="What needs doing?" autofocus></label>
         <label class="field" style="grid-column:1/-1"><span>Description</span><textarea id="t-desc" rows="3" placeholder="Optional — a sentence of context">${S.esc(e.description || "")}</textarea></label>
         <label class="field"><span>Due date</span><input type="date" id="t-due" value="${e.due_date || ""}"></label>
+        <label class="field"><span>Start date</span><input type="date" id="t-start" value="${e.start_date || ""}"></label>
+        <label class="field" style="grid-column:1/-1"><span>What the client will read</span>
+          <textarea id="t-cnote" rows="2" placeholder="Optional — plain language, no internal detail. Only ever seen if this task is shared with the client.">${S.esc(e.client_facing_notes || "")}</textarea></label>
         <div class="field" style="grid-column:1/-1">
           <details class="tk-extra"${extrasOpen ? " open" : ""}>
             <summary>More options${extrasOpen ? "" : " — client, department, lead, priority…"}</summary>
             <div class="grid" style="grid-template-columns:1fr 1fr;gap:16px;margin-top:12px">
               <label class="field" style="grid-column:1/-1"><span>Client</span><select id="t-client"><option value="">—</option>${clients.map((c) => `<option value="${c.id}" ${c.id === e.client_id ? "selected" : ""}>${S.esc(c.name)}</option>`).join("")}</select></label>
+              ${!existing && canManage ? `<div class="field" style="grid-column:1/-1" id="t-share-wrap"${e.client_id ? "" : " hidden"}>
+                <label class="chip" style="cursor:pointer;align-self:start"><input type="checkbox" id="t-share" style="width:auto" checked> Share with the client straight away</label>
+                <div class="form-hint">On by default (D6) — the client watches the work cross their board from day one instead of meeting it finished. Untick to keep this one internal; you can share it later from the card.</div>
+              </div>` : ""}
               <label class="field"><span>Department</span><select id="t-team"><option value="">—</option>${teams.map((t) => `<option value="${t.id}" ${t.id === e.assigned_team_id ? "selected" : ""}>${S.esc(t.name)}</option>`).join("")}</select></label>
               <label class="field"><span>Lead (main)</span><select id="t-assignee"><option value="">Unassigned</option>${people.map((p) => `<option value="${p.id}" ${p.id === e.assigned_to_id ? "selected" : ""}>${S.esc(p.name)}</option>`).join("")}</select></label>
               ${!existing ? `<label class="field" style="grid-column:1/-1"><span>Service type</span><select id="t-svc"><option value="">Custom (blank)</option></select></label>
               <div class="field" style="grid-column:1/-1"><div class="form-hint">Pick a department, then a service type. The phases, steps, and labels are created for you. Choose Custom (blank) to start empty.</div></div>
               <div class="field" style="grid-column:1/-1" id="t-svc-preview" hidden></div>` : ""}
-              ${isAM ? `<label class="field"><span>Priority</span><select id="t-priority">${vocab.priorities.map((p) => `<option ${p === (e.priority || "Medium") ? "selected" : ""}>${p}</option>`).join("")}</select></label>` : ""}
+              ${canPrioritizeOnForm ? `<label class="field"><span>Priority</span><select id="t-priority">${vocab.priorities.map((p) => `<option ${p === (e.priority || "Medium") ? "selected" : ""}>${p}</option>`).join("")}</select></label>` : ""}
               <label class="field"><span>Status</span><select id="t-status">${STATUSES.map((s) => `<option ${s === (e.status || "To Do") ? "selected" : ""}>${s}</option>`).join("")}</select></label>
               <label class="field"><span>Content type</span><input id="t-ctype" value="${S.esc(e.content_type || "")}"></label>
+              <label class="field" id="t-campaign-wrap"${isCampaignType(e.content_type) || e.campaign ? "" : " hidden"}><span>Campaign</span>
+                <input id="t-campaign" value="${S.esc(e.campaign || "")}" placeholder="Optional — the campaign this belongs to"></label>
               <label class="field"><span>Service charge ($)</span><input id="t-charge" inputmode="decimal" value="${S.esc(e.service_charge || "")}" placeholder="0" pattern="[0-9]*[.]?[0-9]*" title="Optional — numbers only (e.g. 4200 or 4200.50)"></label>
               <label class="field" style="grid-column:1/-1"><span>Deliverable URL (client-safe)</span><input id="t-deliv" value="${S.esc(e.deliverable_url || "")}"></label>
               <label class="field" style="grid-column:1/-1"><span>${S.ICON.lock}Internal notes</span><textarea id="t-inotes">${S.esc(e.internal_notes || "")}</textarea></label>
@@ -708,8 +1088,29 @@ window.TaskBoard = {
     S.qs("#t-cancel").onclick = m.close;
     // `autofocus` is unreliable on a node injected after load, so put the caret in the name field
     // explicitly -- with the form this short, you can now type a task and hit save immediately.
-    const nameBox = S.qs("#t-campaign");
+    const nameBox = S.qs("#t-name");
     if (nameBox) nameBox.focus();
+
+    // Campaign follows the content type, which the service picker fills in but a human may also
+    // type over — so watch the field itself rather than only the picker. Never hide a campaign
+    // somebody already typed: that would silently drop it on save.
+    // Share-on-create only means anything once there is a client to share WITH, so the control
+    // follows the Client select rather than sitting there greyed out.
+    const clientBox = S.qs("#t-client");
+    const syncShare = () => {
+      const wrap = S.qs("#t-share-wrap");
+      if (wrap) wrap.hidden = !clientBox.value;
+    };
+    if (clientBox) clientBox.addEventListener("change", syncShare);
+
+    const ctypeBox = S.qs("#t-ctype");
+    const syncCampaign = () => {
+      const wrap = S.qs("#t-campaign-wrap");
+      if (!wrap) return;
+      const typed = (S.qs("#t-campaign").value || "").trim();
+      wrap.hidden = !isCampaignType(ctypeBox ? ctypeBox.value : "") && !typed;
+    };
+    if (ctypeBox) ctypeBox.addEventListener("input", syncCampaign);
 
     // Service-type picker (new tasks only): filter recipes by the chosen department, preview the
     // checklist it will seed, and prefill the content type. The server does the actual seeding.
@@ -728,6 +1129,8 @@ window.TaskBoard = {
         const ct = S.qs("#t-ctype"); if (ct && !ct.value) ct.value = tpl.content_type || "";
         const prio = S.qs("#t-priority"); if (prio && tpl.default_priority && prio.value === "Medium") prio.value = tpl.default_priority;
         const desc = S.qs("#t-desc"); if (desc && !desc.value.trim() && tpl.default_description) desc.value = tpl.default_description;
+        // Picking a campaign-shaped service is what reveals the Campaign field (see isCampaignType).
+        syncCampaign();
       };
       const fillServices = () => {
         const opts = templatesForTeam(numOrNull("t-team"));
@@ -742,19 +1145,29 @@ window.TaskBoard = {
     }
 
     S.qs("#t-save").onclick = async () => {
-      // The one name field is labelled "Task name" and drives BOTH — the campaign IS the task's
-      // title (mirrors Atrium). Labels aren't sent (the server seeds them from the service template).
-      // The name is never forced: blank falls back to "Untitled task" (rename any time).
-      const name = val("t-campaign") || "Untitled task";
+      // The name field is the NAME. `campaign` is a separate, optional grouping field and is sent
+      // as null when blank — writing the title into both is the bug this replaced (§7 of
+      // docs/TASKBOARD_REBUILD.md). Labels aren't sent (the server seeds them from the service
+      // template). The name is never forced: blank falls back to "Untitled task" (rename any time).
+      const name = val("t-name") || "Untitled task";
       const payload = {
-        title: name, campaign: name, client_id: numOrNull("t-client"),
+        title: name, campaign: val("t-campaign"), client_id: numOrNull("t-client"),
         assigned_team_id: numOrNull("t-team"), assigned_to_id: numOrNull("t-assignee"),
-        content_type: val("t-ctype"), due_date: val("t-due") || null, status: S.qs("#t-status").value,
+        content_type: val("t-ctype"), due_date: val("t-due") || null,
+        start_date: val("t-start") || null, status: S.qs("#t-status").value,
         service_charge: val("t-charge") || null,
         description: val("t-desc"), deliverable_url: val("t-deliv"), internal_notes: val("t-inotes"),
+        // The client-safe note. Sent as "" rather than null when cleared, so emptying the box
+        // actually clears the client's card instead of leaving the old text stranded there.
+        client_facing_notes: S.qs("#t-cnote").value,
       };
       if (!existing && svcSel) payload.service_key = svcSel.value || null;
-      if (isAM) payload.priority = S.qs("#t-priority").value;
+      if (canPrioritizeOnForm) payload.priority = S.qs("#t-priority").value;
+      // Share-on-create (D6). Sent ONLY on create, and only when the control exists — the server
+      // treats an absent value as "decide for me" (share when there is a client), so an omitted
+      // field is not the same as false and must not be forged into one.
+      const shareBox = S.qs("#t-share");
+      if (!existing && shareBox) payload.share_with_client = shareBox.checked;
       try {
         if (existing) await S.api("/api/tasks/" + existing.id, { method: "PATCH", body: payload });
         else await S.api("/api/tasks", { method: "POST", body: payload });

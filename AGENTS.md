@@ -2,7 +2,10 @@
 
 > **Read this before touching any file.** It is the operating manual for this repo.
 > Product/feature overview: [README.md](README.md). Deploy detail: [deploy/DEPLOY.md](deploy/DEPLOY.md).
-> Deep map: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Unit file maps + cookbooks:
+> Deep map: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Task-board rebuild plan (analysis +
+> decisions D1–D15 + build order; **Stages 0, 1.1 and 2 are built**):
+> [docs/TASKBOARD_REBUILD.md](docs/TASKBOARD_REBUILD.md).
+> Unit file maps + cookbooks:
 > [backend/README.md](backend/README.md) · [frontend/README.md](frontend/README.md) ·
 > [deploy/README.md](deploy/README.md).
 
@@ -32,6 +35,11 @@ which shares only client-safe fields. The reverse — a card Atrium owns, shown 
 **fully editable here**, writing straight back to Atrium (§2, "The task board holds TWO kinds of
 card"). Nothing internal crosses in that direction either: Atrium's own internal fields stay in
 Atrium's team surfaces.
+
+> **Send to Atrium really publishes now (2026-08-03).** It mints the client's card via
+> `/api/internal/task-add`, stores the returned id in `tasks.atrium_task_id`, and thereafter every
+> change to a client-visible field re-projects. Until this date it set `atrium_visible = True` and
+> **created nothing** — see §5 and [docs/TASKBOARD_REBUILD.md](docs/TASKBOARD_REBUILD.md).
 
 ---
 
@@ -89,7 +97,8 @@ backend/app/
   models/          SQLAlchemy tables, grouped by domain
   schemas/         Pydantic request bodies (single __init__.py)
   routers/         one module per domain — see table below
-  services/        business logic, called by routers
+  services/        business logic, called by routers (task_bridge.py = the Atrium projection;
+                   task_workflow.py = the task lifecycle: completion, park, filing, review)
   utils/           time (Manila), qr, csv_export, passwords
   alembic/         migrations
   seed.py          populates every table with sample data
@@ -110,7 +119,7 @@ deploy/            deploy.ps1, seed-job.ps1, DEPLOY.md
 | `auth.py` | Login (dev/password/Google/SSO), session, `/api/auth/me` |
 | `attendance.py` | Kiosk scan, punches, offline sync, approvals |
 | `gym.py` | Workouts, exercise library, schedule/overrides, cardio, **saved routines** |
-| `tasks.py` | Kanban board, priority (AM-only), Send to Atrium, **editing Atrium's own cards** |
+| `tasks.py` | Kanban board (page `/tasks`), priority (AM-only), Send to Atrium, the lifecycle actions (park/resume/archive/review), **editing Atrium's own cards** |
 | `people.py` | Directory, profiles, QR badges |
 | `leave.py` | Requests, approvals, balances |
 | `development.py` | Holistic development hub — learning, reading, growth |
@@ -169,7 +178,21 @@ Roles, ranked (`ROLE_RANK` in `constants.py`):
 
 ```
 super_admin › admin › account_manager › team_lead › employee / intern
+                                                    viewer  (OFF the ladder — see below)
 ```
+
+🔴 **`viewer` is a read-only seat, not a rung** (added 2026-08-03, decision D8). It **sees everything
+and writes nothing**, which no point on a linear ladder can express — so:
+
+- its **`ROLE_RANK` is the floor (1)**, deliberately, so no `require_min_role` gate can ever hand it
+  a write;
+- every READ surface it needs names it **explicitly** — `constants.VIEW_ALL_ROLES`,
+  `task_perms.can_view` / `can_view_atrium`, and the Monitor rollup's guard;
+- it is **never** in `MANAGER_ROLES` or `ADMIN_ROLES`: those gate approvals, exports and record
+  edits, which are writes.
+
+Adding a task write? Add a case to the `test_viewer_is_refused_every_task_write` parametrisation in
+`tests/test_security_rbac.py`. The audit is the feature; the role is three lines.
 
 **RBAC is enforced at the dependency layer**, so every protected endpoint returns a real
 401/403 — never just hidden UI. Two factories in [security.py](backend/app/security.py):
@@ -275,6 +298,118 @@ Two layers can serve stale JS/CSS; both are handled, don't undo either:
    ([middleware.py](backend/app/middleware.py), pinned by `test_security_headers.py`) plus
    `cache: "no-cache"` on the SW's fetches. ETag revalidation keeps it a cheap 304.
 
+### 🔴 `can_edit` is NOT `can_view`, and `can_edit_atrium` is NOT `can_view_atrium`
+
+Both were bare aliases until 2026-08-03, and both are why no read-only seat could exist (§2.4b):
+anyone who could see a card could rewrite its title, dates, breakdown and notes, and anyone who could
+see a CLIENT card could edit, move, comment on and resolve it. They are separate functions now — keep
+them separate even though the bodies look near-identical, because the seam is where the next role
+goes. `tests/test_security_rbac.py` fails if either is re-aliased.
+
+Two consequences in `routers/tasks.py` worth knowing:
+
+- **`_require_atrium` guards a READ; `_require_atrium_write` guards a WRITE.** Every Atrium branch
+  used to call the first one. Four of the five were writes.
+- **Posting a comment and adding an attachment are WRITES**, and both were gated on `can_view`. A
+  thread you may read is not a thread you may write to.
+
+### 🔴 Naming somebody on a SUB-TASK is delegation — it was ungated until 2026-08-03
+
+`task_perms._assigned` counts **step owners** for visibility, so writing `maintasks[].assignee_id` or
+`subs[].assignee_id` puts the card on that person's board. But `update_task`'s delegation guard
+covered `assigned_to_id` / `assigned_team_id` only, and `maintasks` went through its own branch with
+no assignee check at all — so **an employee who could not reassign a task could still drop any card
+onto any colleague's board by naming them on a sub-task** (docs/TASKBOARD_REBUILD.md §2.4e).
+
+Closed where the field is WRITTEN, not in the UI: `update_task` diffs the breakdown's owner set
+(`maintasks.owner_ids`) and refuses when the change involves anyone but the actor, unless
+`can_reassign`. What stays open on purpose:
+
+- ticking, renaming, adding and deleting steps — that is editing the work, not handing it out;
+- **self-assignment** — picking up an unowned step or dropping your own. Every role may do that, or
+  the board stops working for the people using it.
+
+Pinned by six cases in `tests/test_security_rbac.py`. If you add another way to write the breakdown,
+it needs the same diff — the guard is on the field, and a second writer would walk straight past it.
+
+### 🔴 An employee's board = their own work **plus their team's unowned queue**
+
+Changed 2026-08-03 (§2.4c). Read `task_perms._team_queue` before touching `can_view`: the condition
+is narrow, and both halves are load-bearing.
+
+| state | on a team member's board? | why |
+|---|---|---|
+| assigned to them | yes | it is their work |
+| routed to their team, **owned by nobody** | **yes** | it is the team's triage queue |
+| routed to their team, owned by a colleague | **no** | it is that colleague's job |
+| another team's queue | no | not their business |
+
+Widening this to "every card routed to my team" would re-create the July 2026 regression where an
+intern's board showed seven cards, none of them theirs. Narrowing it back to assignment-only
+re-creates the invisible middle step: AM files it → routes it to Acquisition → *nobody can see it*
+until a lead happens to look. Both directions have already been wrong once.
+
+Two consequences that look like bugs and are not:
+
+- **A card routed away leaves the filer's board.** That is why `GET /api/tasks/filed-by-me` exists —
+  it answers "where did my work go" without putting the card back (§2.4d, D10).
+- **A lead who sends work back can no longer see it** (`POST /{id}/send-back`, D11). The team link is
+  cleared and the filer owns it again. Refusing work stops it being yours.
+
+### 🔴 The Task Board is a PAGE — and `/dashboard?open=<id>` must forward to it forever
+
+The board has moved twice: its own `/tasks` page → embedded in the dashboard (2026-07-26) → its own
+page again (**2026-08-03**, decision D7). Each move stranded a set of notification links, and those
+rows are **permanent**:
+
+| minted | link in `notifications` | what serves it now |
+|---|---|---|
+| before 2026-07-26 | `/tasks?open=<id>` | the real page — arrives home |
+| 2026-07-26 → 08-03 | `/dashboard?open=<id>` | `main.dashboard_page` forwards to `/tasks?…` |
+| since 2026-08-03 | `/tasks?open=<id>` | the real page |
+
+🔴 **`dashboard_page` forwards ONLY when a board param is present** (`open` / `new` / `view`,
+`main._BOARD_PARAMS`). `/dashboard` bare is the landing page for the whole company every morning —
+redirecting it wholesale sends everyone to the task board. And `"/dashboard"` is deliberately NOT in
+`_PAGES`: that loop would register a plain page route and shadow the forward.
+
+The board itself is still the mountable component `TaskBoard.mount(S, root)` in `taskboard.js` —
+`pages/tasks.html` + `tasks.js` are a ~20-line shell around it, and the dashboard keeps only a "my
+work" strip that links in. Bump `sw.js` when you touch any of it.
+
+### 🔴 Opening a task is a WIDE CENTRED MODAL — a docked panel does not fit this board
+
+Two changes on 2026-08-03, in that order. The detail was `S.modal({drawer: true})`, a 560px overlay
+with one long column of fields. It became a **sticky side panel** (split view) so the board stayed
+visible… and that was **reverted the same day**, because the board's dimensions make it impossible:
+
+| | width |
+|---|---|
+| sidebar (`--sidebar-w`) | 248px |
+| 5 columns × 288px + gaps | **1496px** |
+| a 340px panel + gap | 356px |
+| page padding | ~56px |
+| **needed before anything breathes** | **≈2156px** |
+
+The board **already** scrolls horizontally at ~1800px with no panel at all, so the panel squeezed the
+columns *and* cramped itself. Worse: at 340px the `.spread` field grid (`minmax(220px, 1fr)`)
+collapses to **one** column, so eleven label/value pairs stacked up before the work breakdown came
+into view. In `.modal.wide` (920px) that same grid gives four.
+
+So: **`.modal.wide` + a two-column body** (`.tb-cols` — the record left, work + conversation right),
+which is also what makes it shorter than the panel ever was. Do the arithmetic above before
+re-proposing a docked panel.
+
+What survived from the panel attempt, and is worth keeping:
+
+- **The URL carries the open card** (`?open=<id>`, via `replaceState` — not `pushState`, or opening six
+  cards buries the page under six back steps). Same param every notification uses, so a click, a
+  shared link and a notification all land identically, and a refresh keeps the task open.
+- 🔴 **`openTaskModal` re-points the modal's three closers.** `S.modal`'s ✕, overlay-click and Esc all
+  call its *internal* close, so wrapping the returned `close` is not enough — the `?open=` param would
+  survive those three paths and the URL would lie.
+- `confirmDelete` stays its own modal: a destructive confirm SHOULD block.
+
 ### 🔴 Login page flashes for ~2s before redirecting
 
 Caused by the service worker serving a **cached** `/login` over the server's 302. Fixed by not
@@ -327,6 +462,75 @@ validate a new migration by replaying history from scratch — test the single r
 isolation: `alembic stamp <parent>` on an existing (seeded) DB, then `alembic upgrade head`.
 That is how `a9c4e7f2d5b8` was verified.
 
+### 🔴 A status has a LABEL, a KEY and a STAGE — never key anything off the label
+
+Since 2026-08-03 (decision D13). `task_vocab.name` is a **label**: Manage renames it and
+`_rename_in_tasks` cascades the new string onto every task row, so `tasks.status` always holds the
+current label. Two more columns give a status an identity that survives that:
+
+| facet | column | rule |
+|---|---|---|
+| label | `name` | renameable, cascaded onto every task |
+| identity | `vocab_key` | minted once from the first name, **never** re-slugged on rename |
+| client stage | `stage` | which of Atrium's five stages a published card sits in |
+
+Before this, `atrium_tasks.STAGE_BY_STATUS` was a literal dict keyed by the **display string**, so
+renaming a status silently broke the bridge for every client card — a move answered a bare
+400 "Invalid status". Resolve through `task_config.stage_for(db, status)` /
+`status_for_stage(db, stage)`; the literal map survives only as the fallback for a DB seeded before
+the columns existed.
+
+Consequences worth knowing:
+
+- **A new status must declare its stage.** `POST /api/manage/task-vocab` 400s a stage-less status,
+  because a column a client card can never enter is a trap that only surfaces weeks later.
+- **`retire_statuses` targets a STAGE, not a label.** `RETIRED_STATUSES` values are stage keys and
+  the surviving column is resolved at run time. It used to be `constants.TASK_BLOCKED`, so once
+  Blocked was renamed that boot-time sweep would have filed live cards under a status with no
+  column — off the board, no error.
+- **`main._backfill_status_meta()` runs every boot**, which is how the two columns reach rows that
+  already exist in **production** (same reason `retire_statuses` runs there). A *custom* status
+  added before the columns existed gets a key but **no guessed stage** — guessing would file a
+  client's card in the wrong column, so `publish` refuses instead.
+- The DB column is `vocab_key`, not `key`: `_ensure_columns` builds raw `ALTER TABLE … ADD COLUMN`,
+  and a bare `key` is a keyword in enough dialects to not be worth the risk.
+
+Covered by `tests/test_task_status_stages.py`. **Renaming Blocked → Parked is now a one-field edit
+in Manage** — but only after this code is deployed (docs/TASKBOARD_REBUILD.md §5.1).
+
+### 🔴 A task's lifecycle is `services/task_workflow.py` — don't set those columns by hand
+
+Added 2026-08-03 (Stage 2 / M2–M5). Eight columns on `tasks` that look like ordinary fields and are
+not: each is written by a RULE, and setting one directly reproduces the bug it was added to fix.
+
+| Column(s) | Owned by | The rule |
+|---|---|---|
+| `completed_at` | `on_status_change` | Stamped by the TRANSITION into a done column, cleared on the way out. **Never typed, never backfilled.** |
+| `archived` | `archive` / `unarchive` | Only COMPLETED work may be filed. Reopening a filed task un-files it. |
+| `on_hold` + `hold_reason` + `resume_to` | `park` / `resume` | Three coupled fields, one writer — which is why `on_hold`/`hold_reason` stay in `atrium_tasks.ONLY_ATRIUM` even though Sentinel has the columns. A PATCH could otherwise park a card with no memory of where it came from. |
+| `review_state` + `reviewer_id` | `submit_review` / `approve` / `request_changes` | Approval gates entry into a done column and is **spent** by that completion. |
+| `start_date` | ordinary field | The one plain one — and it had to be REMOVED from `ONLY_ATRIUM`, which was silently dropping it from every Sentinel PATCH. |
+
+Four consequences worth knowing before changing anything here:
+
+- **"Is this done?" is `task_config.is_completed(db, status)` — a STAGE test, never `== "Completed"`.**
+  The rollup, the stamp, the review gate and the file button all ask it, which is what makes the
+  Blocked → Parked rename (and a second done column) safe.
+- **Throughput counts `completed_at`, not `updated_at`.** Off `updated_at`, fixing a typo on a task
+  finished in March re-dated its completion to today (docs/TASKBOARD_REBUILD.md §2.4h). A completed
+  row with no stamp is counted on NO day — deliberately. Nothing backfills the column from
+  `updated_at`, because that value is precisely what stopped being trusted.
+- **Filed work is off the board but still counts as shipped.** `_aggregate` drops archived rows from
+  the column counts and the overdue tally, and keeps them in "Done · 7d". Excluding them outright
+  would mean filing a delivered task erased the fact that it shipped.
+- **Filing never touches the client's card.** Park does (the stage moves); `archive` does not. Atrium
+  has no archive in this bridge, and quietly moving or hiding a delivered card rewrites what the
+  client was told.
+
+The review gate is the **only** enforced rule on this board — a card with six open steps still drops
+into Completed (surface, never enforce; §2.2.2 of the plan). It answers **409** with
+`task_workflow.NEEDS_REVIEW`. Covered by `tests/test_task_workflow.py`.
+
 ### 🔴 Removing a board column is TWO moves — deleting the status name alone hides work
 
 Statuses are DB-backed (`task_vocab`, seeded on first boot from `constants.TASK_STATUSES`), and
@@ -348,6 +552,34 @@ a day after Atrium retired the matching stages — so `atrium_tasks.STAGE_BY_STA
 Leaving them mapped after Atrium dropped them was a quiet lie: `for_review` still POSTed 200 while
 Atrium's `_STAGE_ALIASES` filed the card under Blocked, so the two boards disagreed about where the
 client's card actually was.
+
+### 🔴 "Send to Atrium" used to publish NOTHING — and the drawer said it had
+
+Fixed 2026-08-03. `POST /api/tasks/{id}/send-to-atrium` set `atrium_visible = True`, wrote an
+`AtriumApproval` row, logged history — and never called `atrium_tasks.add_task`, the one function
+that creates the card. So the AM got a success toast, the drawer showed "✓ In Atrium", and the
+client's Tasks tab stayed empty **forever**. Every `atrium_visible=True` row predating the fix
+points at a card that was never created.
+
+`services/task_bridge.py` is the projection now, and three rules keep it honest:
+
+1. **A share is only real when `tasks.atrium_task_id` is set.** `atrium_visible` alone is the old
+   lie, so `task_bridge.published()` — and the API's `atrium_shared` field — test the id, never the
+   boolean. `add_task` returns `(task_id, error)` for this reason; a 200 with no id is a FAILURE,
+   because a card we cannot address again would recreate the same lie one row at a time.
+2. **Only `client_safe_fields()` may build a bridge payload** — title, client note, launch date,
+   deliverable URL, and the breakdown reduced to phase names + step text/done. Assignee, team,
+   priority, `service_charge`, `internal_notes`, the creator tag and every step's `dod` never
+   cross. That function is the bridge's field-exposure boundary, the way `serializers.py` is the
+   API's.
+3. **A push failure is LOUD.** It lands in `tasks.atrium_sync_error` (NULL = the client's card is
+   current), the board renders it, and `POST /{id}/atrium-retry` clears it. An edit whose push
+   failed still SAVES — the local write succeeded — but the row admits the client's copy is stale.
+
+`GET /api/tasks/atrium/stale-shares` reports the pre-fix rows; there is deliberately **no bulk
+publish**, because those are live client records and some are months old or already delivered
+(decision D15). Resolve each with a real share or `POST /{id}/atrium-clear-share`.
+Covered by `tests/test_task_publish.py`.
 
 ### 🟡 A board scoped by role still showed other people's work
 

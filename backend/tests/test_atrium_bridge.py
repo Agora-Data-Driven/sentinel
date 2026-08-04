@@ -265,16 +265,34 @@ def test_clearing_a_field_sends_empty_not_null():
 
 
 def test_atrium_only_update_fields_are_dropped_for_a_sentinel_row():
-    """TaskUpdateIn carries a few Atrium-only fields. The Sentinel branch of the update route pops
-    exactly this list before setattr-ing onto the model, so a new one must be added here too."""
+    """TaskUpdateIn carries fields the Sentinel branch of the update route must POP before
+    setattr-ing onto the model. Every one has to be a real TaskUpdateIn field, or the pop is a no-op
+    that silently protects nothing."""
     from app.schemas import TaskUpdateIn
 
     known = set(TaskUpdateIn.model_fields)
     for name in atrium_tasks.ONLY_ATRIUM:
         assert name in known, f"{name} is not a TaskUpdateIn field"
-        assert not hasattr(__import__("app.models", fromlist=["Task"]).Task, name), (
-            f"{name} IS a Task column — it must not be in ONLY_ATRIUM"
-        )
+
+
+def test_start_date_is_no_longer_atrium_only():
+    """🔴 2026-08-03 (M5): `tasks.start_date` exists now, so leaving it in ONLY_ATRIUM would drop
+    the field on every Sentinel edit — saved-looking, never saved."""
+    from app.models import Task
+
+    assert "start_date" not in atrium_tasks.ONLY_ATRIUM
+    assert hasattr(Task, "start_date")
+
+
+def test_the_hold_fields_stay_atrium_only_even_though_sentinel_has_the_columns():
+    """A deliberate exception, not an oversight. Sentinel gained `on_hold` / `hold_reason` with the
+    park feature (M3), but a hold is THREE coupled fields (`+ resume_to`) and only `POST /{id}/park`
+    sets all three. A PATCH could otherwise leave a card on hold with nothing remembering where it
+    came from, so the Sentinel branch keeps dropping them."""
+    from app.models import Task
+
+    assert {"on_hold", "hold_reason"} <= set(atrium_tasks.ONLY_ATRIUM)
+    assert hasattr(Task, "on_hold") and hasattr(Task, "resume_to")
 
 
 def test_detail_maps_onto_the_shape_the_drawer_renders():

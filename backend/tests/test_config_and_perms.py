@@ -50,7 +50,13 @@ def test_service_template_crud_and_seeding_into_task(client, make_user, auth):
 
 
 def test_service_template_defaults_autofill_a_new_task(client, make_user, auth):
-    """A service template can carry a default priority/labels/description that seed onto a new task."""
+    """A service template can carry a default priority/description that seed onto a new task.
+
+    🔴 `default_labels` is NOT one of them any more (decision D14, 2026-08-04): a task's single
+    label is derived from its DEPARTMENT, so a per-template default can only ever be ignored. The
+    column and the API field survive so old rows still read, but nothing applies them — asserted
+    below, and in full in tests/test_task_labels.py.
+    """
     auth(make_user(C.ROLE_SUPER_ADMIN))
     created = client.post("/api/manage/service-templates", json={
         "label": "Urgent Website Fix", "dept": "Development", "content_type": "Website",
@@ -60,21 +66,42 @@ def test_service_template_defaults_autofill_a_new_task(client, make_user, auth):
     })
     assert created.status_code == 200
     body = created.json()
-    assert body["default_priority"] == "Urgent" and body["default_labels"] == ["Dev"]
+    assert body["default_priority"] == "Urgent"
     key = body["key"]
     # catalog exposes the defaults so the form can pre-fill them
     cat = next(t for t in client.get("/api/tasks/templates").json() if t["key"] == key)
-    assert cat["default_priority"] == "Urgent" and cat["default_labels"] == ["Dev"]
+    assert cat["default_priority"] == "Urgent"
     assert cat["default_description"] == "Standard hotfix brief."
     # a manager creating from it (leaving those fields blank) gets the defaults applied
     task = client.post("/api/tasks", json={"title": "Site down", "service_key": key}).json()
     assert task["priority"] == "Urgent"
-    assert task["labels"] == ["Dev"]
     assert task["description"] == "Standard hotfix brief."
+    # The template's stored "Dev" label is inert. No department was routed on this create, so the
+    # task is genuinely unlabelled rather than wearing a retired vocabulary word.
+    assert task["labels"] == []
+
+
+def test_the_label_follows_the_routed_department_not_the_template(client, make_user, auth, make_team):
+    """D14, stated against the service-template path: routing is what labels a task."""
+    auth(make_user(C.ROLE_SUPER_ADMIN))
+    team = make_team("Acquisition")
+    key = client.post("/api/manage/service-templates", json={
+        "label": "Campaign", "dept": "Acquisition",
+        "maintasks": [{"title": "Build", "subs": [{"text": "Step"}]}],
+        "default_labels": ["Ads"],
+    }).json()["key"]
+    task = client.post("/api/tasks", json={
+        "title": "Q3", "service_key": key, "assigned_team_id": team.id,
+    }).json()
+    assert task["labels"] == ["Paid Media"]
 
 
 def test_caller_values_win_over_template_defaults(client, make_user, auth):
-    """Explicit fields on the create request are never overwritten by the template's defaults."""
+    """Explicit fields on the create request are never overwritten by the template's defaults.
+
+    Labels are the ONE exception, and deliberately so (D14): they are derived, so neither the
+    template nor the caller gets a say.
+    """
     auth(make_user(C.ROLE_SUPER_ADMIN))
     key = client.post("/api/manage/service-templates", json={
         "label": "Low Priority Job", "dept": "Lifecycle",
@@ -86,8 +113,8 @@ def test_caller_values_win_over_template_defaults(client, make_user, auth):
         "priority": "Low", "labels": ["Copy"], "description": "my brief",
     }).json()
     assert task["priority"] == "Low"
-    assert task["labels"] == ["Copy"]
     assert task["description"] == "my brief"
+    assert task["labels"] == []      # the caller's "Copy" is ignored; no department was routed
 
 
 # --- Task vocab: create, rename-cascade, delete guard ---------------------

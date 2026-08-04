@@ -112,6 +112,11 @@ def vocab(user: User = Depends(get_current_user), db: Session = Depends(get_db))
     return {
         "roles": [{"value": r, "label": ROLE_LABELS[r]} for r in ALL_ROLES],
         "task_statuses": task_config.statuses(db),
+        # The same statuses with their stable key + Atrium stage. `task_statuses` stays a plain
+        # name list because that is the shape the board's column loop already consumes; this is
+        # the addition, so the UI can say which client stage a column maps to without keying
+        # anything off the label (decision D13).
+        "task_status_meta": task_config.status_meta(db),
         "priorities": task_config.priorities(db),
         "task_labels": task_config.labels(db),
         "colors": {

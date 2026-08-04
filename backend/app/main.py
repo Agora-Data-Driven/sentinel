@@ -124,6 +124,35 @@ def _ensure_columns() -> None:
         # 🔴 Prod deploys don't run alembic, so THIS LIST is the only path this column takes to
         # production. The alembic revision beside it is for local/migrated DBs.
         ("growth_items", "dimension", "VARCHAR(16) DEFAULT 'spiritual'"),
+        # The Atrium projection (2026-08-03). `atrium_task_id` is the card this row projects onto —
+        # before it existed, `atrium_visible` was a flag that referred to nothing and every "shared"
+        # task pointed at a card that was never created. `atrium_sync_error` holds the last failed
+        # push so a stale client card is LOUD instead of silent. Both nullable, so existing rows
+        # read as "never published / nothing failed", which is exactly right.
+        # 🔴 Same rule as the growth column above: this list is the path these take to production.
+        ("tasks", "atrium_task_id", "VARCHAR(64)"),
+        ("tasks", "atrium_sync_error", "TEXT"),
+        # The status key/label split (2026-08-03, decision D13). `name` is a LABEL and may be
+        # renamed; `vocab_key` is the stable identity and `stage` is the Atrium stage a status
+        # projects onto. Without these, `STAGE_BY_STATUS` was keyed by the display string and a
+        # rename in Manage silently broke the bridge for every client card.
+        # (Column is `vocab_key`, not `key` — see the model: bare `key` is a dialect keyword.)
+        ("task_vocab", "vocab_key", "VARCHAR(40)"),
+        ("task_vocab", "stage", "VARCHAR(24)"),
+        # The workflow fields (2026-08-03, Stage 2 / M2–M5): when work starts, when it really
+        # finished, whether it is filed, whether it is parked (and where it came from), and where
+        # its review stands. Alembic e8b3f5c7a2d9 is the local/migrated path; 🔴 THIS LIST is the
+        # one that reaches production.
+        # `BOOLEAN DEFAULT false`, never `DEFAULT 0`: this ALTER also runs against prod POSTGRES,
+        # which rejects an integer default on a boolean column. SQLite accepts `false` too.
+        ("tasks", "start_date", "DATE"),
+        ("tasks", "completed_at", "TIMESTAMP"),
+        ("tasks", "archived", "BOOLEAN DEFAULT false"),
+        ("tasks", "on_hold", "BOOLEAN DEFAULT false"),
+        ("tasks", "hold_reason", "TEXT"),
+        ("tasks", "resume_to", "VARCHAR(32)"),
+        ("tasks", "review_state", "VARCHAR(20)"),
+        ("tasks", "reviewer_id", "INTEGER"),
     ]
     try:
         insp = inspect(engine)
@@ -152,6 +181,27 @@ def _ensure_columns() -> None:
         print(f"[sentinel] column ensure skipped: {exc}")
 
 
+def _backfill_status_meta() -> None:
+    """Give every existing status its key + stage on boot (decision D13).
+
+    🔴 This is how the two new task_vocab columns reach PRODUCTION for rows that already exist —
+    the same reason `retire_statuses` runs every boot. Without it a live board would hold statuses
+    with no stage and the bridge would fall back to the legacy label-keyed map for every card.
+    """
+    from .database import SessionLocal
+    from .services import task_config
+
+    db = SessionLocal()
+    try:
+        fixed = task_config.backfill_status_meta(db)
+        if fixed:
+            print(f"[sentinel] status meta backfilled ({fixed} field(s))")
+    except Exception as exc:            # never let a backfill crash startup
+        print(f"[sentinel] status meta backfill skipped: {exc}")
+    finally:
+        db.close()
+
+
 def _seed_config() -> None:
     """One-time: populate the editable config tables from the code defaults so a fresh (or
     pre-feature) DB keeps today's statuses/labels/priorities + service recipes, now editable in the
@@ -175,9 +225,16 @@ def _seed_config() -> None:
             db.commit()
             print("[sentinel] seeded shift templates")
         if not db.execute(select(func.count(TaskVocabItem.id))).scalar():
+            # name -> (stable key, Atrium stage) for the shipped statuses (task_config.STATUS_SEED
+            # is the one definition; backfill_status_meta heals existing boards with the same map).
+            status_meta = {n: (k, st) for n, k, st in task_config.STATUS_SEED}
             for kind, items in task_config.SEED.items():
                 for i, (name, color) in enumerate(items):
-                    db.add(TaskVocabItem(kind=kind, name=name, color=color, sort_order=i))
+                    # Statuses carry their stable key + Atrium stage from the moment they are
+                    # seeded (D13); labels/priorities have neither concept.
+                    meta = status_meta.get(name, (None, None)) if kind == "status" else (None, None)
+                    db.add(TaskVocabItem(kind=kind, name=name, color=color, sort_order=i,
+                                         key=meta[0], stage=meta[1]))
             db.commit()
             print("[sentinel] seeded task vocab (statuses/labels/priorities)")
         if not db.execute(select(func.count(ServiceTemplate.id))).scalar():
@@ -185,6 +242,21 @@ def _seed_config() -> None:
                 db.add(ServiceTemplate(**row))
             db.commit()
             print("[sentinel] seeded service templates")
+        # 🔴 Also NOT an "only if empty" seed (WP 5.3). A service added to SEED_TEMPLATES has to
+        # reach boards that already have services — which is all of them — or it exists only in
+        # code and has to be retyped in Manage per environment. Insert-only, matched by key, so a
+        # board's own edits and deliberate deletions are never reverted.
+        new_services = task_templates.sync_seed(db)
+        if new_services:
+            print(f"[sentinel] added shipped service templates: {', '.join(new_services)}")
+        # 🔴 Labels are DERIVED from the department (D14), so unlike everything above this is NOT
+        # an "only if the table is empty" seed — it must run on EVERY boot. The boards that carry
+        # the retired Design/Copy/Ads/SEO/Dev vocabulary are precisely the non-empty ones, and a
+        # deploy is the only moment we get to heal them. Idempotent and silent when there is
+        # nothing to do.
+        changed = task_config.reconcile_labels(db)
+        if any(changed.values()):
+            print(f"[sentinel] reconciled labels from departments: {changed}")
         # A status removed from the code defaults still has a seeded DB row overriding them, so it
         # keeps its board column until that row goes. Idempotent; this is what lands the change in
         # prod, where deploys don't run Alembic. See task_config.RETIRED_STATUSES.
@@ -230,6 +302,7 @@ def _startup() -> None:
     create_all()
     _ensure_columns()
     _seed_config()
+    _backfill_status_meta()
     _ensure_default_shift()
     _startup_safeguards()
 
@@ -398,7 +471,9 @@ def login_page(request: Request, db: Session = Depends(get_db)):
 
 
 _PAGES = {
-    "/dashboard": "dashboard.html",
+    # NB: "/dashboard" is NOT here — it needs the board-deep-link forward, so it has its own route
+    # below (`dashboard_page`). Adding it back here would shadow that and break every
+    # `/dashboard?open=<id>` notification minted between 2026-07-26 and 2026-08-03.
     "/attendance": "attendance.html",
     "/approvals": "approvals.html",
     "/gym": "gym.html",
@@ -416,6 +491,9 @@ _PAGES = {
     "/settings": "settings.html",
     "/manage": "manage.html",
     "/payroll": "payroll.html",
+    # The Task Board got its own page back on 2026-08-03 (decision D7). It was embedded in the
+    # dashboard from 2026-07-26 until then; `/dashboard?open=<id>` still forwards here, see below.
+    "/tasks": "tasks.html",
     "/kiosk": "kiosk.html",
     "/scanner": "scanner.html",
 }
@@ -429,13 +507,24 @@ for _route, _file in _PAGES.items():
     )
 
 
-@app.get("/tasks", include_in_schema=False)
-def tasks_redirect(request: Request):
-    """The Task Board is embedded in the dashboard now (2026-07-26), not a page of its own.
+# Board deep-link params. A notification/palette link carrying one of these means "open the board",
+# and the board lives at /tasks again — so /dashboard has to hand them over.
+_BOARD_PARAMS = ("open", "new", "view")
 
-    Notification links minted before the move (`/tasks?open=<id>`) live in the database, so this
-    route must keep working forever: forward to /dashboard with the query string intact — the
-    embedded board handles the same ?open= / ?new= / ?view= deep-links there.
+
+@app.get("/dashboard", include_in_schema=False)
+def dashboard_page(request: Request):
+    """The dashboard — but a BOARD deep-link is forwarded to /tasks, query string intact.
+
+    🔴 The board moved out of the dashboard on 2026-08-03 (decision D7), and it was embedded here
+    from 2026-07-26 until then. Every task notification minted in that window is a row in
+    `notifications` reading `/dashboard?open=<id>`, and those rows are permanent — so this route must
+    forward them forever, exactly as `/tasks` forwarded the other way for the four months before it.
+
+    It forwards ONLY when a board param is present. `/dashboard` on its own is the landing page for
+    everyone, every day; redirecting it wholesale would send the whole company to the task board.
     """
-    q = request.url.query
-    return RedirectResponse(url="/dashboard" + (f"?{q}" if q else ""))
+    if any(p in request.query_params for p in _BOARD_PARAMS):
+        q = request.url.query
+        return RedirectResponse(url="/tasks" + (f"?{q}" if q else ""))
+    return _page("dashboard.html")

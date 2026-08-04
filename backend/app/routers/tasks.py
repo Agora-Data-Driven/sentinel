@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from datetime import timedelta
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -18,14 +18,16 @@ from ..events import broker
 from ..constants import (
     NOTIF_TASK_ASSIGNED,
     ROLE_TEAM_LEAD,
-    TASK_COMPLETED,
+    label_for_department,
 )
 from ..database import get_db
-from ..models import AtriumApproval, Client, Task, TaskComment, TaskHistory, User
+from ..models import AtriumApproval, Client, Task, TaskComment, TaskHistory, Team, User
 from ..schemas import (
     CommentIn,
     TaskCreateIn,
+    TaskParkIn,
     TaskPriorityIn,
+    TaskReviewIn,
     TaskStatusIn,
     TaskUpdateIn,
 )
@@ -35,7 +37,7 @@ from ..services import atrium_tasks
 from ..services import audit
 from ..services import maintasks as maintasks_svc
 from ..services import notifications as notif
-from ..services import task_config, task_perms, task_templates
+from ..services import task_bridge, task_config, task_perms, task_templates, task_workflow
 from ..utils.time import today_ph, to_ph, utcnow
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
@@ -43,6 +45,29 @@ router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 AM_PLUS = ("account_manager", "admin", "super_admin")
 _NOT_FOUND = "Task not found"
 _FORBIDDEN = "Not permitted"
+
+
+def _loads_labels(raw: str | None) -> list[str]:
+    try:
+        val = json.loads(raw or "[]")
+    except (ValueError, TypeError):
+        return []
+    return [str(x) for x in val] if isinstance(val, list) else []
+
+
+def _derived_labels(db: Session, team_id: int | None) -> list[str]:
+    """The task's label list, computed from its department (decision D14).
+
+    Always zero or one entry. Nobody picks a label any more: the old free vocabulary
+    (Design/Copy/Ads/SEO/Dev) was a second taxonomy that duplicated the department and drifted from
+    Atrium's, which derives the client-visible label the same way. An unrouted task gets NO label —
+    inventing one would file untriaged work into a real bucket.
+    """
+    if not team_id:
+        return []
+    team = db.get(Team, team_id)
+    lbl = label_for_department(team.name if team else None)
+    return [lbl] if lbl else []
 
 
 def _log(db: Session, task_id: int, actor_id: int, field: str, old, new) -> None:
@@ -64,10 +89,23 @@ def _broadcast(action: str, task: Task, actor_id: int) -> None:
 
 
 def _require_atrium(user: User) -> None:
-    """Guard every Atrium-card branch. Scoping the board LIST (task_perms.can_view_atrium) would be
-    theatre if the id still opened and edited the card for someone the board hides it from — RBAC
+    """Guard a READ of an Atrium-owned card. Scoping the board LIST (task_perms.can_view_atrium)
+    would be theatre if the id still opened the card for someone the board hides it from — RBAC
     belongs on the endpoint, not in the rendering (AGENTS.md §3)."""
     if not task_perms.can_view_atrium(user):
+        raise HTTPException(status_code=403, detail=_FORBIDDEN)
+
+
+def _require_atrium_write(user: User) -> None:
+    """Guard a WRITE to an Atrium-owned card.
+
+    🔴 Every Atrium branch — read and write alike — used to call `_require_atrium`, i.e. "can you see
+    client cards?". That was fine while seeing implied editing, and became a hole the moment a
+    read-only seat existed (decision D8): a viewer could edit, move, comment on and resolve client
+    work. `can_edit_atrium` is no longer an alias of `can_view_atrium`; this is where the difference
+    is enforced.
+    """
+    if not task_perms.can_edit_atrium(user):
         raise HTTPException(status_code=403, detail=_FORBIDDEN)
 
 
@@ -109,10 +147,16 @@ def list_tasks(
                                                 "'Unassigned' choice in the assignee filter)."),
     status: str | None = Query(None),
     priority: str | None = Query(None),
+    archived: bool = Query(False, description="Past work instead of the live board: filed tasks "
+                                              "ONLY. The board never mixes the two."),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     q = select(Task).order_by(Task.updated_at.desc())
+    # Filed work is a SEPARATE list, not extra cards on the board (M4). Left in the Completed
+    # column, finished services turn it into a graveyard and every count stops meaning anything —
+    # so the default board excludes them and `?archived=1` is the Past work drawer.
+    q = q.where(Task.archived.is_(True)) if archived else q.where(Task.archived.is_(False))
     if client_id:
         q = q.where(Task.client_id == client_id)
     if team_id:
@@ -136,7 +180,9 @@ def list_tasks(
     # off or Atrium is unreachable, the board still renders Sentinel's own rows.
     # MANAGERS ONLY (task_perms.can_view_atrium): these cards belong to no Sentinel user, so on an
     # employee's/intern's board -- which shows the work assigned to them -- they are pure noise.
-    if atrium_tasks.enabled() and task_perms.can_view_atrium(user):
+    # ...and never on the Past work list: filing is a SENTINEL act (tasks.archived), so an Atrium
+    # card cannot be filed and must not pad a list that claims to show what was.
+    if atrium_tasks.enabled() and task_perms.can_view_atrium(user) and not archived:
         # Resolve each Atrium workspace to its Sentinel Client so the board's client filter and
         # client name work on Atrium cards too: Client.atrium_client_id is the explicit bridge,
         # with an unambiguous name match as a fallback while those links are still unset.
@@ -160,20 +206,39 @@ def list_tasks(
     return cards
 
 
-def _aggregate(pts: list[Task], today, week_start, all_statuses) -> dict:
-    """Roll a single person's tasks into the Monitor row's counts."""
+def _aggregate(pts: list[Task], today, week_start, all_statuses, done_statuses: set[str]) -> dict:
+    """Roll a single person's tasks into the Monitor row's counts.
+
+    Two things this gets right that it used to get wrong:
+
+    * **"Done" is decided by STAGE, not by the label `Completed`** (`done_statuses` comes from
+      `task_config.is_completed`), so renaming the column — or adding a second done column — keeps
+      the numbers honest.
+    * **Throughput counts `completed_at`, not `updated_at`** (§2.4h). Off `updated_at`, fixing a
+      typo on a task finished in March re-dated its completion to today and inflated this week.
+      Rows completed before the column existed have no stamp and are simply not counted, which is
+      the honest answer — better than counting them on whatever day someone last touched them.
+
+    Filed work (`archived`) is off the plate, so it adds no column count and no overdue — but it
+    STILL counts toward this week's throughput. Filing a shipped task must not erase the fact that
+    it shipped, which is what excluding archived rows outright would do.
+    """
     counts = dict.fromkeys(all_statuses, 0)
-    overdue = completed_week = 0
+    overdue = completed_week = live = 0
     for t in pts:
-        counts[t.status] = counts.get(t.status, 0) + 1
-        if t.status == TASK_COMPLETED:
-            if t.updated_at and to_ph(t.updated_at).date() >= week_start:
+        if t.status in done_statuses:
+            done_on = getattr(t, "completed_at", None)
+            if done_on and to_ph(done_on).date() >= week_start:
                 completed_week += 1
-        elif t.due_date and t.due_date < today:
+        if getattr(t, "archived", False):
+            continue
+        live += 1
+        counts[t.status] = counts.get(t.status, 0) + 1
+        if t.status not in done_statuses and t.due_date and t.due_date < today:
             overdue += 1
-    open_total = sum(n for st, n in counts.items() if st != TASK_COMPLETED)
+    open_total = sum(n for st, n in counts.items() if st not in done_statuses)
     return {"counts": counts, "overdue": overdue, "open_total": open_total,
-            "completed_week": completed_week, "total": len(pts)}
+            "completed_week": completed_week, "total": live}
 
 
 @router.get("/summary")
@@ -184,7 +249,10 @@ def employee_summary(user: User = Depends(get_current_user), db: Session = Depen
     a team lead sees only their own team. Employees / interns get a 403 — monitoring is a
     management surface. Declared BEFORE `/{task_id}` so "summary" isn't parsed as a task id.
     """
-    if not is_manager(user):
+    # A READ, so the read-only seat belongs here — monitoring is the entire point of that seat (D8).
+    # `is_manager` alone would have excluded it, which is the shape of mistake §5.3 warns about:
+    # a viewer must be added to every read surface EXPLICITLY, because its rank grants nothing.
+    if not (is_manager(user) or task_perms.is_read_only(user)):
         raise HTTPException(status_code=403, detail="Only managers can monitor the team")
 
     # Who this manager may see: all active staff, or (team lead) just their own team.
@@ -193,6 +261,8 @@ def employee_summary(user: User = Depends(get_current_user), db: Session = Depen
         people = [p for p in people if p.team_id == user.team_id]
     people = sorted(people, key=lambda p: (p.name or "").lower())
 
+    # Filed rows are fetched too: they are off people's plates but they are exactly what "Done · 7d"
+    # is counting. `_aggregate` draws that line, not this query.
     tasks = db.execute(select(Task)).scalars().all()
     by_assignee: dict[int, list[Task]] = {}
     for t in tasks:
@@ -202,7 +272,9 @@ def employee_summary(user: User = Depends(get_current_user), db: Session = Depen
     today = today_ph()
     week_start = today - timedelta(days=7)
     all_statuses = task_config.statuses(db)
-    rows = [{"user": user_public(p), **_aggregate(by_assignee.get(p.id, []), today, week_start, all_statuses)}
+    done_statuses = {s for s in all_statuses if task_config.is_completed(db, s)}
+    rows = [{"user": user_public(p),
+             **_aggregate(by_assignee.get(p.id, []), today, week_start, all_statuses, done_statuses)}
             for p in people]
     # Heaviest / most-behind first is what a manager wants to see.
     rows.sort(key=lambda r: (r["overdue"], r["open_total"]), reverse=True)
@@ -213,6 +285,60 @@ def employee_summary(user: User = Depends(get_current_user), db: Session = Depen
 def list_templates(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Service-template catalog for the New Task picker (DB-backed). Declared before /{task_id}."""
     return task_templates.catalog(db)
+
+
+@router.get("/filed-by-me")
+def filed_by_me(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Where the work I raised for someone else ended up (§2.4d, decision D10).
+
+    🔴 This list exists because of a deliberate gap, not to fill a hole in `can_view`. Routing a card
+    to another team takes it OFF the filer's board — the creator tag stopped granting board
+    visibility in July 2026, and reversing that is what put other people's work back on an intern's
+    board. But "I filed it and now I can't find it" is its own bug, so the answer is a SEPARATE list
+    that answers only "where did it go": team, current owner or *awaiting triage*, status, client.
+
+    No internal fields. Not priority, not the charge, not the internal notes, not the breakdown — the
+    filer may have no business seeing those on a card that is now another department's.
+
+    Declared BEFORE `GET /{task_id}` on purpose: FastAPI matches in declaration order, so a
+    single-segment literal written after it is swallowed and answers 404/422 instead (AGENTS.md §5,
+    the same trap `/api/gym/routines` hit).
+    """
+    rows = db.execute(
+        select(Task).where(Task.created_by_id == user.id, Task.archived.is_(False))
+        .order_by(Task.updated_at.desc())
+    ).scalars().all()
+    out = []
+    for t in rows:
+        # A refusal is the one thing the filer MUST be told, and it lives in history rather than in
+        # two columns on `tasks` (D11). Internal means "never crosses to the client", not "hidden
+        # from the person whose card it is".
+        bounce = db.execute(
+            select(TaskHistory).where(TaskHistory.task_id == t.id,
+                                      TaskHistory.field_changed == "sent_back")
+            .order_by(TaskHistory.id.desc())
+        ).scalars().first()
+        # Only work that LEFT me — a card I raised and still hold is just my work, already on my
+        # board. The ONE exception is a card that was sent BACK to me: a bounce re-assigns it to me,
+        # so the plain filter would hide the very row that explains why it returned.
+        if t.assigned_to_id == user.id and not bounce:
+            continue
+        team = db.get(Team, t.assigned_team_id) if t.assigned_team_id else None
+        owner = db.get(User, t.assigned_to_id) if t.assigned_to_id else None
+        client = db.get(Client, t.client_id) if t.client_id else None
+        out.append({
+            "id": t.id,
+            "title": t.title,
+            "status": t.status,
+            "client_name": client.name if client else None,
+            "team_name": team.name if team else None,
+            "owner_name": owner.name if owner else None,
+            "awaiting_triage": t.assigned_to_id is None and t.assigned_team_id is not None,
+            "on_hold": bool(t.on_hold),
+            "sent_back_reason": bounce.new_value if bounce else None,
+            "updated_at": to_ph(t.updated_at).isoformat() if t.updated_at else None,
+        })
+    return out
 
 
 @router.get("/{task_id}")
@@ -239,16 +365,29 @@ def get_task(task_id: str, user: User = Depends(get_current_user), db: Session =
 
 @router.post("")
 def create_task(payload: TaskCreateIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    # Any staff member can create a task (Sentinel is an internal, employee-facing tool).
+    # Any staff member can create a task (Sentinel is an internal, employee-facing tool) — except the
+    # read-only seat, which by definition raises nothing (D8). Checked here because there is no task
+    # yet for a `task_perms` predicate to take.
+    if task_perms.is_read_only(user):
+        raise HTTPException(status_code=403, detail="A viewer account can't create tasks.")
     if payload.status not in task_config.statuses(db):
         raise HTTPException(status_code=400, detail="Invalid status")
     is_am = user.role == "account_manager"
     may_delegate = user.role in task_perms.FULL or user.role == ROLE_TEAM_LEAD
-    # Employees can't delegate: whatever they create is theirs — auto-assigned to them (a quick-added
-    # card lands straight on their own board; picking someone else is a lead/manager action).
+    # 🔴 A non-delegating role may route to a TEAM, never to a person (decision D10).
+    #
+    # Naming a colleague is delegation and stays a lead/manager act. But filing into a DEPARTMENT's
+    # queue is not: nobody is made responsible, the team's leads are notified, and the card is owned
+    # by no one until they triage it. An Acquisition employee who spots a website bug should not have
+    # to own the fix — before this they did, because everything they created was force-assigned to
+    # them (§2.4d).
+    #
+    # So: a team named → routed and UNASSIGNED (the team's queue, visible via
+    # task_perms._team_queue). No team → self-assigned, exactly as before. Either way the person
+    # picker is ignored for these roles, so they can never put work on a named colleague.
     assigned_to_id = payload.assigned_to_id
     if not may_delegate:
-        assigned_to_id = user.id
+        assigned_to_id = None if payload.assigned_team_id else user.id
     # Priority is honored from a manager (AM/admin/super) or a team lead; others default to Medium.
     priority = payload.priority if may_delegate and payload.priority in task_config.priorities(db) else "Medium"
     # Service template: seed the two-level breakdown (+ content type) from the picked recipe unless
@@ -262,12 +401,10 @@ def create_task(payload: TaskCreateIn, user: User = Depends(get_current_user), d
     # same role gate as a manually chosen one; labels/description only apply when none were supplied.
     if tpl and may_delegate and priority == "Medium" and tpl.default_priority in task_config.priorities(db):
         priority = tpl.default_priority
-    labels = payload.labels
-    if tpl and not labels:
-        try:
-            labels = json.loads(tpl.default_labels_json or "[]")
-        except (ValueError, TypeError):
-            labels = []
+    # 🔴 The label is DERIVED from the department, never supplied (decision D14). Anything the
+    # caller sent in `payload.labels` — and the template's `default_labels_json` — is ignored:
+    # one label, always right, no manual step, and the same rule Atrium applies to the same card.
+    labels = _derived_labels(db, payload.assigned_team_id)
     description = payload.description or (tpl.default_description if tpl else None)
     task = Task(
         title=payload.title,
@@ -283,6 +420,7 @@ def create_task(payload: TaskCreateIn, user: User = Depends(get_current_user), d
         priority=priority,
         status=payload.status,
         due_date=payload.due_date,
+        start_date=payload.start_date,
         service_charge=payload.service_charge,  # already normalized by the schema (blank/zero → None)
         labels_json=json.dumps(labels),
         maintasks_json=maintasks_svc.dumps(maintasks),  # legacy checklist_json no longer written
@@ -296,9 +434,34 @@ def create_task(payload: TaskCreateIn, user: User = Depends(get_current_user), d
     db.commit()
     audit.record(db, actor_id=user.id, table_name="tasks", record_id=task.id, action="create",
                  new={"title": task.title, "status": task.status})
+    # SHARE ON CREATE (decision D6): a client-facing service is shared from day one, so the client
+    # watches it cross the board instead of first seeing it when it is already finished. Default ON
+    # whenever the task HAS a client and the actor is allowed to bridge; `share_with_client=False`
+    # opts a single task out.
+    #
+    # 🔴 Failure is reported, never raised. The task is already committed and is perfectly valid
+    # unshared — turning a bridge outage into a failed create would lose the AM's typing. The
+    # reason lands on `atrium_sync_error`, the drawer shows the stale pill, and Retry is one click
+    # (the same contract `push` uses on edit — §4). This is only safe because 0.1/0.2 made
+    # publishing real: before them it would have set a flag pointing at nothing.
+    share = payload.share_with_client
+    if share is None:
+        share = task.client_id is not None
+    if share and task.client_id is not None and task_perms.can_bridge(user):
+        ok, err = task_bridge.publish(db, task, user)
+        db.commit()
+        if ok:
+            audit.record(db, actor_id=user.id, table_name="tasks", record_id=task.id,
+                         action="share-on-create", new=atrium_payload(task, db))
+
     if task.assigned_to_id:
         notif.notify(db, user_id=task.assigned_to_id, type=NOTIF_TASK_ASSIGNED,
-                     title=f"New task assigned: {task.title}", link=f"/dashboard?open={task.id}")
+                     title=f"New task assigned: {task.title}", link=f"/tasks?open={task.id}")
+    elif task.assigned_team_id:
+        # Filed into a team's queue with no owner — the team's leads hear about it (D9). Without this
+        # the card is invisible work: routed-but-unassigned is a real state, not a gap (§2.4c-bis).
+        _notify_team_routed(db, task, user)
+        db.commit()
     _broadcast("created", task, user.id)
     return task_detail(task, db)
 
@@ -310,7 +473,7 @@ def update_task(task_id: str, payload: TaskUpdateIn, user: User = Depends(get_cu
     # same two decisions Sentinel reserves for managers -- client visibility and priority.
     a_key, a_task = atrium_tasks.split_id(str(task_id))
     if a_key:
-        _require_atrium(user)
+        _require_atrium_write(user)
         data = payload.model_dump(exclude_unset=True)
         if data.get("atrium_visible") is not None and not task_perms.can_bridge(user):
             raise HTTPException(status_code=403, detail="Only managers can change what the client sees")
@@ -343,11 +506,29 @@ def update_task(task_id: str, payload: TaskUpdateIn, user: User = Depends(get_cu
             raise HTTPException(status_code=403, detail="Only a team lead or manager can reassign a task")
     if "priority" in data and not (task_perms.can_prioritize(user, task) and data["priority"] in task_config.priorities(db)):
         data.pop("priority")
+    # 🔴 STEP-LEVEL ASSIGNMENT IS DELEGATION TOO (§2.4e). Until 2026-08-03 the two guards above
+    # covered `assigned_to_id`/`assigned_team_id` only, while `maintasks` went through its own branch
+    # below with NO assignee check — so an employee who cannot reassign a task could still put any
+    # card on any colleague's board by naming them on a sub-task, because `task_perms._assigned`
+    # counts step owners for visibility. Gated where the field is WRITTEN, not in the UI.
+    #
+    # Ticking a step, renaming it, adding or deleting one all stay open to anyone who can edit — only
+    # a change to WHO OWNS a phase or step is delegation. A change that involves nobody but the actor
+    # (picking up an unowned step, dropping their own) is self-assignment, which every role may do.
+    if "maintasks" in data and not task_perms.can_reassign(user, task):
+        before = maintasks_svc.owner_ids(
+            maintasks_svc.normalize(task.maintasks_json, task.checklist_json))
+        after = maintasks_svc.owner_ids(maintasks_svc.normalize(data["maintasks"] or []))
+        if (before ^ after) - {user.id}:
+            raise HTTPException(
+                status_code=403,
+                detail="Only a team lead or manager can assign a step to someone else.")
 
     prev_assignee = task.assigned_to_id
+    prev_team = task.assigned_team_id
     for field, value in data.items():
         if field == "labels":
-            task.labels_json = json.dumps(value or [])
+            continue  # derived from the department (D14) — see the recompute below
         elif field == "checklist":
             continue  # legacy flat list is no longer written; the breakdown lives in maintasks
         elif field == "maintasks":
@@ -358,12 +539,52 @@ def update_task(task_id: str, payload: TaskUpdateIn, user: User = Depends(get_cu
             if old != value:
                 _log(db, task.id, user.id, field, old, value)
             setattr(task, field, value)
+    # The label FOLLOWS the department (D14). Recomputed after the field loop so it reacts to a
+    # team change in this very PATCH, and logged like any other field so the history explains why
+    # the chip changed. Re-routing a task is the only thing that can relabel it.
+    if task.assigned_team_id != prev_team:
+        new_labels = _derived_labels(db, task.assigned_team_id)
+        old_labels = _loads_labels(task.labels_json)
+        if old_labels != new_labels:
+            _log(db, task.id, user.id, "labels", ", ".join(old_labels) or None,
+                 ", ".join(new_labels) or None)
+            task.labels_json = json.dumps(new_labels)
+            data["labels"] = new_labels   # so the projection below sees it as a client-view change
+
+    # PROJECTION (docs/TASKBOARD_REBUILD.md §4): Sentinel owns every field; a published task's
+    # client-safe subset is re-sent whenever one of those fields moved. A failure is recorded on
+    # the row (atrium_sync_error) rather than raised — the edit itself succeeded, and a stale
+    # client card is surfaced + retryable, never silent.
+    if task_bridge.published(task) and task_bridge.touches_client_view(data):
+        task_bridge.push(db, task, user)
     db.commit()
     if task.assigned_to_id and task.assigned_to_id != prev_assignee:
         notif.notify(db, user_id=task.assigned_to_id, type=NOTIF_TASK_ASSIGNED,
-                     title=f"Task assigned to you: {task.title}", link=f"/dashboard?open={task.id}")
+                     title=f"Task assigned to you: {task.title}", link=f"/tasks?open={task.id}")
+    # 🔴 ROUTING TO A TEAM USED TO NOTIFY NOBODY (§2.4c-bis, decision D9). Only `assigned_to_id` was
+    # ever notified, so the natural flow — AM files it, routes it to Acquisition, the lead delegates —
+    # left the card sitting in a queue waiting for somebody to happen to look. `notify_managers` finds
+    # the leads by QUERY (role team_lead + matching team_id) plus admins, which is why no
+    # `Team.lead_id` column is needed and why zero leads and three leads both work.
+    if task.assigned_team_id and task.assigned_team_id != prev_team:
+        _notify_team_routed(db, task, user)
+        db.commit()          # notify_managers is called with commit=False — this is what persists it
     _broadcast("updated", task, user.id)
     return task_detail(task, db)
+
+
+def _notify_team_routed(db: Session, task: Task, actor: User) -> None:
+    """Tell a team that work has landed in their queue. Silent when it is already owned — a card with
+    an assignee is somebody's job, not a queue item, and that person was notified directly."""
+    if task.assigned_to_id:
+        return
+    team = db.get(Team, task.assigned_team_id)
+    notif.notify_managers(
+        db, type=NOTIF_TASK_ASSIGNED,
+        title=f"New work for {team.name if team else 'your team'}: {task.title}",
+        body=f"Routed by {actor.name or 'a teammate'} and waiting for triage — nobody owns it yet.",
+        link=f"/tasks?open={task.id}", team_id=task.assigned_team_id, commit=False,
+    )
 
 
 @router.delete("/{task_id}")
@@ -403,10 +624,14 @@ def move_status(task_id: str, payload: TaskStatusIn, user: User = Depends(get_cu
     # (open sub-tasks / unresolved change requests block completion) are surfaced verbatim.
     a_key, a_task = atrium_tasks.split_id(str(task_id))
     if a_key:
-        _require_atrium(user)
-        stage = atrium_tasks.STAGE_BY_STATUS.get(payload.status)
+        _require_atrium_write(user)
+        # Resolved through task_vocab so a RENAMED status still moves the client's card. The old
+        # label-keyed literal is why renaming a status used to 400 every move (§2.2.1).
+        stage = task_config.stage_for(db, payload.status)
         if not stage:
-            raise HTTPException(status_code=400, detail="Invalid status")
+            raise HTTPException(
+                status_code=400,
+                detail=f'"{payload.status}" has no Atrium stage, so a client card cannot move into it.')
         ok, err = atrium_tasks.move_task(a_key, a_task, stage, actor=user.email or "")
         if not ok:
             raise HTTPException(status_code=409, detail=err)
@@ -424,8 +649,20 @@ def move_status(task_id: str, payload: TaskStatusIn, user: User = Depends(get_cu
     old = task.status
     if old == payload.status:
         return task_detail(task, db)
+    # 🔴 The ONE enforced gate on this board (decision D5): nothing reaches a done column without a
+    # team lead's approval. Everything else is surfaced, not enforced — a card with six open steps
+    # still drops into Completed — but "Done" is the claim the whole company reads off this board,
+    # and it used to be one person's unilateral drag.
+    if task_workflow.review_blocks(db, task, payload.status):
+        raise HTTPException(status_code=409, detail=task_workflow.NEEDS_REVIEW)
     task.status = payload.status
     _log(db, task.id, user.id, "status", old, payload.status)
+    # Stamps completion, un-files a reopened card, spends the approval, and ends a hold. One helper
+    # so a drag, a park, a resume and a PATCH all leave the row in the same shape.
+    task_workflow.on_status_change(db, task, old, payload.status, user)
+    # The client watches the card cross their board, so a move on a published task moves theirs.
+    if task_bridge.published(task):
+        task_bridge.push_stage(db, task, user)
     db.commit()
     audit.record(db, actor_id=user.id, table_name="tasks", record_id=task.id, action="move",
                  old={"status": old}, new={"status": payload.status})
@@ -466,6 +703,179 @@ def set_priority(task_id: str, payload: TaskPriorityIn, user: User = Depends(get
     return task_detail(task, db)
 
 
+# --- The lifecycle actions: park / resume / file / review (Stage 2) -----------------------------
+# All four are Sentinel-only. An Atrium-owned card has no local row to hold `on_hold`, `archived` or
+# `review_state`, and inventing a projection of them into a store nobody may write is exactly the
+# split-ownership model D1/D2 removed. They 400 with a reason instead of pretending.
+
+def _own_row(db: Session, task_id: str, user: User, permit, what: str) -> Task:
+    """Resolve a SENTINEL task for a lifecycle action, or raise the right error."""
+    a_key, _ = atrium_tasks.split_id(str(task_id))
+    if a_key:
+        raise HTTPException(status_code=400,
+                            detail=f"A client card Atrium owns can't be {what} from here.")
+    task = _resolve_task(db, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail=_NOT_FOUND)
+    if not permit(user, task):
+        raise HTTPException(status_code=403, detail=_FORBIDDEN)
+    return task
+
+
+def _after_move(db: Session, task: Task, user: User, action: str) -> dict:
+    """Commit a lifecycle change, project the move, broadcast it, and answer with the task.
+
+    The push is fire-and-record like every other projection: the local change SAVED, and a failure
+    lands in `atrium_sync_error` so the client's stale copy is loud and retryable (§4, invariant 2).
+    """
+    if task_bridge.published(task):
+        task_bridge.push_stage(db, task, user)
+    db.commit()
+    audit.record(db, actor_id=user.id, table_name="tasks", record_id=task.id, action=action,
+                 new={"status": task.status})
+    _broadcast(action, task, user.id)
+    return task_detail(task, db)
+
+
+@router.post("/{task_id}/park")
+def park_task(task_id: str, payload: TaskParkIn, user: User = Depends(get_current_user),
+              db: Session = Depends(get_db)):
+    """Pause the work in the blocked column, remembering the column it came from (M3).
+
+    The reason is INTERNAL and never crosses the bridge: the client's card shows the stage it is
+    parked in, never that we are waiting on their invoice.
+    """
+    task = _own_row(db, task_id, user, task_perms.can_move, "parked")
+    _status, err = task_workflow.park(db, task, user, payload.reason)
+    if err:
+        raise HTTPException(status_code=409, detail=err)
+    return _after_move(db, task, user, "park")
+
+
+@router.post("/{task_id}/resume")
+def resume_task(task_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Put a parked task back in the column it left (M3)."""
+    task = _own_row(db, task_id, user, task_perms.can_move, "resumed")
+    _status, err = task_workflow.resume(db, task, user)
+    if err:
+        raise HTTPException(status_code=409, detail=err)
+    return _after_move(db, task, user, "resume")
+
+
+@router.post("/{task_id}/archive")
+def archive_task(task_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """File a completed task into Past work (M4). Only completed work may be filed."""
+    task = _own_row(db, task_id, user, task_perms.can_move, "filed")
+    err = task_workflow.archive(db, task, user)
+    if err:
+        raise HTTPException(status_code=409, detail=err)
+    db.commit()
+    audit.record(db, actor_id=user.id, table_name="tasks", record_id=task.id, action="archive",
+                 new={"archived": True})
+    # Filing is INTERNAL: the client's card stays exactly where it is. Atrium has no archive in this
+    # bridge, and quietly moving or hiding a delivered card would rewrite what the client was told.
+    _broadcast("archived", task, user.id)
+    return task_detail(task, db)
+
+
+@router.post("/{task_id}/unarchive")
+def unarchive_task(task_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Pull a filed task back onto the board, in the column it still holds."""
+    task = _own_row(db, task_id, user, task_perms.can_move, "unfiled")
+    task_workflow.unarchive(db, task, user)
+    db.commit()
+    _broadcast("updated", task, user.id)
+    return task_detail(task, db)
+
+
+@router.post("/{task_id}/send-back")
+def send_back(task_id: str, payload: TaskParkIn, user: User = Depends(get_current_user),
+              db: Session = Depends(get_db)):
+    """Refuse queued work and return it to whoever filed it, with a reason (decision D11, §2.4g).
+
+    D10 lets anyone file into another team's queue, which makes "this isn't ours" a normal event —
+    and without a way to say it, a wrongly-routed card just rots. Three rules keep it honest:
+
+    * **Only while UNASSIGNED.** Once somebody on the team picks it up they own it, and the right
+      move is to reassign or re-route, not to bounce.
+    * **Ownership is never left vague.** The bounce clears `assigned_team_id` AND assigns the card
+      back to the filer, so refused work is always held by someone. A card that lands nowhere is the
+      failure mode this avoids.
+    * **The reason is internal and recorded.** It goes in history (read back by `filed-by-me`) and
+      never near the projection push — a client learning that two departments disagreed about their
+      work is exactly the leak the client-safe split exists to prevent.
+
+    A consequence that looks like a bug and is not: the moment a lead sends a card back **they can no
+    longer see it** — the team link is gone and it is not theirs — because refusing work stops it
+    being yours.
+    """
+    task = _own_row(db, task_id, user, task_perms.can_review, "sent back")
+    if task.assigned_to_id is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="Somebody on the team already owns this. Reassign or re-route it instead of "
+                   "sending it back.")
+    if not task.created_by_id:
+        raise HTTPException(status_code=409,
+                            detail="Nothing records who filed this, so there is nobody to send it "
+                                   "back to. Re-route it to the right team instead.")
+    reason = (payload.reason or "").strip()
+    old_team = task.assigned_team_id
+    task.assigned_team_id = None
+    task.assigned_to_id = task.created_by_id
+    _log(db, task.id, user.id, "sent_back", old_team, reason or "no reason given")
+    filer = db.get(User, task.created_by_id)
+    notif.notify(db, user_id=task.created_by_id, type=NOTIF_TASK_ASSIGNED,
+                 title=f"Sent back to you: {task.title}",
+                 body=reason or f"{user.name or 'A lead'} sent this back without a reason.",
+                 link=f"/tasks?open={task.id}", commit=False)
+    db.commit()
+    audit.record(db, actor_id=user.id, table_name="tasks", record_id=task.id, action="send_back",
+                 old={"assigned_team_id": old_team}, new={"assigned_to_id": task.assigned_to_id})
+    _broadcast("updated", task, user.id)
+    return {"ok": True, "returned_to": filer.name if filer else None,
+            "task": task_detail(task, db)}
+
+
+@router.post("/{task_id}/review/submit")
+def submit_for_review(task_id: str, user: User = Depends(get_current_user),
+                      db: Session = Depends(get_db)):
+    """Ask a lead to approve this work (M2). Anyone who can edit the task may ask about it."""
+    task = _own_row(db, task_id, user, task_perms.can_edit, "submitted for review")
+    err = task_workflow.submit_review(db, task, user)
+    if err:
+        raise HTTPException(status_code=409, detail=err)
+    db.commit()
+    _broadcast("updated", task, user.id)
+    return task_detail(task, db)
+
+
+@router.post("/{task_id}/review/approve")
+def approve_review(task_id: str, user: User = Depends(get_current_user),
+                   db: Session = Depends(get_db)):
+    """Approve the work, unblocking completion (D5). Team lead within their team, AM+ anywhere."""
+    task = _own_row(db, task_id, user, task_perms.can_review, "approved")
+    err = task_workflow.approve(db, task, user)
+    if err:
+        raise HTTPException(status_code=409, detail=err)
+    db.commit()
+    audit.record(db, actor_id=user.id, table_name="tasks", record_id=task.id, action="approve",
+                 new={"review_state": task.review_state})
+    _broadcast("updated", task, user.id)
+    return task_detail(task, db)
+
+
+@router.post("/{task_id}/review/request-changes")
+def request_review_changes(task_id: str, payload: TaskReviewIn,
+                           user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Send the work back with a note (M2). Moves the card to the revision column if there is one."""
+    task = _own_row(db, task_id, user, task_perms.can_review, "sent back")
+    _moved, err = task_workflow.request_changes(db, task, user, payload.note)
+    if err:
+        raise HTTPException(status_code=409, detail=err)
+    return _after_move(db, task, user, "request_changes")
+
+
 @router.post("/{task_id}/comments")
 def add_comment(task_id: str, payload: CommentIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     # A comment on an Atrium card is a TEAM comment in Atrium's own thread -- on a client-facing
@@ -473,7 +883,7 @@ def add_comment(task_id: str, payload: CommentIn, user: User = Depends(get_curre
     # console. The author echoed back is the Sentinel user, so their avatar appears immediately.
     a_key, a_task = atrium_tasks.split_id(str(task_id))
     if a_key:
-        _require_atrium(user)
+        _require_atrium_write(user)
         comment, err = atrium_tasks.comment_task(a_key, a_task, payload.body,
                                                  actor=user.email or "", actor_name=user.name or "")
         if err:
@@ -483,7 +893,9 @@ def add_comment(task_id: str, payload: CommentIn, user: User = Depends(get_curre
     task = _resolve_task(db, task_id)
     if not task:
         raise HTTPException(status_code=404, detail=_NOT_FOUND)
-    if not task_perms.can_view(user, task):
+    # can_EDIT, not can_view: writing on a task's thread is a write (D8). A viewer reads the thread
+    # in the response of GET /{id} and adds nothing to it.
+    if not task_perms.can_edit(user, task):
         raise HTTPException(status_code=403, detail=_FORBIDDEN)
     c = TaskComment(
         task_id=task.id, author_id=user.id, body=payload.body,
@@ -505,43 +917,93 @@ def resolve_change_request(task_id: str, comment_id: str, user: User = Depends(g
     a_key, a_task = atrium_tasks.split_id(str(task_id))
     if not a_key:
         raise HTTPException(status_code=404, detail="Change requests only exist on client cards")
-    _require_atrium(user)
+    _require_atrium_write(user)
     ok, err = atrium_tasks.resolve_change_request(a_key, a_task, comment_id, actor=user.email or "")
     if not ok:
         raise _atrium_error(err)
     return {"ok": True}
 
 
-@router.post("/{task_id}/attachments")
-async def add_attachment(task_id: str, file: UploadFile = File(...), user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    task = _resolve_task(db, task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail=_NOT_FOUND)
-    if not task_perms.can_view(user, task):
-        raise HTTPException(status_code=403, detail=_FORBIDDEN)
-    content = await file.read()
-    # MVP: record metadata as a comment attachment (no blob store wired). Size only, not the bytes.
-    meta = {"name": file.filename, "size": len(content), "content_type": file.content_type}
-    c = TaskComment(
-        task_id=task.id, author_id=user.id, body=f"📎 Attached {file.filename}",
-        attachments_json=json.dumps([meta]),
-    )
-    db.add(c)
-    db.commit()
-    return comment_dict(c, db)
+# 🔴 `POST /{task_id}/attachments` was REMOVED 2026-08-04 (WP 0.4). It read the uploaded file,
+# THREW THE BYTES AWAY, and recorded the name/size as a comment — so the board showed a paperclip
+# count for files that had never been stored anywhere and could never be opened. No frontend ever
+# called it; the only attachment code in `taskboard.js` is the read-side count pill.
+#
+# The READ plumbing is deliberately kept (`TaskComment.attachments_json`, `attach_count` /
+# `attachment_count` in `serializers.py`, the pill): it is the shape a real implementation fills
+# in, and today it simply reports 0. Wiring attachments for real means GCS private objects + an
+# authed redirect, exactly like Atrium's creatives — see §7 of docs/TASKBOARD_REBUILD.md. Do NOT
+# reinstate a version that discards the bytes.
 
 
 @router.post("/{task_id}/send-to-atrium", dependencies=[Depends(require_roles(*AM_PLUS))])
 def send_to_atrium(task_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Bridge to Atrium: mark visible + record an approval. Only client-facing fields cross over."""
+    """Share a task with its client: MINT the Atrium card, link it, and send the client-safe subset.
+
+    🔴 Until 2026-08-03 this set `atrium_visible = True`, wrote an AtriumApproval row and created
+    NOTHING in Atrium — so the AM got a success toast, the drawer said "✓ In Atrium", and the
+    client's Tasks tab stayed empty forever (docs/TASKBOARD_REBUILD.md §1.2). It now fails LOUD:
+    if the card cannot be created the row is not marked shared and the reason is returned.
+    """
     task = _resolve_task(db, task_id)
     if not task:
         raise HTTPException(status_code=404, detail=_NOT_FOUND)
-    task.atrium_visible = True
+    already = task_bridge.published(task)
+    ok, err = task_bridge.publish(db, task, user)
+    if not ok:
+        db.commit()          # keep atrium_sync_error — the failure is part of the record
+        raise HTTPException(status_code=502, detail=err)
     approval = AtriumApproval(task_id=task.id, sent_at=utcnow())
     db.add(approval)
-    _log(db, task.id, user.id, "atrium", "internal", "sent_to_atrium")
     db.commit()
     audit.record(db, actor_id=user.id, table_name="atrium_approvals", record_id=approval.id,
                  action="send", new=atrium_payload(task, db))
-    return {"ok": True, "atrium_payload": atrium_payload(task, db)}
+    _broadcast("updated", task, user.id)
+    return {"ok": True, "atrium_task_id": task.atrium_task_id, "already_shared": already,
+            "sync_error": task.atrium_sync_error, "atrium_payload": atrium_payload(task, db)}
+
+
+@router.post("/{task_id}/atrium-retry", dependencies=[Depends(require_roles(*AM_PLUS))])
+def retry_atrium_push(task_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Re-send the client-safe subset after a failed push. The board offers this on a stale card."""
+    task = _resolve_task(db, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail=_NOT_FOUND)
+    if not task_bridge.published(task):
+        raise HTTPException(status_code=400, detail="That task has never been shared with a client.")
+    ok, err = task_bridge.push(db, task, user)
+    if ok:
+        ok, err = task_bridge.push_stage(db, task, user)
+    db.commit()
+    if not ok:
+        raise HTTPException(status_code=502, detail=err)
+    _broadcast("updated", task, user.id)
+    return {"ok": True, "sync_error": None}
+
+
+@router.get("/atrium/stale-shares", dependencies=[Depends(require_roles(*AM_PLUS))])
+def list_stale_shares(db: Session = Depends(get_db)):
+    """The reconcile backlog (D15): rows claiming to be shared that point at no Atrium card.
+
+    Report only. Bulk-publishing these would drop months-old — sometimes already delivered — work
+    onto clients' boards unannounced, so each one is a human decision: publish, or clear the claim.
+
+    Two path segments, so `GET /{task_id}` (one segment) cannot swallow it wherever it is declared —
+    unlike the `/api/gym/routines*` case that had to be hoisted above `/{log_id}` (AGENTS.md §5).
+    """
+    return task_bridge.stale_shares(db)
+
+
+@router.post("/{task_id}/atrium-clear-share", dependencies=[Depends(require_roles(*AM_PLUS))])
+def clear_stale_share(task_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Resolve a stale row the other way: it was never really shared, so stop claiming it was."""
+    task = _resolve_task(db, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail=_NOT_FOUND)
+    if task_bridge.published(task):
+        raise HTTPException(status_code=409,
+                            detail="That task really is shared — unshare it in Atrium instead.")
+    task_bridge.clear_share(db, task, user)
+    db.commit()
+    _broadcast("updated", task, user.id)
+    return {"ok": True}
