@@ -112,7 +112,23 @@ window.TaskBoard = {
          showed as a stray white strip under the filters on every load. Same trap as .ctxbar.
          (No backticks in this comment -- it lives inside a template literal.) */
       #tb-bulkbar[hidden]{display:none}
-      #tb-bulkbar select{height:30px;font-size:12px;width:auto;min-width:130px}`;
+      #tb-bulkbar select{height:30px;font-size:12px;width:auto;min-width:130px}
+
+      /* THROUGHPUT (WP 6.2). A plain flex bar chart -- no charting library on this page, and one
+         would be absurd for eight numbers. */
+      .tp-chart{display:flex;align-items:flex-end;gap:8px;height:120px;padding:0 2px;
+        border-bottom:1px solid var(--line)}
+      .tp-col{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;
+        height:100%;gap:4px}
+      .tp-bar{width:100%;max-width:46px;border-radius:5px 5px 0 0;background:var(--accent);
+        min-height:2px}
+      /* The partial week reads as provisional rather than as a cliff. */
+      .tp-bar.tp-partial{background:repeating-linear-gradient(45deg,var(--accent),var(--accent) 4px,
+        transparent 4px,transparent 8px);border:1px dashed var(--accent);opacity:.75}
+      .tp-n{font-size:11px;color:var(--muted)}
+      .tp-clients{list-style:none;margin:0;padding:0;max-width:420px}
+      .tp-clients li{display:flex;justify-content:space-between;gap:12px;padding:7px 0;
+        border-bottom:1px solid var(--line-soft);font-size:13px}`;
     document.head.appendChild(st);
   }
 
@@ -580,6 +596,43 @@ window.TaskBoard = {
       tr.onclick = () => jump(tr.dataset.uid);
       tr.onkeydown = (e) => { if (e.key === "Enter") jump(tr.dataset.uid); };
     });
+    renderThroughput(board);
+  }
+
+  // WP 6.2 (§2.4i): Monitor was a snapshot — no trend, no history, no per-client view. Appended
+  // after the roster paints and fails SILENTLY: a trend is context, and losing it must never cost
+  // a manager the workload table they came for.
+  async function renderThroughput(board) {
+    let data;
+    try { data = await S.api("/api/tasks/throughput?weeks=8"); }
+    catch (e) { return; }
+    const weeks = data.weeks || [];
+    if (!weeks.length) return;
+    const peak = Math.max(1, ...weeks.map((w) => w.completed));
+    const bars = weeks.map((w) => {
+      // 🔴 The current week is PARTIAL. It is drawn, because people want to see it, but marked —
+      // a 2-day week next to full ones otherwise reads as a collapse that never happened.
+      const h = Math.round(100 * w.completed / peak);
+      const label = w.complete ? `Week of ${w.week_start}: ${w.completed} shipped`
+                               : `This week so far: ${w.completed} shipped (still running)`;
+      return `<div class="tp-col" title="${S.esc(label)}">
+        <div class="tp-bar${w.complete ? "" : " tp-partial"}" style="height:${Math.max(h, 2)}%"></div>
+        <span class="tp-n">${w.completed}</span>
+      </div>`;
+    }).join("");
+    const clients = (data.by_client || []).slice(0, 5).map((c) =>
+      `<li><span>${S.esc(c.client_name)}</span><b>${c.completed}</b></li>`).join("");
+
+    const wrap = document.createElement("div");
+    wrap.className = "tp-wrap";
+    wrap.innerHTML = `<div class="row between" style="align-items:baseline;margin:26px 0 10px">
+        <div class="section-label">Throughput · last ${weeks.length} weeks</div>
+        <span class="sub" style="font-size:12px">${data.weekly_average} / week on average<span class="muted"> · complete weeks only</span></span>
+      </div>
+      <div class="tp-chart">${bars}</div>
+      ${clients ? `<div class="section-label" style="margin:22px 0 8px">Shipped by client</div>
+        <ul class="tp-clients">${clients}</ul>` : ""}`;
+    board.appendChild(wrap);
   }
 
   function focusLane(uid) {

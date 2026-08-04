@@ -312,6 +312,91 @@ def employee_summary(user: User = Depends(get_current_user), db: Session = Depen
     return rows
 
 
+@router.get("/throughput")
+def throughput_history(weeks: int = Query(8, ge=2, le=26),
+                       user: User = Depends(get_current_user),
+                       db: Session = Depends(get_db)):
+    """Completed work over TIME, plus a per-client rollup (WP 6.2, §2.4i).
+
+    Monitor computed everything from the live table: a snapshot with no trend, no history, and no
+    per-client view — so "are we getting faster?" and "which client is eating the team?" were
+    questions the board could not answer at all.
+
+    🔴 Counted off `completed_at`, never `updated_at` (§2.4h). Off `updated_at`, fixing a typo on a
+    task finished in March re-dates its completion to today. Rows finished before that column
+    existed carry no stamp and are simply not counted — the honest answer, and better than
+    attributing them to whenever somebody last touched them.
+
+    🔴 The CURRENT week is partial and is flagged `complete: false`. A 2-day week against a 7-day
+    mean reads as a collapse in throughput; the caller may chart it but must not compare it. This
+    is the same trap the report deck hit (`_weeks`/`pressure` there) and it is worth the extra
+    field to make un-missable.
+
+    Weeks are Asia/Manila and start on Monday, matching the business rule the rest of the board
+    uses. Archived tasks still count: filing shipped work must never erase that it shipped.
+    """
+    if not (is_manager(user) or task_perms.is_read_only(user)):
+        raise HTTPException(status_code=403, detail="Only managers can monitor the team")
+
+    today = today_ph()
+    this_week_start = today - timedelta(days=today.weekday())      # Monday
+    first_week_start = this_week_start - timedelta(weeks=weeks - 1)
+
+    # Same scope as the Monitor rollup: a team lead sees their own team, AM+ sees everyone.
+    visible_ids = None
+    if user.role == ROLE_TEAM_LEAD:
+        visible_ids = {u.id for u in db.execute(
+            select(User).where(User.team_id == user.team_id)).scalars().all()}
+
+    done_statuses = {s for s in task_config.statuses(db) if task_config.is_completed(db, s)}
+    rows = db.execute(select(Task).where(Task.completed_at.is_not(None))).scalars().all()
+
+    buckets = {first_week_start + timedelta(weeks=i): 0 for i in range(weeks)}
+    per_person: dict[int, int] = {}
+    per_client: dict[int | None, int] = {}
+
+    for t in rows:
+        if t.status not in done_statuses:
+            continue                       # reopened since: not finished work today
+        if visible_ids is not None and t.assigned_to_id not in visible_ids:
+            continue
+        done_on = to_ph(t.completed_at).date()
+        wk = done_on - timedelta(days=done_on.weekday())
+        if wk not in buckets:
+            continue                       # outside the window
+        buckets[wk] += 1
+        if t.assigned_to_id:
+            per_person[t.assigned_to_id] = per_person.get(t.assigned_to_id, 0) + 1
+        per_client[t.client_id] = per_client.get(t.client_id, 0) + 1
+
+    series = [{"week_start": wk.isoformat(),
+               "week_end": (wk + timedelta(days=6)).isoformat(),
+               "completed": n,
+               # The one field that stops a partial week being read as a crash.
+               "complete": wk != this_week_start}
+              for wk, n in sorted(buckets.items())]
+
+    finished = [w["completed"] for w in series if w["complete"]]
+    people = {p.id: p for p in db.execute(select(User)).scalars().all()}
+    clients = {c.id: c for c in db.execute(select(Client)).scalars().all()}
+
+    return {
+        "weeks": series,
+        # Averaged over COMPLETE weeks only, for the same reason.
+        "weekly_average": round(sum(finished) / len(finished), 1) if finished else 0,
+        "by_person": sorted(
+            [{"user": user_public(people[uid]), "completed": n}
+             for uid, n in per_person.items() if uid in people],
+            key=lambda r: r["completed"], reverse=True),
+        "by_client": sorted(
+            [{"client_id": cid,
+              "client_name": clients[cid].name if cid in clients else "No client",
+              "completed": n}
+             for cid, n in per_client.items()],
+            key=lambda r: r["completed"], reverse=True),
+    }
+
+
 @router.get("/templates")
 def list_templates(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Service-template catalog for the New Task picker (DB-backed). Declared before /{task_id}."""
