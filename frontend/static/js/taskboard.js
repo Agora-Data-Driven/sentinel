@@ -37,6 +37,12 @@ window.TaskBoard = {
   // Mirrors task_perms.can_review (the server enforces it): AM+ anywhere, a team lead within their
   // own team. Deciding a review is a management call; ASKING for one is not (that's can_edit).
   // Atrium-owned cards have no review state — there is no local row to hold one.
+  // Mirrors task_perms.can_reassign (the server enforces it): delegation — changing the team or
+  // an owner to SOMEBODY ELSE — is AM+ anywhere, a team lead within their own team. Used by the
+  // D12 routing control; self-assignment is deliberately NOT gated on this, which is why the
+  // per-step pickers stay open to everyone (§2.4e / WP 4.2f).
+  const canReassign = (t) => !readOnly && (canManage
+    || (canMonitor && t.assigned_team_id != null && t.assigned_team_id === S.user.team_id));
   const canReview = (t) => !readOnly && t.source !== "atrium" && (canManage
     || (canMonitor && t.assigned_team_id != null && t.assigned_team_id === S.user.team_id));
 
@@ -838,18 +844,61 @@ window.TaskBoard = {
 
     // `owners` is Sentinel's people list, or Atrium's roster on an Atrium card — same widget, one
     // vocabulary each, so the ids that go back are always the ones that system understands.
+    //
+    // D12 (WP 4.2g): the ROUTED TEAM'S people come first, and everyone else stays reachable below.
+    // Work is routed to a department and then owned by someone in it, so that team is the answer
+    // ~90% of the time — but "Justine, or anyone in the company" is a real need too, and a picker
+    // that only listed one team would send people back to the Edit form to re-route first.
+    // Two <optgroup>s rather than a filter, so the common case is at the top without hiding
+    // anything. An Atrium roster carries no team, so it degrades to one flat list on its own.
+    const optionFor = (p, current) =>
+      `<option value="${S.esc(p.id)}" ${p.id === current ? "selected" : ""}>${S.esc(p.name)}</option>`;
+
+    function ownerOptions(current) {
+      const teamId = t.assigned_team_id;
+      const teamName = teamsById[teamId] ? teamsById[teamId].name : null;
+      const inTeam = teamId ? owners.filter((p) => p.team_id === teamId) : [];
+      if (!inTeam.length) return owners.map((p) => optionFor(p, current)).join("");
+      const rest = owners.filter((p) => p.team_id !== teamId);
+      return `<optgroup label="${S.esc(teamName || "This department")}">${inTeam.map((p) => optionFor(p, current)).join("")}</optgroup>`
+        + (rest.length ? `<optgroup label="Everyone else">${rest.map((p) => optionFor(p, current)).join("")}</optgroup>` : "");
+    }
+
     const assigneeSelect = (act, mid, sid, current, placeholder) =>
       `<select class="bd-assignee" data-act="${act}" data-mid="${mid}"${sid ? ` data-sid="${sid}"` : ""}>
         <option value="">${placeholder}</option>
-        ${owners.map((p) => `<option value="${S.esc(p.id)}" ${p.id === current ? "selected" : ""}>${S.esc(p.name)}</option>`).join("")}
+        ${ownerOptions(current)}
       </select>`;
+
+    // D12: assignment and routing are CONTROLS, not action buttons. The prototype had hardcoded
+    // "Route to Acquisition" / "Delegate to Justine & Zhen" buttons, which only ever fit the one
+    // example they were drawn for. These three controls are the general form of the same thing:
+    // route the whole task, own a phase, own a step — plus one sweep for "the N nobody owns yet",
+    // which is the actual daily action a lead takes after a service seeds twelve empty steps.
+    function routingRow() {
+      if (isAtrium || readOnly) return "";      // Atrium cards carry Atrium's own department field
+      const unowned = t.maintasks.reduce(
+        (n, m) => n + m.subs.filter((s) => !s.assignee_id).length, 0);
+      const teamName = teamsById[t.assigned_team_id] ? teamsById[t.assigned_team_id].name : null;
+      return `<div class="row bd-route" style="gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 10px">
+        <span class="sub" style="font-size:12px">Routed to</span>
+        <select id="bd-team" ${canReassign(t) ? "" : "disabled"} title="${canReassign(t) ? "Send this task to a department" : "Only a team lead or manager can re-route work"}">
+          <option value="">Nobody yet</option>
+          ${teams.map((tm) => `<option value="${tm.id}" ${tm.id === t.assigned_team_id ? "selected" : ""}>${S.esc(tm.name)}</option>`).join("")}
+        </select>
+        ${unowned ? `<select id="bd-bulkown" title="Give every step that nobody owns to one person">
+          <option value="">Assign the ${unowned} unowned step${unowned > 1 ? "s" : ""} to…</option>
+          ${ownerOptions(null)}
+        </select>` : `<span class="sub" style="font-size:12px">${teamName ? "Every step has an owner" : ""}</span>`}
+      </div>`;
+    }
 
     function renderBreakdown() {
       let d = 0, total = 0;
       t.maintasks.forEach((m) => m.subs.forEach((s) => { total += 1; if (s.done) d += 1; }));
       S.qs("#d-bd-count").textContent = total ? `· ${d}/${total}` : "";
       S.qs("#d-bd-bar").style.width = (total ? Math.round(100 * d / total) : 0) + "%";
-      S.qs("#d-breakdown").innerHTML = t.maintasks.map((m) => `
+      S.qs("#d-breakdown").innerHTML = routingRow() + t.maintasks.map((m) => `
         <div class="mtask" data-mid="${m.id}">
           <div class="mtask-head">
             <input class="mtask-title" data-act="mt-title" data-mid="${m.id}" value="${S.esc(m.title)}" aria-label="Main task title">
@@ -896,6 +945,37 @@ window.TaskBoard = {
         S.qsa("#d-breakdown input, #d-breakdown select, #d-breakdown button")
           .forEach((el) => { el.disabled = true; });
         return;
+      }
+      // D12 routing + bulk owner sweep. Both live outside the [data-act] grid because they act on
+      // the TASK, not on one row of the breakdown.
+      const teamSel = S.qs("#bd-team");
+      if (teamSel && !teamSel.disabled) {
+        teamSel.onchange = async () => {
+          const value = teamSel.value ? Number(teamSel.value) : null;
+          try {
+            await S.api("/api/tasks/" + id, { method: "PATCH", body: { assigned_team_id: value } });
+            t.assigned_team_id = value;
+            // Re-routing changes the derived label (D14) AND which people head the owner pickers,
+            // so the board and this drawer both need the new answer.
+            S.toast(value ? "Routed to " + teamsById[value].name : "Routing cleared", "ok");
+            renderBreakdown();
+            load();
+          } catch (err) {
+            teamSel.value = t.assigned_team_id || "";
+            S.toast(err.detail || "Couldn't re-route this task", "err");
+          }
+        };
+      }
+      const bulkOwn = S.qs("#bd-bulkown");
+      if (bulkOwn) {
+        bulkOwn.onchange = () => {
+          const who = ownerId(bulkOwn.value);
+          if (who === null) return;
+          // Only the steps nobody owns. Never reassigns work that already has an owner — that is
+          // someone's job, and a sweep is not the place to take it off them.
+          t.maintasks.forEach((m) => m.subs.forEach((s) => { if (!s.assignee_id) s.assignee_id = who; }));
+          commit();
+        };
       }
       q("mt-title").forEach((el) => el.onchange = () => { const m = mById(el.dataset.mid); if (m) { m.title = el.value.trim() || "Untitled"; commit(); } });
       q("mt-assignee").forEach((el) => el.onchange = () => { const m = mById(el.dataset.mid); if (m) { m.assignee_id = ownerId(el.value); commit(); } });
