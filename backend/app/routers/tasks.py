@@ -222,7 +222,17 @@ def list_tasks(
         # client name work on Atrium cards too: Client.atrium_client_id is the explicit bridge,
         # with an unambiguous name match as a fallback while those links are still unset.
         clients = db.execute(select(Client)).scalars().all()
+        # 🔴 WP 4.3 — ONE piece of work is ONE card. A Sentinel row that carries `atrium_task_id`
+        # IS the card Atrium is about to hand back, so appending the bridge's copy too would render
+        # it twice: once as the real row (assignable, parkable, reviewable, counted) and once as a
+        # read-only ghost that drifts away from it the moment either is moved. This closes a hole
+        # that opened the day Send to Atrium began really publishing (2026-08-03) and that adoption
+        # (3.4) would have widened to every client card at once. The linked row wins because it is
+        # the one that can do anything; the ghost is dropped.
+        linked = task_adoption.claimed_atrium_ids(db)
         for a in atrium_tasks.fetch_tasks():
+            if (a.get("client_key", ""), str(a.get("task_id") or "")) in linked:
+                continue
             card = atrium_tasks.as_board_card(
                 a, atrium_tasks.resolve_client(clients, a.get("client_key", ""),
                                                a.get("client_name", "")))
