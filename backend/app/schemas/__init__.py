@@ -416,6 +416,20 @@ class TaskBulkIn(BaseModel):
     value: str | int | None = None
 
 
+class TaskRequestDecisionIn(BaseModel):
+    """Accepting or declining a client's ask (D3). Everything is optional except, on a decline,
+    the reason — enforced in the route so the error can say why it is owed."""
+
+    # accept: the triager may adjust the ask into a real piece of work as they take it on
+    title: str | None = None
+    assigned_team_id: int | None = None
+    assigned_to_id: int | None = None
+    priority: str | None = None
+    due_date: date | None = None
+    # decline
+    reason: str | None = None
+
+
 class TaskUpdateIn(BaseModel):
     title: str | None = None
     description: str | None = None

@@ -107,6 +107,11 @@ window.TaskBoard = {
       .tcard .t-pick ~ .t-del{right:30px}
       #tb-bulkbar{gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 12px;padding:10px 12px;
         border:1px solid var(--line);border-radius:10px;background:var(--card)}
+      /* Load-bearing: the bar carries .row (display:flex), and an author display rule BEATS the UA
+         [hidden]{display:none}. Without this the hidden attribute did nothing and the empty bar
+         showed as a stray white strip under the filters on every load. Same trap as .ctxbar.
+         (No backticks in this comment -- it lives inside a template literal.) */
+      #tb-bulkbar[hidden]{display:none}
       #tb-bulkbar select{height:30px;font-size:12px;width:auto;min-width:130px}`;
     document.head.appendChild(st);
   }
@@ -152,6 +157,7 @@ window.TaskBoard = {
           <button type="button" data-view="employee" role="tab">By Employee</button>
           <button type="button" data-view="monitor" role="tab">Monitor</button>
         </div>` : ""}
+        ${canManage ? `<button class="btn ghost" id="tb-requests" title="What clients have asked for, awaiting triage">Requests<span id="tb-req-n" class="pill violet" style="margin-left:6px" hidden></span></button>` : ""}
         <button class="btn ghost" id="filed-by-me" title="Work you raised for another team, and where it went">Filed by me</button>
         <button class="btn ghost" id="past-work" title="Completed work that has been filed">Past work</button>
         ${canCreate ? `<button class="btn primary" id="new-task">${S.ICON.plus}New Task</button>` : ""}
@@ -162,7 +168,7 @@ window.TaskBoard = {
       <select id="f-team"><option value="">All Departments</option>${teams.map((t) => `<option value="${t.id}">${S.esc(t.name)}</option>`).join("")}</select>
       <select id="f-priority"><option value="">All Priority</option>${vocab.priorities.map((p) => `<option>${p}</option>`).join("")}</select>
       ${canMonitor ? `<select id="f-assignee"><option value="">All Assignees</option><option value="none">Unassigned</option>${people.map((p) => `<option value="${p.id}">${S.esc(p.name)}</option>`).join("")}</select>` : ""}
-      <label class="chip" style="cursor:pointer" title="Only tasks past their due date (Manila), excluding finished work"><input type="checkbox" id="f-overdue" style="width:auto"> Overdue</label>
+      <label class="chip" style="cursor:pointer" title="Only tasks past their due date (Manila), excluding finished work"><input type="checkbox" id="f-overdue"> Overdue</label>
       <button type="button" class="btn sm ghost" id="f-mine" title="Just the work assigned to me">My work</button>
       <select id="f-view" title="Saved views"><option value="">Saved views…</option></select>
       <button type="button" class="btn sm ghost" id="f-save-view">Save view</button>
@@ -358,6 +364,90 @@ window.TaskBoard = {
       renderBulkBar();
       render();
     };
+  }
+
+  // --- The client intake queue (D3, WP 3.3) ------------------------------------------------
+  // A client's ask is NOT a task. It waits here until a manager accepts it, at which point it
+  // becomes ordinary work; declining is a first-class outcome and needs a reason, because "we
+  // are not doing this, because…" is an answer the client is owed.
+  async function refreshRequestCount() {
+    const badge = S.qs("#tb-req-n");
+    if (!badge) return;
+    try {
+      const { pending } = await S.api("/api/tasks/requests?status=pending");
+      badge.textContent = pending;
+      badge.hidden = !pending;      // no badge at all when the queue is empty, not a "0"
+    } catch (e) { badge.hidden = true; }
+  }
+
+  async function openRequests() {
+    let data;
+    try { data = await S.api("/api/tasks/requests?status=pending"); }
+    catch (err) { S.toast(err.detail || "Couldn't load the requests", "err"); return; }
+    const rows = data.requests || [];
+    const body = rows.length ? rows.map((r) => `
+      <div class="card pad" data-req="${r.id}" style="margin-bottom:10px">
+        <div class="row between" style="align-items:flex-start;gap:10px">
+          <div style="min-width:0">
+            <div style="font-weight:600">${S.esc(r.title)}</div>
+            <div class="sub" style="font-size:12px;margin-top:2px">
+              ${S.esc(r.client_name || r.client_key)}${r.requester_name ? " · " + S.esc(r.requester_name) : ""} · ${S.timeAgo(r.created_at)}
+            </div>
+            ${r.details ? `<div class="sub" style="margin-top:6px">${S.esc(r.details)}</div>` : ""}
+          </div>
+          <div class="row" style="gap:6px;flex:none">
+            <select data-rq-team="${r.id}" title="Which department takes this on">
+              <option value="">Department…</option>
+              ${teams.map((tm) => `<option value="${tm.id}">${S.esc(tm.name)}</option>`).join("")}
+            </select>
+            <button class="btn sm primary" data-rq-accept="${r.id}">Accept</button>
+            <button class="btn sm ghost" data-rq-decline="${r.id}">Decline</button>
+          </div>
+        </div>
+      </div>`).join("")
+      : `<div class="empty card pad">Nothing waiting. Client asks filed from Atrium land here.</div>`;
+
+    const m = S.modal({
+      title: "Client requests",
+      wide: true,
+      body: `<div class="lead" style="margin-bottom:12px">Asks filed by clients from their Atrium workspace. Accepting one turns it into a task on this board; declining records why.</div>${body}`,
+      footer: `<button class="btn ghost" id="rq-close">Close</button>`,
+    });
+    S.qs("#rq-close").onclick = m.close;
+
+    const after = async (msg) => {
+      S.toast(msg, "ok");
+      m.close();
+      await refreshRequestCount();
+      load();
+    };
+    S.qsa("[data-rq-accept]").forEach((b) => b.onclick = async () => {
+      const id = b.dataset.rqAccept;
+      const teamSel = S.qs(`[data-rq-team="${id}"]`);
+      b.disabled = true;
+      try {
+        await S.api(`/api/tasks/requests/${id}/accept`, {
+          method: "POST",
+          body: { assigned_team_id: teamSel && teamSel.value ? Number(teamSel.value) : null },
+        });
+        await after("Accepted — it is on the board now");
+      } catch (err) { b.disabled = false; S.toast(err.detail || "Couldn't accept that", "err"); }
+    });
+    S.qsa("[data-rq-decline]").forEach((b) => b.onclick = async () => {
+      const reason = (prompt("Why are we not doing this? The client is owed a reason.") || "").trim();
+      if (!reason) return;
+      b.disabled = true;
+      try {
+        await S.api(`/api/tasks/requests/${b.dataset.rqDecline}/decline`,
+                    { method: "POST", body: { reason } });
+        await after("Declined, with the reason on record");
+      } catch (err) { b.disabled = false; S.toast(err.detail || "Couldn't decline that", "err"); }
+    });
+  }
+
+  if (S.qs("#tb-requests")) {
+    S.qs("#tb-requests").onclick = openRequests;
+    refreshRequestCount();
   }
 
   function setMode(next) {

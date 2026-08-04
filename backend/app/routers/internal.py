@@ -20,10 +20,12 @@ from sqlalchemy.orm import Session
 from fastapi import Depends
 
 from ..config import settings
+from ..constants import NOTIF_TASK_ASSIGNED
 from ..database import get_db
-from ..models import User
+from ..models import Client, Task, TaskComment, TaskRequest, User
 from ..services import development as dev_svc
 from ..services import mentor_search as mentor_svc
+from ..services import notifications as notif
 
 router = APIRouter(prefix="/api/internal", tags=["internal"])
 
@@ -98,6 +100,170 @@ def internal_user_lookup(
         "name": user.name or user.email,
         "role": user.role,
     }
+
+
+@router.post("/task-request")
+def internal_task_request(
+    payload: dict,
+    x_academy_ts: str | None = Header(default=None),
+    x_academy_sig: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    """Atrium files a CLIENT'S ASK here (decision D3, WP 3.3).
+
+    🔴 This is the inbound half of making Atrium read-only. Its quick-add composer used to write
+    straight into `ws["tasks"]`, so anything a client typed during a call became a live card on the
+    delivery board — unowned, unestimated, and indistinguishable from work the agency had actually
+    committed to. Now the composer posts here and the ask waits for triage; a human turns it into a
+    task by accepting it. The client keeps the one thing they genuinely use (capturing an ask
+    mid-call) without being able to write onto the delivery board.
+
+    IDEMPOTENT on `source_ref`: Atrium retries, and a client tapping Send twice must not file the
+    same ask twice. A repeat returns the EXISTING request with `duplicate: true` rather than an
+    error — the caller's job succeeded, and a 4xx would make Atrium show the client a failure for
+    something that worked.
+
+    Resolving `client_key` to a Sentinel `Client` is best-effort: an unlinked workspace is a
+    configuration gap, not a reason to drop what the client said. The key is always kept.
+    """
+    _verify(x_academy_ts, x_academy_sig, "task-request")
+
+    client_key = str(payload.get("client") or payload.get("client_key") or "").strip()
+    title = str(payload.get("title") or "").strip()
+    if not client_key:
+        raise HTTPException(status_code=400, detail="client is required")
+    if not title:
+        raise HTTPException(status_code=400, detail="title is required")
+
+    source_ref = str(payload.get("source_ref") or "").strip() or None
+    if source_ref:
+        existing = db.execute(
+            select(TaskRequest).where(TaskRequest.source_ref == source_ref,
+                                      TaskRequest.client_key == client_key)
+        ).scalars().first()
+        if existing:
+            return {"ok": True, "duplicate": True, "id": existing.id, "status": existing.status}
+
+    client = db.execute(
+        select(Client).where(Client.atrium_client_id == client_key)
+    ).scalars().first()
+
+    req = TaskRequest(
+        client_key=client_key,
+        client_id=client.id if client else None,
+        title=title[:200],
+        details=(str(payload.get("details") or "").strip() or None),
+        requester_name=(str(payload.get("requester_name") or "").strip()[:160] or None),
+        requester_email=(str(payload.get("requester_email") or "").strip()[:200] or None),
+        source_ref=source_ref,
+    )
+    db.add(req)
+    db.commit()
+    db.refresh(req)
+
+    # Tell the people who trIage. An ask nobody sees is the same as no ask at all, and the client
+    # has already been told it was sent.
+    notif.notify_managers(db, type=NOTIF_TASK_ASSIGNED,
+                          title=f"New client request: {title[:80]}",
+                          link="/tasks?requests=1")
+    return {"ok": True, "duplicate": False, "id": req.id, "status": req.status,
+            "client_linked": client is not None}
+
+
+@router.post("/task-feedback")
+def internal_task_feedback(
+    payload: dict,
+    x_academy_ts: str | None = Header(default=None),
+    x_academy_sig: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    """The REVERSE CHANNEL: a client's comment or change request reaches the Sentinel row (D4).
+
+    🔴 This is the half that makes the projection a conversation rather than a broadcast. Sentinel
+    has pushed cards TO the client since 0.1/0.2, but anything the client said back lived only in
+    Atrium's workspace JSON — so the team found out by re-reading a client's board, which nobody
+    does. Now the words land on the task where the work is managed.
+
+    `kind`:
+      * "comment" — appended to the task's thread, attributed to the client by NAME
+        (a client has no `users` row and must never need one).
+      * "changes" — the same, plus `client_changes_open` +1, which is what puts the red pill on
+        the card. Deliberately NOT `review_state`: that is the internal approval gate (D5), and a
+        client must not be able to satisfy or block a team lead's sign-off.
+
+    The task is found by `atrium_task_id` — the link 0.1 established — so this works only for a
+    card Sentinel actually published. A stray id is a 404 and never creates anything.
+
+    Idempotent on `source_ref` (Atrium's comment id): a retry must not double-count a change
+    request, or the pill would keep climbing and never clear.
+    """
+    _verify(x_academy_ts, x_academy_sig, "task-feedback")
+
+    atrium_id = str(payload.get("atrium_task_id") or "").strip()
+    body = str(payload.get("body") or "").strip()
+    kind = str(payload.get("kind") or "comment").strip().lower()
+    if not atrium_id or not body:
+        raise HTTPException(status_code=400, detail="atrium_task_id and body are required")
+    if kind not in ("comment", "changes"):
+        raise HTTPException(status_code=400, detail="kind must be comment or changes")
+
+    # 🔴 `atrium_task_id` holds Atrium's RAW task id (see task_bridge.publish), not the composite
+    # "atrium:<key>:<id>" the deep links use — and that id is only unique WITHIN a workspace. So
+    # the client key narrows it whenever the caller sends one and it resolves to a linked client;
+    # without that, two clients whose workspaces happen to mint the same id would cross-post each
+    # other's feedback. A tolerated fallback (no key, or an unlinked workspace) still matches on
+    # the id alone, which is what old callers and unlinked workspaces need.
+    q = select(Task).where(Task.atrium_task_id == atrium_id)
+    client_key = str(payload.get("client") or "").strip()
+    if client_key:
+        owner = db.execute(
+            select(Client).where(Client.atrium_client_id == client_key)
+        ).scalars().first()
+        if owner:
+            q = q.where(Task.client_id == owner.id)
+    task = db.execute(q).scalars().first()
+    if not task:
+        raise HTTPException(status_code=404, detail="No Sentinel task is linked to that card")
+
+    source_ref = str(payload.get("source_ref") or "").strip()
+    marker = f"[atrium:{source_ref}]" if source_ref else ""
+    if marker:
+        seen = db.execute(
+            select(TaskComment).where(TaskComment.task_id == task.id,
+                                      TaskComment.body.like(f"%{marker}%"))
+        ).scalars().first()
+        if seen:
+            return {"ok": True, "duplicate": True, "comment_id": seen.id,
+                    "open_changes": task.client_changes_open or 0}
+
+    author = str(payload.get("author_name") or "").strip()[:160] or "The client"
+    comment = TaskComment(
+        task_id=task.id,
+        author_id=None,            # a client is not a user — see the model's note
+        client_author=author,
+        # The de-dupe marker rides in the body so no extra column is needed for a value only this
+        # endpoint ever reads. It is stripped for display by the frontend.
+        body=(body + (f"\n{marker}" if marker else "")),
+    )
+    db.add(comment)
+    if kind == "changes":
+        task.client_changes_open = (task.client_changes_open or 0) + 1
+    db.commit()
+    db.refresh(comment)
+
+    # Tell whoever owns the work. A client's words nobody sees are the status quo this replaces.
+    target = task.assigned_to_id or task.account_manager_id
+    if target:
+        notif.notify(db, user_id=target, type=NOTIF_TASK_ASSIGNED,
+                     title=("Client requested changes: " if kind == "changes" else "Client commented: ")
+                           + task.title[:70],
+                     link=f"/tasks?open={task.id}")
+    elif task.assigned_team_id:
+        notif.notify_managers(db, type=NOTIF_TASK_ASSIGNED,
+                              title=f"Client feedback on {task.title[:70]}",
+                              link=f"/tasks?open={task.id}", team_id=task.assigned_team_id)
+    return {"ok": True, "duplicate": False, "comment_id": comment.id,
+            "open_changes": task.client_changes_open or 0}
 
 
 @router.get("/holistic-profile")

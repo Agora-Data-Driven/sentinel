@@ -128,6 +128,9 @@ h2 { letter-spacing: -0.6px; } h1 { letter-spacing: -0.5px; }
   color: #fff; background: var(--grad-sentinel); padding: 3px 11px; border-radius: var(--pill);
   box-shadow: 0 4px 12px rgba(242,130,12,.30);
 }
+/* app.js hides this via the `hidden` attribute once a custom logo lockup is showing; guard it so a
+   future display rule here can't silently defeat that (see #tb-bulkbar / .ctxbar). */
+.badge-sentinel[hidden] { display: none; }
 .nav { display: flex; flex-direction: column; gap: 3px; overflow-y: auto; }
 .nav a {
   display: flex; align-items: center; gap: 11px; padding: 9px 12px; border-radius: var(--r-ctl);
@@ -396,7 +399,10 @@ input, select, textarea {
 input:focus, select:focus, textarea:focus { outline: none; border-color: var(--violet); background: #fff; box-shadow: 0 0 0 3px var(--violet-bg); }
 textarea { resize: vertical; min-height: 78px; }
 .filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 16px; }
-.filters select, .filters input { width: auto; min-width: 150px; }
+/* Checkboxes/radios are excluded: min-width would stretch the box itself, centring the glyph in a
+   150px field and shoving its label to the far right (the "Overdue" toggle). Only text-ish inputs
+   want the shared width floor. */
+.filters select, .filters input:not([type="checkbox"]):not([type="radio"]) { width: auto; min-width: 150px; }
 .filters .grow { flex: 1; min-width: 200px; }
 
 /* ---------- Toolbar / page head ---------- */
@@ -692,7 +698,7 @@ textarea { resize: vertical; min-height: 78px; }
   .card, .card-body, .field, #view { min-width: 0; }
   .card-head { flex-wrap: wrap; }        /* title + action button wrap instead of clipping */
   .sa-badge { display: none; }           /* "Super Admin view" pill — free up the tight topbar */
-  .filters select, .filters input { min-width: 0; flex: 1 1 140px; }
+  .filters select, .filters input:not([type="checkbox"]):not([type="radio"]) { min-width: 0; flex: 1 1 140px; }
 }
 @media (max-width: 480px) {
   .kpis { grid-template-columns: 1fr 1fr; }

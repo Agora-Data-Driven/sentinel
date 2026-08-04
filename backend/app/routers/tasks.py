@@ -10,7 +10,7 @@ import json
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..events import broker
@@ -21,13 +21,15 @@ from ..constants import (
     label_for_department,
 )
 from ..database import get_db
-from ..models import AtriumApproval, Client, Task, TaskComment, TaskHistory, Team, User
+from ..models import (AtriumApproval, Client, Task, TaskComment, TaskHistory, TaskRequest,
+                      Team, User)
 from ..schemas import (
     CommentIn,
     TaskBulkIn,
     TaskCreateIn,
     TaskParkIn,
     TaskPriorityIn,
+    TaskRequestDecisionIn,
     TaskReviewIn,
     TaskStatusIn,
     TaskUpdateIn,
@@ -370,6 +372,128 @@ def filed_by_me(user: User = Depends(get_current_user), db: Session = Depends(ge
     return out
 
 
+def _request_dict(r: TaskRequest, db: Session) -> dict:
+    client = db.get(Client, r.client_id) if r.client_id else None
+    return {
+        "id": r.id, "title": r.title, "details": r.details,
+        "client_key": r.client_key, "client_id": r.client_id,
+        "client_name": client.name if client else None,
+        "requester_name": r.requester_name, "requester_email": r.requester_email,
+        "status": r.status, "task_id": r.task_id, "decline_reason": r.decline_reason,
+        "created_at": r.created_at.isoformat() if r.created_at else None,
+        "decided_at": r.decided_at.isoformat() if r.decided_at else None,
+        "decided_by": user_public(db.get(User, r.decided_by_id)) if r.decided_by_id else None,
+    }
+
+
+# 🔴 Declared BEFORE `GET /{task_id}` or FastAPI matches "requests" as a task id (AGENTS.md §5).
+@router.get("/requests", dependencies=[Depends(require_roles(*AM_PLUS))])
+def list_requests(status_filter: str = Query("pending", alias="status"),
+                  user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """The intake queue (D3, WP 3.3): what clients have asked for, awaiting triage.
+
+    Manager-only. A request is a client's ask, not work — deciding whether the agency takes it on
+    is a commercial call, not something to leave on an employee's board.
+    """
+    q = select(TaskRequest).order_by(TaskRequest.created_at.desc())
+    if status_filter and status_filter != "all":
+        q = q.where(TaskRequest.status == status_filter)
+    rows = db.execute(q).scalars().all()
+    pending = db.execute(
+        select(func.count(TaskRequest.id)).where(TaskRequest.status == "pending")
+    ).scalar() or 0
+    return {"requests": [_request_dict(r, db) for r in rows], "pending": pending}
+
+
+@router.post("/requests/{request_id}/accept", dependencies=[Depends(require_roles(*AM_PLUS))])
+def accept_request(request_id: int, payload: TaskRequestDecisionIn,
+                   user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Turn a client's ask into a real task. THIS is the moment it reaches the delivery board.
+
+    Everything the triager sets here is optional except the decision itself — the point is that a
+    human looked at it and said yes, not that they filled a form. The new task is an ordinary
+    Sentinel task in every respect, including D14's derived label and D6's share-on-create, so an
+    accepted request is indistinguishable from work the team raised itself.
+
+    🔴 A decision is TERMINAL. The client has already been told; re-deciding would mean telling
+    them something different later, so a request that is not pending is a 409, not an overwrite.
+    """
+    req = db.get(TaskRequest, request_id)
+    if not req:
+        raise HTTPException(status_code=404, detail="Request not found")
+    if req.status != "pending":
+        raise HTTPException(status_code=409, detail=f"That request was already {req.status}.")
+
+    team_id = payload.assigned_team_id
+    task = Task(
+        title=payload.title or req.title,
+        description=req.details,
+        client_id=req.client_id,
+        assigned_team_id=team_id,
+        assigned_to_id=payload.assigned_to_id,
+        account_manager_id=user.id,
+        created_by_id=user.id,
+        priority=payload.priority or "Medium",
+        status=task_config.statuses(db)[0],
+        due_date=payload.due_date,
+        labels_json=json.dumps(_derived_labels(db, team_id)),
+        # The client asked for this, so they are told about it by default (D6) — the ask becoming
+        # visible work is the whole answer to "what happened to my request?".
+        client_facing_notes=req.details,
+    )
+    db.add(task)
+    db.flush()
+    _log(db, task.id, user.id, "created", None, f"accepted client request #{req.id}")
+
+    req.status = "accepted"
+    req.decided_by_id = user.id
+    req.decided_at = utcnow()
+    req.task_id = task.id
+    db.commit()
+
+    if task.client_id is not None and task_perms.can_bridge(user):
+        task_bridge.publish(db, task, user)
+        db.commit()
+
+    audit.record(db, actor_id=user.id, table_name="task_requests", record_id=req.id,
+                 action="accept", new={"task_id": task.id})
+    if task.assigned_to_id:
+        notif.notify(db, user_id=task.assigned_to_id, type=NOTIF_TASK_ASSIGNED,
+                     title=f"New task assigned: {task.title}", link=f"/tasks?open={task.id}")
+    elif task.assigned_team_id:
+        _notify_team_routed(db, task, user)
+        db.commit()
+    _broadcast("created", task, user.id)
+    return {"ok": True, "request": _request_dict(req, db), "task": task_detail(task, db)}
+
+
+@router.post("/requests/{request_id}/decline", dependencies=[Depends(require_roles(*AM_PLUS))])
+def decline_request(request_id: int, payload: TaskRequestDecisionIn,
+                    user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Say no, on the record, with a reason.
+
+    Declining is a first-class outcome, not a delete: "we are not doing this, because…" is an
+    answer the client is owed and the agency should be able to point at later. A request that
+    quietly disappears is how the same ask gets raised four times.
+    """
+    req = db.get(TaskRequest, request_id)
+    if not req:
+        raise HTTPException(status_code=404, detail="Request not found")
+    if req.status != "pending":
+        raise HTTPException(status_code=409, detail=f"That request was already {req.status}.")
+    reason = (payload.reason or "").strip()
+    if not reason:
+        raise HTTPException(status_code=400, detail="Give a reason — the client is owed one.")
+    req.status = "declined"
+    req.decided_by_id = user.id
+    req.decided_at = utcnow()
+    req.decline_reason = reason
+    db.commit()
+    audit.record(db, actor_id=user.id, table_name="task_requests", record_id=req.id,
+                 action="decline", new={"reason": reason})
+    return {"ok": True, "request": _request_dict(req, db)}
+
+
 @router.get("/{task_id}")
 def get_task(task_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     # An Atrium-owned card (id "atrium:<client_key>:<task_id>") has no local row -- its detail is
@@ -685,6 +809,32 @@ def move_status(task_id: str, payload: TaskStatusIn, user: User = Depends(get_cu
     if task_workflow.review_blocks(db, task, payload.status):
         raise HTTPException(status_code=409, detail=task_workflow.NEEDS_REVIEW)
     _apply_status(db, task, payload.status, user)
+    return task_detail(task, db)
+
+
+@router.post("/{task_id}/resolve-client-changes")
+def resolve_client_changes(task_id: str, user: User = Depends(get_current_user),
+                           db: Session = Depends(get_db)):
+    """Clear the client's open change requests on this card (D4 / WP 3.5).
+
+    The counter is a FLAG, not a log: the conversation itself stays in the thread forever, and
+    this only says "we have dealt with what they asked". Gated on `can_edit` — answering a client
+    is part of doing the work, not a management act.
+
+    Idempotent: resolving an already-clear card is a no-op success, because two people clicking it
+    is a normal race and neither deserves an error.
+    """
+    task = _resolve_task(db, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail=_NOT_FOUND)
+    if not task_perms.can_edit(user, task):
+        raise HTTPException(status_code=403, detail=_FORBIDDEN)
+    if (task.client_changes_open or 0) == 0:
+        return task_detail(task, db)
+    _log(db, task.id, user.id, "client_changes", str(task.client_changes_open), "0")
+    task.client_changes_open = 0
+    db.commit()
+    _broadcast("updated", task, user.id)
     return task_detail(task, db)
 
 

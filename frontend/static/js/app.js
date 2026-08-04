@@ -72,6 +72,22 @@
     '<text x="48" y="24.5" font-family="Inter,sans-serif" font-size="21" font-weight="600" letter-spacing="3.2" fill="#1A1B1E">AGORA</text>' +
     '<text x="49.5" y="35" font-family="Inter,sans-serif" font-size="7.3" font-weight="700" letter-spacing="3.6" fill="#353535">OPERATIONS</text></svg>';
 
+  // Cache-bust: bump when the logo file changes so browsers/PWA fetch the new art, not a stale copy.
+  const LOGO_V = "?v=21";
+  // Dark mode uses the white-ink logo so it stays legible on the dark sidebar.
+  function logoCandidates() {
+    const dark = document.documentElement.getAttribute("data-theme") === "dark";
+    return dark
+      ? ["/static/img/logo-dark.png" + LOGO_V, "/static/img/logo.png" + LOGO_V]
+      : ["/static/img/logo.png" + LOGO_V, "/static/img/logo.svg"];
+  }
+  // Paint the custom logo IMMEDIATELY (pill hidden), because every real deployment has one.
+  // Rendering the built-in mark first and swapping after the async probe made every RELOAD flash
+  // the built-in AGORA mark + the orange SENTINEL pill before settling: on a warm reload the art
+  // is in cache, so first paint happened before the probe resolved. applyBrandLogo() below then
+  // either confirms this (a no-op) or restores the built-in mark + pill when no logo file exists.
+  function brandSlotHTML() { return `<img class="brand-img" src="${logoCandidates()[0]}" alt="Sentinel">`; }
+
   // Flat, single-level navigation: 6 destinations, no accordions. A destination is either a
   // LEAF (its own page) or a HUB — a set of sibling pages that share a context bar under the
   // topbar. The sidebar row for a hub links to its primary (first allowed) page and lights up
@@ -333,8 +349,8 @@
     shell.innerHTML = `
       <aside class="side" id="side">
         <div class="brand">
-          <a class="brand-logo" data-brand-logo href="https://agoradatadriven.com" title="Agora Data Driven">${AGORA_LOGO}</a>
-          <span class="badge-sentinel">Sentinel</span>
+          <a class="brand-logo" data-brand-logo href="https://agoradatadriven.com" title="Agora Data Driven">${brandSlotHTML()}</a>
+          <span class="badge-sentinel" hidden>Sentinel</span>
         </div>
         <nav class="nav">${navItems}</nav>
         <div class="side-foot">
@@ -567,22 +583,31 @@
   function tryImg(url) {
     return new Promise((res, rej) => { const i = new Image(); i.onload = () => res(url); i.onerror = () => rej(); i.src = url; });
   }
+  // The lockup already carries the "SENTINEL" wordmark, so the pill is redundant once a custom
+  // logo is showing (only the "Sentinel" pill — the scanner's "Scanner" pill must stay).
+  function setSentinelPillHidden(hide) {
+    qsa(".badge-sentinel").forEach((b) => { if (b.textContent.trim().toLowerCase() === "sentinel") b.hidden = hide; });
+  }
   function applyBrandLogo() {
     const slots = qsa("[data-brand-logo]");
     if (!slots.length) return;
-    // Dark mode uses the white-ink logo so it stays legible on the dark sidebar.
-    const dark = document.documentElement.getAttribute("data-theme") === "dark";
-    // Cache-bust: bump when the logo file changes so browsers/PWA fetch the new art, not a stale copy.
-    const V = "?v=21";
-    const candidates = dark
-      ? ["/static/img/logo-dark.png" + V, "/static/img/logo.png" + V]
-      : ["/static/img/logo.png" + V, "/static/img/logo.svg"];
+    const candidates = logoCandidates();
     (function pick(i) {
-      if (i >= candidates.length) return;  // no custom logo — keep the built-in mark + pill
+      if (i >= candidates.length) {
+        // No custom logo file at all — fall back to the built-in mark, and bring the pill back
+        // since nothing else names the product then.
+        slots.forEach((s) => { s.innerHTML = AGORA_LOGO; });
+        setSentinelPillHidden(false);
+        return;
+      }
       tryImg(candidates[i]).then((url) => {
-        slots.forEach((s) => { s.innerHTML = `<img class="brand-img" src="${url}" alt="Sentinel">`; });
-        // The lockup already carries the "SENTINEL" wordmark, so hide the redundant pill (keep "Scanner").
-        qsa(".badge-sentinel").forEach((b) => { if (b.textContent.trim().toLowerCase() === "sentinel") b.style.display = "none"; });
+        // Skip the rewrite when this slot already shows the winning art (the normal path after
+        // brandSlotHTML painted it) — reassigning innerHTML would re-create the <img> and flicker.
+        slots.forEach((s) => {
+          const cur = s.querySelector("img.brand-img");
+          if (!cur || cur.getAttribute("src") !== url) s.innerHTML = `<img class="brand-img" src="${url}" alt="Sentinel">`;
+        });
+        setSentinelPillHidden(true);
       }).catch(() => pick(i + 1));
     })(0);
   }
