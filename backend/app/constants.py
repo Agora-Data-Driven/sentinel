@@ -12,6 +12,16 @@ ROLE_ACCOUNT_MANAGER = "account_manager"
 ROLE_TEAM_LEAD = "team_lead"
 ROLE_EMPLOYEE = "employee"
 ROLE_INTERN = "intern"
+# 🔴 A READ-ONLY MONITORING SEAT (decision D8, docs/TASKBOARD_REBUILD.md §5.3). It sees everything
+# and writes nothing — for a founder, an auditor or a client-side observer who needs the whole board
+# without being able to touch it.
+#
+# It does NOT slot into the ladder below, and that is the whole difficulty: give it a high rank and
+# every `require_min_role` write endpoint opens; give it a low one and it cannot see the board. So
+# its rank is deliberately the LOWEST (1) — no rank check can ever grant it a write — and the read
+# surfaces name it EXPLICITLY (`VIEW_ALL_ROLES`). Never add it to MANAGER_ROLES or ADMIN_ROLES:
+# those two gate approvals, exports and record edits, which are writes.
+ROLE_VIEWER = "viewer"
 
 ALL_ROLES = [
     ROLE_SUPER_ADMIN,
@@ -20,10 +30,14 @@ ALL_ROLES = [
     ROLE_TEAM_LEAD,
     ROLE_EMPLOYEE,
     ROLE_INTERN,
+    ROLE_VIEWER,
 ]
 
 # Rank for "at least this role" checks. Higher = more power.
 ROLE_RANK = {
+    # Viewer sits at the FLOOR on purpose — see ROLE_VIEWER. Its power comes from being named in
+    # VIEW_ALL_ROLES, never from out-ranking anybody.
+    ROLE_VIEWER: 1,
     ROLE_INTERN: 1,
     ROLE_EMPLOYEE: 1,
     ROLE_TEAM_LEAD: 2,
@@ -35,7 +49,11 @@ ROLE_RANK = {
 # Roles considered "admin or above" — can see everyone's data, manage records, export.
 ADMIN_ROLES = {ROLE_ADMIN, ROLE_SUPER_ADMIN}
 # Roles that can manage/approve people-facing requests (leave, overtime, regularization).
+# 🔴 Never add ROLE_VIEWER here: approving is a write.
 MANAGER_ROLES = {ROLE_ADMIN, ROLE_SUPER_ADMIN, ROLE_TEAM_LEAD, ROLE_ACCOUNT_MANAGER}
+# Roles that may SEE every task and the cross-client rollup, whoever owns it. Read-only surfaces
+# only — this set must never be used to authorise a write (that is what ADMIN_ROLES/FULL are for).
+VIEW_ALL_ROLES = {ROLE_ADMIN, ROLE_SUPER_ADMIN, ROLE_ACCOUNT_MANAGER, ROLE_VIEWER}
 
 ROLE_LABELS = {
     ROLE_SUPER_ADMIN: "Super Admin",
@@ -44,6 +62,7 @@ ROLE_LABELS = {
     ROLE_TEAM_LEAD: "Team Lead",
     ROLE_EMPLOYEE: "Employee",
     ROLE_INTERN: "Intern",
+    ROLE_VIEWER: "Viewer (read-only)",
 }
 
 # --- Attendance ------------------------------------------------------------
@@ -122,12 +141,54 @@ TASK_STATUSES = [
     TASK_BLOCKED,
 ]
 
+# --- Review states (tasks.review_state, decision D5) -------------------------
+# A review is a STATE on the task, not a board column: "For Review" was retired as a status on
+# 2026-07-30 (both boards) and nothing replaced it, so "Done" was one person's unilateral claim.
+# NULL/absent = never submitted. Approval gates entry into a completed-stage status.
+REVIEW_PENDING = "pending"
+REVIEW_APPROVED = "approved"
+REVIEW_CHANGES = "changes_requested"
+REVIEW_STATES = [REVIEW_PENDING, REVIEW_APPROVED, REVIEW_CHANGES]
+
 PRIORITY_URGENT = "Urgent"
 PRIORITY_MEDIUM = "Medium"
 PRIORITY_LOW = "Low"
 PRIORITIES = [PRIORITY_URGENT, PRIORITY_MEDIUM, PRIORITY_LOW]
 
-TASK_LABELS = ["Design", "Copy", "Ads", "SEO", "Dev"]
+# --- Task labels: DERIVED from the department, never chosen (decision D14) -------------------
+#
+# 🔴 A task carries exactly ONE label and nobody picks it. It is computed from the assigned
+# department, which is the same rule Atrium has always used (`main.TASK_DEPT_LABEL` over there) —
+# so the two boards finally agree instead of drifting. The old hand-picked vocabulary
+# ["Design", "Copy", "Ads", "SEO", "Dev"] is retired: it was a second, unreliable taxonomy that
+# said nothing the department did not already say, and half of it was never applied.
+#
+# Keyed by the FIRST WORD of the team name, lower-cased, so Sentinel's "Data Analyst" and Atrium's
+# "data" resolve to the same answer without either side hardcoding the other's wording. An
+# unmapped department falls back to TASK_LABEL_DEFAULT, exactly as Atrium's `.get()` does.
+TASK_DEPT_LABEL = {
+    "acquisition": "Paid Media",
+    "lifecycle": "Organic",
+    "data": "Website",
+    "development": "Website",
+    "bidbrain": "Website",
+}
+TASK_LABEL_DEFAULT = "Website"
+# Every label the board can now produce — what the vocabulary endpoint offers and what the
+# label-colour map is keyed by. Derived from the mapping so the two can never disagree.
+TASK_LABELS = sorted({*TASK_DEPT_LABEL.values(), TASK_LABEL_DEFAULT})
+
+
+def label_for_department(team_name: str | None) -> str | None:
+    """The one label a task in this department carries. None when it has no department yet.
+
+    A task with no team is genuinely unlabelled — inventing "Website" for it would put untriaged
+    work into a real bucket and make the board lie about what it is.
+    """
+    first = (team_name or "").strip().split()
+    if not first:
+        return None
+    return TASK_DEPT_LABEL.get(first[0].lower(), TASK_LABEL_DEFAULT)
 
 # --- Leave -----------------------------------------------------------------
 LEAVE_PENDING = "Pending"
@@ -144,8 +205,11 @@ REQ_REJECTED = "Rejected"
 # --- Notifications ---------------------------------------------------------
 NOTIF_APPROVAL = "approval"
 NOTIF_TASK_ASSIGNED = "task_assigned"
-# NOTIF_TASK_REVIEW ("task_review") retired with the "For Review" status (2026-07-30). Rows already
-# in `notifications` keep that type string — it is only ever displayed, never matched on.
+# "task_review" was retired with the "For Review" STATUS (2026-07-30) and came back on 2026-08-03 as
+# a review STATE (REVIEW_* above): the notification is what tells a team lead there is something
+# waiting on their approval. Same type string as the old rows, which is fine — it is only ever
+# displayed, never matched on.
+NOTIF_TASK_REVIEW = "task_review"
 NOTIF_TASK_OVERDUE = "task_overdue"
 NOTIF_GYM_MISSING = "gym_missing"
 NOTIF_ANNOUNCEMENT = "announcement"

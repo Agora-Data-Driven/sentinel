@@ -80,5 +80,25 @@ def sub_stats(maintasks: list[dict]) -> tuple[int, int]:
     return done, total
 
 
+def owner_ids(maintasks: list[dict]) -> set[int]:
+    """Every user id that owns a phase or a step in this breakdown.
+
+    🔴 This is a SECURITY input, not a convenience. Naming somebody on a step puts the card on their
+    board — `task_perms._assigned` counts step owners for visibility — so writing this field IS
+    delegation, and `update_task` has to hold it to the same `can_reassign` rule as
+    `assigned_to_id`. Before 2026-08-03 it did not: `maintasks` went through its own branch with no
+    assignee check at all, so an employee who could not reassign a task could still drop any card
+    onto any colleague's board by naming them on a sub-task (docs/TASKBOARD_REBUILD.md §2.4e).
+    """
+    out: set[int] = set()
+    for m in maintasks:
+        if m.get("assignee_id"):
+            out.add(int(m["assignee_id"]))
+        for s in m.get("subs", []):
+            if s.get("assignee_id"):
+                out.add(int(s["assignee_id"]))
+    return out
+
+
 def dumps(maintasks: list[dict]) -> str:
     return json.dumps(maintasks)

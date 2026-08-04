@@ -11,6 +11,7 @@ import pytest
 
 from app import constants as C
 from app.models import Task
+from app.utils.time import utcnow
 
 
 @pytest.mark.parametrize("role", [C.ROLE_INTERN, C.ROLE_EMPLOYEE])
@@ -32,7 +33,11 @@ def test_summary_aggregates(client, db, make_user, auth):
     db.add_all([
         Task(title="Overdue open", assigned_to_id=emp.id, status=C.TASK_IN_PROGRESS, due_date=overdue_day),
         Task(title="Open no due", assigned_to_id=emp.id, status=C.TASK_TODO),
-        Task(title="Done recently", assigned_to_id=emp.id, status=C.TASK_COMPLETED),
+        # 🔴 The stamp is what "Done · 7d" counts now, not `updated_at` (2026-08-03, §2.4h): off
+        # `updated_at`, fixing a typo on a task finished in March landed it in this week's numbers.
+        # A completed row with NO stamp is therefore not counted at all — see the test below.
+        Task(title="Done recently", assigned_to_id=emp.id, status=C.TASK_COMPLETED,
+             completed_at=utcnow()),
     ])
     db.commit()
 
@@ -42,7 +47,7 @@ def test_summary_aggregates(client, db, make_user, auth):
     assert row["total"] == 3
     assert row["open_total"] == 2          # the two non-completed tasks
     assert row["overdue"] == 1             # only the past-due, non-completed one
-    assert row["completed_week"] == 1      # completed with a fresh updated_at
+    assert row["completed_week"] == 1      # completed_at is inside the 7-day window
     assert row["counts"][C.TASK_IN_PROGRESS] == 1
     assert row["counts"][C.TASK_COMPLETED] == 1
 

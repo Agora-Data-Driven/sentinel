@@ -41,6 +41,10 @@
     download: P('<path d="M12 3v12M7 10l5 5 5-5M5 21h14"/>'),
     comment: P('<path d="M21 12a8 8 0 0 1-11.5 7.2L4 20l1-4.6A8 8 0 1 1 21 12z"/>'),
     paperclip: P('<path d="M21 10l-9.2 9.2a4 4 0 0 1-5.7-5.7l9.2-9.2a2.7 2.7 0 0 1 3.8 3.8L9.6 16.6a1.3 1.3 0 0 1-1.9-1.9L16 6.4"/>'),
+    // Marks the INTERNAL fields in the task detail/edit forms (taskboard.js) — "not visible to
+    // clients". Missing keys render the string "undefined" into the label, so keep this in step
+    // with every S.ICON.* the board asks for.
+    lock: P('<rect x="4.5" y="10.5" width="15" height="9.5" rx="2"/><path d="M8 10.5V7a4 4 0 0 1 8 0v3.5"/>'),
     trophy: P('<path d="M6 4h12v4a6 6 0 0 1-12 0z"/><path d="M6 5H4a2 2 0 0 0 2 4.5M18 5h2a2 2 0 0 1-2 4.5M12 14v3M9 20h6M10 20c0-1.7.8-3 2-3s2 1.3 2 3"/>'),
     cap: P('<path d="M12 4L2 9l10 5 10-5-10-5z"/><path d="M6 11.5V17c0 1.4 2.7 2.5 6 2.5s6-1.1 6-2.5v-5.5"/><path d="M22 9v5"/>'),
     flame: P('<path d="M12 3s5 4 5 9a5 5 0 0 1-10 0c0-1.5.6-2.7 1.3-3.6C9 10 10 9 10 7c1.5.8 2 2.3 2 4 .9-.7 1.5-1.8 1.5-3 .3.7.5 1.4-1.5 5z"/>'),
@@ -78,9 +82,11 @@
   const NAV = [
     { section: "Workspace" },
     // "Overview" (the URL stays /dashboard — notifications, the palette and bookmarks all point
-    // at it) is ONE page: the task board (taskboard.js) plus the growth compass and ledger
-    // (growth.js), merged 2026-08-03. The old /tasks URL redirects there too.
+    // at it) is the growth compass and ledger (growth.js) plus a "my work" strip. The task board
+    // was embedded here from 2026-07-26 until 2026-08-03, when decision D7 gave it its own page
+    // again; `/dashboard?open=<id>` forwards to /tasks for the notifications minted in that window.
     { href: "/dashboard", label: "Overview", icon: "grid" },
+    { href: "/tasks", label: "Task Board", icon: "board" },
     // The four Growth tabs mirror the Overview's four dimensions one-to-one:
     // Professional (the engine's career programs, formerly "Academy"), Philosophical and
     // Spiritual (each a Mastery Engine pinned to its reading program), Physical (the gym,

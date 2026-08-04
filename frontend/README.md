@@ -11,8 +11,9 @@ kiosk. Operating rules (CSP, cache bumping, `api()`-only fetches) live in
 |---|---|
 | `pages/*.html` | 19 shells (~0.7 kb each; JS renders everything): dashboard, attendance, approvals, gym, growth, reading, academy, philosophical, spiritual, people, leave, north-star, reports, settings, manage, payroll, login, kiosk, scanner. Routes registered in `backend/app/main.py:381` (`_PAGES`; `/login` is its own route) |
 | `static/js/app.js` | The shell every page loads: `NAV` array `:78` (roles/`min`/`hideRoles` gate visibility), `api()` (CSRF echo + FastAPI error flattening), `toast`, `skeleton`, `modal`, `esc`/`qs`/`qsa`, `ICON`, `avatar`, command palette (`initCommandPalette`), Coach FAB, `setTheme`/`engineUrl`/`themeEmbeds` (hands our light/dark to every embedded Mastery Engine) |
-| `static/js/taskboard.js` | Mountable Kanban embedded in the Overview (no /tasks page — the URL 307s to /dashboard). Optimistic DnD (native HTML5 — deliberate, see AGENTS.md §9), SSE reload, quick-add, Atrium-card editing |
-| `static/js/dashboard.js` | **The Overview** (`/dashboard`, labelled "Overview" since 2026-08-03): greeting + the day strip (attendance/gym as two buttons), then `GrowthPanel`'s rings, the task board, `GrowthPanel`'s ledger, and — admins only, last — the org KPIs/chart/late list/handovers |
+| `static/js/taskboard.js` | Mountable Kanban (`TaskBoard.mount`). Optimistic DnD (native HTML5 — deliberate, see AGENTS.md §9), SSE reload, quick-add, Atrium-card editing, and the lifecycle controls: Park/Resume, Submit/Approve/Request changes, Past work |
+| `static/js/tasks.js` | **The Task Board page** (`/tasks`) — its own page again since 2026-08-03 (decision D7); a thin shell that mounts `taskboard.js` full-width. It was embedded in the dashboard from 2026-07-26 until then, so `/dashboard?open=<id>` forwards here forever (the notifications minted in that window are permanent rows) |
+| `static/js/dashboard.js` | **The Overview** (`/dashboard`, labelled "Overview" since 2026-08-03): greeting + the day strip (attendance/gym as two buttons), then `GrowthPanel`'s rings, the **"my work"** strip (`renderMyWork` — open/overdue/awaiting-my-approval counts + your 5 newest, each linking into `/tasks`; fails silently), `GrowthPanel`'s ledger, and — admins only, last — the org KPIs/chart/late list/handovers |
 | `static/js/growth-page.js` | `/growth` = a manager's read-only view of ONE person (`?user=<id>`); without a `?user` it redirects to the Overview |
 | `static/js/attendance.js` · `approvals.js` | Time page · combined attendance+leave approvals inbox (team_lead+) |
 | `static/js/gym.js` | Calendar, no-lock day editor, saved routines (one-tap workout templates), history |
@@ -61,14 +62,23 @@ kiosk. Operating rules (CSP, cache bumping, `api()`-only fetches) live in
    NOT `#fff`, and the server must delegate the mic (Permissions-Policy derives from
    `SKILL_MASTERY_URL` — AGENTS.md §5).
 7. **Add something to the Overview** — it is `dashboard.js` end to end. Blocks are appended in
-   reading order to one `html` string, then mounted: `GrowthPanel` into `#dash-rings`/`#dash-growth`,
-   `TaskBoard` into `#dash-taskboard`. Both mounts are fail-soft on purpose — a bad
-   `/api/development` must never cost anyone their task board.
+   reading order to one `html` string, then filled: `GrowthPanel` into `#dash-rings`/`#dash-growth`,
+   `renderMyWork` into `#dash-mywork`. Both are fail-soft on purpose — a bad `/api/development` or
+   `/api/tasks` must never cost anyone the rest of the page. The **board itself is not here**: it
+   lives at `/tasks` (`tasks.js`) since decision D7, and the strip only links into it.
 8. **Change styles** — `static/css/styles.css` only; keep it token-driven (`var(--*)`) so dark
    mode holds; then bump the SW cache.
 
 Verify: `node --check` every edited JS file (CI does the same); full check = backend pytest suite.
 Deploy: `..\deploy\deploy.ps1` (Cloud Run `sentinel`, asia-southeast1).
+
+🔴 **`node --check` does NOT catch a backtick inside a comment inside a template literal.** The
+board's injected `<style>` block is one big template literal, and a markdown-style code span in its
+explanatory comment (`` `.spread` ``) CLOSES the string — the rest then parses as a tagged-template
+call on a string property, which is *valid syntax* and only explodes at run time
+(`TypeError: "…".spread is not a function`, i.e. the board dies with a bare "Couldn't load the task
+board" toast and no clue). This cost a debugging round on 2026-08-04. **Quote CSS selectors with `'`
+inside any comment that lives in a template literal**, never with a backtick.
 
 ## Gotchas / DO NOT TOUCH
 

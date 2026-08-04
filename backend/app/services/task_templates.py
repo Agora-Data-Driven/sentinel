@@ -110,6 +110,46 @@ SEED_TEMPLATES: dict[str, dict] = {
             ("Fix", ["Change implemented on staging or live", "Integration connected (payment / form / pixel)", "Verified working in production"]),
         ],
     },
+    # --- Standalone ad production (M6, WP 5.3) -----------------------------------------------
+    # Creative work commissioned on its OWN, not as part of a Google/Meta campaign. Before these
+    # existed the only way to file an ad edit was to open a whole campaign service and delete the
+    # phases that did not apply. They are Acquisition work but deliberately NOT campaign-shaped:
+    # their `content_type` is the ad format, which is exactly what keeps the Campaign field hidden
+    # on the New Task form (that field appears only for content_type == "Campaign" — see §7).
+    "standalone_video": {
+        "dept": "Acquisition", "label": "Video Ad — standalone", "content_type": "Video Ad",
+        "groups": [
+            ("Video ad production", [
+                "Script / concept approved per video (hook + script before editing)",
+                "Footage secured and available to the editor",
+                "Draft edit per video, to the approved script",
+                "Internal review per video — brand colours, fonts, pacing, hook",
+                "Export + file — folder link on the card",
+            ]),
+        ],
+    },
+    "standalone_static": {
+        "dept": "Acquisition", "label": "Static Ad — standalone", "content_type": "Static Ad",
+        "groups": [
+            ("Static ad production", [
+                "Batch brief approved (angles + copy direction) before any design starts",
+                "Design each static to brand spec, copy matching the approved brief",
+                "Internal review of the batch against brief + compliance",
+                "Export + file to the campaign folder — link on the card",
+            ]),
+        ],
+    },
+    "standalone_carousel": {
+        "dept": "Acquisition", "label": "Carousel Ad — standalone", "content_type": "Carousel Ad",
+        "groups": [
+            ("Carousel ad production", [
+                "Card-by-card structure + copy approved",
+                "Design all cards; the sequence reads in order",
+                "Internal review — sequence logic and brand",
+                "Export + file — folder link on the card",
+            ]),
+        ],
+    },
 }
 
 
@@ -123,6 +163,37 @@ def seed_rows() -> list[dict]:
                      "content_type": t["content_type"], "maintasks_json": json.dumps(groups),
                      "sort_order": i})
     return rows
+
+
+def sync_seed(db: Session) -> list[str]:
+    """Add shipped services that this board does not have yet. Returns the keys inserted.
+
+    🔴 This is WP 5.3's actual content. Adding a recipe to SEED_TEMPLATES was never enough:
+    `main._seed_config` writes service templates **only when the table is empty**, which is true
+    exactly once, on a brand-new database. Every real board — production included — already has
+    rows, so a newly shipped service silently never arrived and had to be retyped by hand in
+    Manage on each environment.
+
+    INSERT-ONLY, matched by `key`:
+
+    * a key the board already has is left completely alone — `label`, `dept`, the recipe, the
+      defaults and `is_active` are all editable in Manage, and a boot-time sync that "corrected"
+      them would silently revert somebody's deliberate customisation on every deploy;
+    * a key that was DELETED on purpose would come back, so deletion is a soft `is_active=False`
+      (the Manage delete already works that way) and an inactive row still counts as present here.
+
+    So the only thing this can ever do is give a board a service it has never seen.
+    """
+    have = {k for (k,) in db.execute(select(ServiceTemplate.key)).all()}
+    added: list[str] = []
+    for row in seed_rows():
+        if row["key"] in have:
+            continue
+        db.add(ServiceTemplate(**row))
+        added.append(row["key"])
+    if added:
+        db.commit()
+    return added
 
 
 def get(db: Session, key: str | None):

@@ -106,21 +106,37 @@ def move_task(client_key: str, task_id: str, stage: str, actor: str = "") -> tup
 
 def add_task(client_key: str, title: str, stage: str = "todo", client_facing: bool = False,
              priority: str = "Medium", department: str = "", due_date: str = "",
-             actor: str = "", actor_name: str = "") -> tuple[bool, str]:
-    """Create a task in Atrium. `client_facing=False` files internal work clients never see."""
+             actor: str = "", actor_name: str = "") -> tuple[str, str]:
+    """Create a task in Atrium. Returns (atrium_task_id, error) -- exactly one is truthy.
+
+    `client_facing=False` files internal work clients never see.
+
+    🔴 Returning the ID is the whole point, and it is why this returns (str, str) rather than the
+    (bool, str) every other write here uses. Atrium answers `{"ok":true,"task_id":…,"stage":…}`
+    and the caller MUST store that id: without it "shared with the client" is a boolean that
+    refers to nothing, which is precisely the bug this fixes (docs/TASKBOARD_REBUILD.md §1.2).
+    An `ok` with no usable id is therefore a FAILURE, not a success -- publishing a card we can
+    never address again would recreate the same lie one row at a time.
+    """
     if not enabled():
-        return False, "The Atrium bridge is not configured."
-    code, _body = _call("task-add", "/api/internal/task-add",
-                        body={"client_key": client_key, "title": title, "stage": stage,
-                              "client_facing": client_facing, "priority": priority,
-                              "department": department, "due_date": due_date,
-                              "actor": actor, "actor_name": actor_name},
-                        timeout=_WRITE_TIMEOUT)
+        return "", "The Atrium bridge is not configured."
+    code, body = _call("task-add", "/api/internal/task-add",
+                       body={"client_key": client_key, "title": title, "stage": stage,
+                             "client_facing": client_facing, "priority": priority,
+                             "department": department, "due_date": due_date,
+                             "actor": actor, "actor_name": actor_name},
+                       timeout=_WRITE_TIMEOUT)
     if code == 200:
-        return True, ""
+        task_id = str((body or {}).get("task_id") or "").strip()
+        if task_id:
+            return task_id, ""
+        log.warning("atrium task-add returned 200 without a task_id: %r", body)
+        return "", "Atrium created that card but didn't return its id - check the client's board."
     if not code:
-        return False, "Atrium didn't confirm that card in time - refresh before adding it again."
-    return False, "Atrium rejected that card."
+        # No answer is not the same as "it didn't happen": the card may exist. Say so, so nobody
+        # publishes twice (same rule as move_task / edit_task).
+        return "", "Atrium didn't confirm that card in time - check the client's board before retrying."
+    return "", (body or {}).get("error") or "Atrium rejected that card."
 
 
 def fetch_task(client_key: str, task_id: str) -> tuple[dict, str]:
@@ -227,10 +243,15 @@ def resolve_change_request(client_key: str, task_id: str, comment_id: str,
 #   * the atrium_* fields exist for values only an Atrium card has (its own department vocabulary,
 #     and owners stored as roster EMAILS rather than Sentinel user ids).
 #
-# The atrium_* keys plus start_date / on_hold / hold_reason exist on TaskUpdateIn for Atrium cards
-# ONLY -- a Sentinel Task row has no such columns, so the Sentinel branch of the update route drops
-# them (ONLY_ATRIUM) instead of setattr-ing junk onto the model.
-ONLY_ATRIUM = ("start_date", "on_hold", "hold_reason",
+# Keys TaskUpdateIn accepts that the SENTINEL branch of the update route must DROP rather than
+# setattr onto the model.
+#
+# 🔴 `start_date` came OFF this list on 2026-08-03: it is a real `tasks.start_date` column now (M5),
+# so dropping it would silently discard the field on every Sentinel edit. `on_hold` / `hold_reason`
+# stayed ON it even though Sentinel gained both columns — a hold is three coupled fields and only
+# `POST /{id}/park` may set it (see schemas.TaskUpdateIn). The atrium_* keys have no Sentinel
+# equivalent at all (Atrium's own department vocabulary; owners as roster emails).
+ONLY_ATRIUM = ("on_hold", "hold_reason",
                "atrium_department", "atrium_lead_id", "atrium_support_ids")
 
 FIELD_MAP = {
