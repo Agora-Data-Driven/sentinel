@@ -873,6 +873,36 @@ window.TaskBoard = {
              It is flagged as shared but no client card exists — a row predating the 2026-08-03 fix.
              Press <em>Share with the client</em> to create it for real.</div>`
         : "";
+    // 🔴 WHAT THE CLIENT ASKED FOR, WHERE YOU ACTUALLY LOOK (2026-08-04).
+    // The reverse channel (D4) delivered correctly from day one, and the card even showed a red
+    // "1 change request" pill — but a pill is a COUNT. The words themselves went into the comment
+    // thread, in the right-hand column, below the work breakdown, styled identically to a
+    // colleague's note. So the board told you a client wanted something changed and never told you
+    // WHAT, which is the one thing the team needs in order to act.
+    //
+    // Two reasons it was invisible rather than merely buried, both worth knowing before touching this:
+    //   * `cmt()` renders a red "Changes requested" pill + a resolve button off `c.kind === "changes"`
+    //     — but `kind` only exists on an ATRIUM-owned card (atrium_tasks.as_task_detail). A Sentinel
+    //     row's comment comes from `serializers.comment_dict`, which has no `kind` to give: the
+    //     receiver bumps `tasks.client_changes_open` and does not persist the kind per comment.
+    //     So the flag is TASK-level, and the honest UI for it is task-level too — this banner.
+    //   * `is_client` was exposed by the serializer, documented there as "what the UI keys off",
+    //     and used by NOTHING. It is used now, both here and in `cmt()`.
+    // The body shown is the newest client comment, which is what the counter refers to in practice.
+    // Resolve posts to /resolve-client-changes (the TASK-level endpoint) — NOT the per-comment
+    // Atrium route `wireResolve` uses, which does not exist for a Sentinel row.
+    const clientSaid = (t.comments || []).filter((c) => c.is_client);
+    const lastClient = clientSaid.length ? clientSaid[clientSaid.length - 1] : null;
+    const changeNote = (t.open_changes && !isAtrium)
+      ? `<div class="form-hint" style="margin-bottom:14px;border-left:3px solid var(--danger)">
+           <strong>The client asked for changes.</strong>
+           ${lastClient
+             ? `<div style="margin:6px 0 8px;white-space:pre-wrap">${S.esc(String(lastClient.body || "").replace(/\n?\[atrium:[^\]]*\]/g, "").trim())}</div>
+                <div class="meta">${S.esc(lastClient.author ? lastClient.author.name : "The client")} · ${S.timeAgo(lastClient.created_at)}</div>`
+             : `<div class="meta">Their message is in the conversation below.</div>`}
+           <button class="btn sm ghost" id="d-resolve-changes" style="margin-top:8px">Mark as handled</button>
+         </div>`
+      : "";
     // Park REMEMBERS the column the card left (tasks.resume_to), so say where Resume will put it —
     // otherwise the button is a guess. An Atrium card's hold has no such memory to show.
     const resumeHint = (!isAtrium && t.resume_to)
@@ -891,6 +921,7 @@ window.TaskBoard = {
     ].join("");
     const body = `<div class="tb-cols">
       <div>
+        ${changeNote}
         ${staleNote}
         <div class="labels" style="margin-bottom:8px">${S.labelPills(t.labels)}${chips}</div>
         <h2 style="margin-bottom:6px">${S.esc(t.title)}</h2>
@@ -1159,6 +1190,18 @@ window.TaskBoard = {
     };
     // A client's "Request changes" (Atrium cards only — clients raise them on their Progress tab).
     // Clearing one is a team action, so it belongs wherever the team is working: here too.
+    // Clears the TASK-level client-changes flag (D4). Separate from wireResolve below, which
+    // resolves ONE Atrium comment — a Sentinel row has no per-comment resolve, only this counter.
+    // The endpoint is idempotent, so two people clicking it is a race nobody loses.
+    const resolveBtn = S.qs("#d-resolve-changes");
+    if (resolveBtn) resolveBtn.onclick = async () => {
+      resolveBtn.disabled = true;
+      try {
+        await S.api(`/api/tasks/${id}/resolve-client-changes`, { method: "POST" });
+        S.toast("Marked as handled", "ok");
+        m.close(); load(); openDetail(id);
+      } catch (err) { resolveBtn.disabled = false; S.toast(err.detail || "Couldn't clear that", "err"); }
+    };
     wireResolve();
     function wireResolve() {
       S.qsa("[data-resolve]").forEach((b) => b.onclick = async () => {
@@ -1365,10 +1408,17 @@ window.TaskBoard = {
   const field = (label, val) => `<div><div class="section-label">${label}</div><div style="margin-top:4px">${S.esc(val || "—")}</div></div>`;
   // Atrium cards carry one comment kind Sentinel rows don't: a client's "Request changes", which
   // stays flagged until someone on the team clears it (see wireResolve in the drawer).
+  // 🔴 `is_client` is finally read here. A client's words on an internal thread have to be
+  // unmistakable — the reply is written differently depending on who is going to read it — and the
+  // serializer has advertised this field for exactly that since D4 while nothing consumed it.
+  // The `[atrium:<id>]` de-dupe marker is stripped: it rides in the body so the receiver needs no
+  // extra column (see internal.internal_task_feedback), and it is plumbing, not something the
+  // client typed.
   const cmt = (c) => `<div class="cmt">${S.avatar(c.author, "sm")}<div class="body">
-      <strong>${S.esc(c.author ? c.author.name : "?")}</strong>${c.kind === "changes"
+      <strong>${S.esc(c.author ? c.author.name : "?")}</strong>${c.is_client
+        ? `<span class="pill violet" style="margin-left:6px">Client</span>` : ""}${c.kind === "changes"
         ? `<span class="pill ${c.resolved ? "green" : "red"}" style="margin-left:6px">${c.resolved ? "Resolved" : "Changes requested"}</span>` : ""}
-      <div>${S.esc(c.body)}</div>
+      <div>${S.esc(String(c.body || "").replace(/\n?\[atrium:[^\]]*\]/g, "").trim())}</div>
       <div class="meta">${S.timeAgo(c.created_at)}</div>
       ${(c.kind === "changes" && !c.resolved) ? `<button class="btn sm ghost" style="margin-top:6px" data-resolve="${S.esc(c.id)}">Mark resolved</button>` : ""}
     </div></div>`;
