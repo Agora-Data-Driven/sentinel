@@ -181,7 +181,19 @@ console.table(out.created);
 `confirm` must repeat the client key exactly — not ceremony, it is the difference between "I read
 the plan" and "I posted the wrong body".
 
-### 🔴 Write the batch id down. It is the only handle on the run.
+### The batch id is the handle on the run — and it is recoverable
+
+Note it down, but you are no longer stuck if you don't: every task carries `adoption_batch` in the
+API, so `GET /api/tasks` will tell you which run created a row.
+
+```js
+console.table((await S("/api/tasks")).filter(t => t.adoption_batch)
+  .map(t => ({ id: t.id, title: t.title, batch: t.adoption_batch })));
+```
+
+⚠️ **Running `apply` twice is harmless but confusing.** The second run correctly adopts nothing and
+returns a *fresh* batch id stamped on no rows — so the id you are looking at may not be the one on
+the rows. Trust the table above over the response.
 
 Then **open the board and look at it** before touching the next client. You are checking:
 
