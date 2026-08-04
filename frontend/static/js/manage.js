@@ -146,8 +146,27 @@ window.pageInit = async (S) => {
       cols: [{ k: "name", label: "Name" }, { k: "color", label: "Colour", fmt: (v) => _swatch(v) }],
       fields: [{ k: "name", label: "Name", type: "text", req: true }, { k: "color", label: "Colour", type: "color" }],
       kinds: [
+        // 🔴 A STATUS CARRIES A THIRD FACET THE OTHER TWO DO NOT: its Atrium client stage (D13).
+        // The server has REQUIRED it since WP 1.1 (`POST /task-vocab` 400s a stage-less status), but
+        // this form only ever sent name + colour — so adding a status through the UI was IMPOSSIBLE,
+        // failing every time with "Pick which client stage this status maps to". Found 2026-08-04,
+        // on a production board that had no blocked column and therefore nowhere to park work: the
+        // gap did not cause that, but it is why nobody could put the column back.
+        // The picker is per-kind, not on the shared `fields`: a label or a priority has no stage,
+        // and the server sets theirs to None regardless, so offering one would be a lie.
         { kind: "status", tab: "Statuses", singular: "status",
-          help: "The Task Board's columns, in order. Renaming one updates every task using it; you can't delete a status still in use." },
+          help: "The Task Board's columns, in order. Each maps to one of the client's five stages — that is what a published card travels as, so the wording here is free to differ from what the client sees. Renaming one updates every task using it; you can't delete a status still in use.",
+          cols: [{ k: "name", label: "Name" },
+                 { k: "stage", label: "Client stage", fmt: (v) => v || "—" },
+                 { k: "color", label: "Colour", fmt: (v) => _swatch(v) }],
+          fields: [{ k: "name", label: "Name", type: "text", req: true },
+                   { k: "stage", label: "Client stage", type: "select", req: true,
+                     opts: [{ value: "todo", label: "To Do" },
+                            { value: "in_progress", label: "In Progress" },
+                            { value: "revision", label: "Revision" },
+                            { value: "blocked", label: "Blocked / parked" },
+                            { value: "completed", label: "Completed" }] },
+                   { k: "color", label: "Colour", type: "color" }] },
         { kind: "label", tab: "Labels", singular: "label",
           help: "The colour-coded label chips on task cards. Renaming updates tasks; deleting is blocked while a task still uses it." },
         { kind: "priority", tab: "Priorities", singular: "priority",
@@ -164,7 +183,9 @@ window.pageInit = async (S) => {
     const cfg = ENTITIES[key];
     if (!cfg.kinds) return cfg;
     const k = cfg.kinds.find((x) => x.kind === vocabKind) || cfg.kinds[0];
+    // A kind may override `cols`/`fields` — statuses carry a stage the other two vocabularies don't.
     return { ...cfg, fixed: { kind: k.kind }, singular: k.singular, help: k.help,
+             cols: k.cols || cfg.cols, fields: k.fields || cfg.fields,
              listUrl: `${cfg.api}?kind=${k.kind}` };
   }
 

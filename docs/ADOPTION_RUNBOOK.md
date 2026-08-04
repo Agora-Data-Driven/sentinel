@@ -89,6 +89,36 @@ stack key `tcs` — those diverge for every client):
 await S("/api/manage/clients/7", { atrium_client_id: "the-contract-shop" }, "PATCH");
 ```
 
+### The live mapping (read off both systems 2026-08-04)
+
+Atrium's workspace keys, from `GET /api/internal/watcher/channels` (cross-workspace), against
+Sentinel's client rows. 🔴 Note `rooming-house-expert` is **singular** and `riverdance-rv` carries the
+`-rv` — the portal key never equals the dashboard stack key, and guessing it is how the proxy 502'd
+for every client once before (atrium/AGENTS.md).
+
+| Sentinel id | Sentinel client | Atrium workspace key |
+|---|---|---|
+| 1 | Honey Tribe | `honey-tribe` |
+| 2 | Melo Yelo | `melo-yelo` |
+| 3 | Riverdance | `riverdance-rv` |
+| 4 | Rooming House Experts | `rooming-house-expert` |
+| 5 | TCS | `the-contract-shop` |
+| 6 | Super Cashflow | `super-cash-flow` |
+
+`ian-fernandez` is Atrium's own house workspace (`workspace.HOUSE_CLIENT`, where the shared Watcher
+archives live). It is nobody's client and must NOT be linked to one.
+
+🔴 **Link all six, not just the two with cards to adopt.** The de-duplication is keyed on this field,
+so an unlinked client's cards double the moment anything is shared to it — the WP 4.3 fix simply
+cannot see a row it can't attribute to a workspace.
+
+```js
+for (const [id, key] of [[1,"honey-tribe"],[2,"melo-yelo"],[3,"riverdance-rv"],
+                         [4,"rooming-house-expert"],[5,"the-contract-shop"],[6,"super-cash-flow"]]) {
+  console.log(id, (await S(`/api/manage/clients/${id}`, {atrium_client_id: key}, "PATCH")).atrium_client_id);
+}
+```
+
 ---
 
 ## 3. Read the plan — this writes nothing
@@ -114,6 +144,23 @@ console.table(plan.skip);    // every skip, with its reason
 | an `adopt` row that is clearly finished/abandoned work | adoption imports it as live work | delete or complete it in Atrium first, then re-run |
 
 ---
+
+### What is actually out there (2026-08-04)
+
+`GET /api/internal/tasks` over the HMAC bridge returns **4 Atrium cards in total**, in two
+workspaces — so adoption is a ten-minute job, not a migration:
+
+| workspace | cards |
+|---|---|
+| `melo-yelo` | New CRM creation · Qcard Google ads campaign – draft · Re-launch Qcard campaign |
+| `super-cash-flow` | Rooming House Extension campaign |
+
+🔴 That last one belongs to **Super Cashflow**, not to the "Rooming House Experts" client — it is a
+title coincidence. Linking RHE to `super-cash-flow` because the words match would put one client's
+card on another client's books.
+
+The other four clients have no Atrium-origin cards, so their plans come back empty. Link them
+anyway (above): the link is what keeps *future* shares from doubling.
 
 ## 4. Decide
 
