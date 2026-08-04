@@ -199,6 +199,12 @@ def task_card(t: Task, db: Session) -> dict:
         "atrium_task_id": getattr(t, "atrium_task_id", None),
         "atrium_sync_error": getattr(t, "atrium_sync_error", None),
         "atrium_shared": bool(getattr(t, "atrium_task_id", None)),
+        # 🔴 The batch that adopted this row (WP 3.4), or null if a human raised it. Exposed because
+        # it is the ONLY handle `task_adoption.revert()` takes, and nothing else surfaced it — the
+        # runbook said "write the batch id down" and an operator who lost it (or who re-ran apply, so
+        # the id they kept came from the no-op second run and is stamped on nothing) had no way to
+        # recover it. Read-only and inert: it identifies a run, it does not change how the row behaves.
+        "adoption_batch": getattr(t, "adoption_batch", None),
         # The workflow state a CARD has to show (Stage 2): a pause, a filed task, and where the
         # review stands. `hold_reason` is NOT here — it is internal prose and belongs in the drawer,
         # not on a card 60 people scroll past.
