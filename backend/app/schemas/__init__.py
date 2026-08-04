@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import datetime as _dt
 from datetime import date
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from pydantic import AfterValidator, BaseModel, Field
 
@@ -404,6 +404,16 @@ class TaskCreateIn(BaseModel):
     # the caller can force it either way. Tri-state on purpose — `False` must mean "explicitly do
     # not share", which a plain bool default could not express.
     share_with_client: bool | None = None
+
+
+class TaskBulkIn(BaseModel):
+    """Apply ONE change to many tasks (M7). Triage on a 60-card board was one drawer at a time."""
+
+    ids: list[int] = Field(default_factory=list, max_length=200)
+    op: Literal["status", "priority", "assignee"]
+    # status -> the status name; priority -> the priority name; assignee -> a user id or null
+    # (null = unassign, which is a real triage action, so the field is genuinely nullable).
+    value: str | int | None = None
 
 
 class TaskUpdateIn(BaseModel):

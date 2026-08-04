@@ -24,6 +24,7 @@ from ..database import get_db
 from ..models import AtriumApproval, Client, Task, TaskComment, TaskHistory, Team, User
 from ..schemas import (
     CommentIn,
+    TaskBulkIn,
     TaskCreateIn,
     TaskParkIn,
     TaskPriorityIn,
@@ -68,6 +69,34 @@ def _derived_labels(db: Session, team_id: int | None) -> list[str]:
     team = db.get(Team, team_id)
     lbl = label_for_department(team.name if team else None)
     return [lbl] if lbl else []
+
+
+def _apply_status(db: Session, task: Task, new_status: str, user: User) -> str:
+    """Move a Sentinel-owned task and leave the row in the canonical shape. Returns the old status.
+
+    🔴 ONE definition, shared by `PATCH /{id}/status` and the bulk endpoint. Everything here is a
+    consequence of the move rather than of the route that made it — the history entry, the
+    completion stamp / approval spend / hold end (`on_status_change`), the client's card following
+    ours across their board, the audit row and the SSE broadcast. A second copy in the bulk path
+    would drift, and the first thing to rot would be the projection: cards moved in bulk would
+    quietly stop matching what the client sees.
+
+    Caller-owned, deliberately: existence, `can_move`, status validity and the review gate (D5).
+    Bulk needs to SKIP a task that fails those, while the single route needs to raise.
+    """
+    old = task.status
+    task.status = new_status
+    _log(db, task.id, user.id, "status", old, new_status)
+    task_workflow.on_status_change(db, task, old, new_status, user)
+    if task_bridge.published(task):
+        task_bridge.push_stage(db, task, user)
+    db.commit()
+    audit.record(db, actor_id=user.id, table_name="tasks", record_id=task.id, action="move",
+                 old={"status": old}, new={"status": new_status})
+    # (The "moving into review pings the AM" notification retired with the "For Review" status on
+    # 2026-07-30 — there is no review column left to move into.)
+    _broadcast("moved", task, user.id)
+    return old
 
 
 def _log(db: Session, task_id: int, actor_id: int, field: str, old, new) -> None:
@@ -655,21 +684,107 @@ def move_status(task_id: str, payload: TaskStatusIn, user: User = Depends(get_cu
     # and it used to be one person's unilateral drag.
     if task_workflow.review_blocks(db, task, payload.status):
         raise HTTPException(status_code=409, detail=task_workflow.NEEDS_REVIEW)
-    task.status = payload.status
-    _log(db, task.id, user.id, "status", old, payload.status)
-    # Stamps completion, un-files a reopened card, spends the approval, and ends a hold. One helper
-    # so a drag, a park, a resume and a PATCH all leave the row in the same shape.
-    task_workflow.on_status_change(db, task, old, payload.status, user)
-    # The client watches the card cross their board, so a move on a published task moves theirs.
-    if task_bridge.published(task):
-        task_bridge.push_stage(db, task, user)
-    db.commit()
-    audit.record(db, actor_id=user.id, table_name="tasks", record_id=task.id, action="move",
-                 old={"status": old}, new={"status": payload.status})
-    # (The "moving into review pings the AM" notification retired with the "For Review" status on
-    # 2026-07-30 — there is no review column left to move into.)
-    _broadcast("moved", task, user.id)
+    _apply_status(db, task, payload.status, user)
     return task_detail(task, db)
+
+
+@router.post("/bulk")
+def bulk_update(payload: TaskBulkIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Apply one change to many tasks (M7, WP 5.4). Triage was one drawer at a time.
+
+    🔴 PARTIAL SUCCESS IS THE CONTRACT, not a compromise. A selection is a rectangle drawn over a
+    board; it will routinely contain a card the actor may not move, one already in the target
+    column, and one a lead has not approved for Completed yet. Refusing the whole batch because of
+    one such card would make the feature useless on exactly the boards it exists for — so every
+    task is judged on its own and the response says precisely what happened to each.
+
+    Every permission is the SAME per-task predicate the single-task routes use (`can_move`,
+    `can_prioritize`, `can_reassign`) and the move runs through the SAME `_apply_status`, so bulk
+    can never become a way around a guard — including the one enforced gate, the D5 review
+    requirement before a done column.
+
+    Atrium-owned ids are refused outright: they are composite strings, they live in another system,
+    and a bulk write across the bridge is not something to do behind one click.
+    """
+    ids = list(dict.fromkeys(payload.ids))      # de-dupe, keep the caller's order
+    if not ids:
+        raise HTTPException(status_code=400, detail="No tasks selected")
+
+    op, value = payload.op, payload.value
+    # Validate the target ONCE. A bad value is the caller's mistake, not a per-task outcome.
+    if op == "status":
+        if value not in task_config.statuses(db):
+            raise HTTPException(status_code=400, detail="Invalid status")
+    elif op == "priority":
+        if value not in task_config.priorities(db):
+            raise HTTPException(status_code=400, detail="Invalid priority")
+    else:
+        if value is not None:
+            target = db.get(User, int(value)) if str(value).isdigit() else None
+            if not target or not target.is_active:
+                raise HTTPException(status_code=400, detail="Unknown person")
+            value = target.id
+
+    updated: list[int] = []
+    skipped: list[dict] = []
+
+    def skip(tid, why):
+        skipped.append({"id": tid, "reason": why})
+
+    for tid in ids:
+        task = db.get(Task, tid)
+        if not task or task.archived:
+            skip(tid, "Not found")
+            continue
+        if op == "status":
+            if not task_perms.can_move(user, task):
+                skip(tid, "Not yours to move")
+            elif task.status == value:
+                skip(tid, "Already there")
+            elif task_workflow.review_blocks(db, task, value):
+                skip(tid, task_workflow.NEEDS_REVIEW)
+            else:
+                _apply_status(db, task, value, user)
+                updated.append(tid)
+        elif op == "priority":
+            if not task_perms.can_prioritize(user, task):
+                skip(tid, "Only a team lead or manager can set priority")
+            elif task.priority == value:
+                skip(tid, "Already there")
+            else:
+                old = task.priority
+                task.priority = value
+                _log(db, task.id, user.id, "priority", old, value)
+                db.commit()
+                audit.record(db, actor_id=user.id, table_name="tasks", record_id=task.id,
+                             action="priority", old={"priority": old}, new={"priority": value})
+                _broadcast("priority", task, user.id)
+                updated.append(tid)
+        else:
+            # Assigning to anyone but yourself is delegation — the same rule single-task edits use.
+            if not task_perms.can_reassign(user, task) and value != user.id:
+                skip(tid, "Only a team lead or manager can assign someone else")
+            elif task.assigned_to_id == value:
+                skip(tid, "Already there")
+            else:
+                old = task.assigned_to_id
+                task.assigned_to_id = value
+                _log(db, task.id, user.id, "assigned_to_id", old, value)
+                # A published card shows the client nothing about WHO owns it, so no bridge push.
+                db.commit()
+                audit.record(db, actor_id=user.id, table_name="tasks", record_id=task.id,
+                             action="assign", old={"assigned_to_id": old},
+                             new={"assigned_to_id": value})
+                if value:
+                    notif.notify(db, user_id=value, type=NOTIF_TASK_ASSIGNED,
+                                 title=f"Task assigned to you: {task.title}",
+                                 link=f"/tasks?open={task.id}")
+                _broadcast("updated", task, user.id)
+                updated.append(tid)
+
+    db.commit()
+    return {"updated": updated, "skipped": skipped,
+            "counts": {"updated": len(updated), "skipped": len(skipped)}}
 
 
 @router.patch("/{task_id}/priority")

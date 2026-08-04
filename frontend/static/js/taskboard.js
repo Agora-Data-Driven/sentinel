@@ -113,6 +113,8 @@ window.TaskBoard = {
   };
   let filters = { client_id: "", team_id: "", priority: "", assignee_id: "" };
   let search = "";
+  let overdueOnly = false;          // M9 — "what is late?" (see matches)
+  let selection = new Set();        // M7 — ids ticked for a bulk action
   let allTasks = [];          // last fetch, unfiltered by the text search
   // View: "board" (status Kanban) | "employee" (swimlanes per person) | "monitor" (manager rollup).
   const params0 = new URLSearchParams(location.search);
@@ -143,7 +145,13 @@ window.TaskBoard = {
       <select id="f-team"><option value="">All Departments</option>${teams.map((t) => `<option value="${t.id}">${S.esc(t.name)}</option>`).join("")}</select>
       <select id="f-priority"><option value="">All Priority</option>${vocab.priorities.map((p) => `<option>${p}</option>`).join("")}</select>
       ${canMonitor ? `<select id="f-assignee"><option value="">All Assignees</option><option value="none">Unassigned</option>${people.map((p) => `<option value="${p.id}">${S.esc(p.name)}</option>`).join("")}</select>` : ""}
+      <label class="chip" style="cursor:pointer" title="Only tasks past their due date (Manila), excluding finished work"><input type="checkbox" id="f-overdue" style="width:auto"> Overdue</label>
+      <button type="button" class="btn sm ghost" id="f-mine" title="Just the work assigned to me">My work</button>
+      <select id="f-view" title="Saved views"><option value="">Saved views…</option></select>
+      <button type="button" class="btn sm ghost" id="f-save-view">Save view</button>
+      ${!readOnly ? `<button type="button" class="btn sm ghost" id="tb-select-toggle" title="Pick several cards and change them together">Select</button>` : ""}
     </div>
+    <div id="tb-bulkbar" class="row" hidden></div>
     <div id="board"></div>`;
 
   const LEADS = {
@@ -186,9 +194,45 @@ window.TaskBoard = {
 
   // The text search is applied client-side so typing never re-hits the server.
   function matches(t) {
+    // OVERDUE (M9, WP 5.4). The board only ever TINTED the due chip; there was no way to ask
+    // "what is late?" — the one question a morning triage starts with. Client-side because the
+    // cards are already here, and compared against PH_TODAY so it agrees with the server's
+    // Asia/Manila business rule rather than the viewer's timezone.
+    // A finished task is never overdue: its due date stopped mattering when it was completed.
+    if (overdueOnly && !(t.due_date && t.due_date < PH_TODAY && !isDoneStatus(t.status))) return false;
     if (!search) return true;
     return [t.title, t.assignee && t.assignee.name, t.client_name]
       .some((s) => (s || "").toLowerCase().includes(search));
+  }
+
+  // --- Saved views (M8, WP 5.4) -----------------------------------------------------------------
+  // Every manager re-applied the same four filters on every visit. Stored per browser, like the
+  // board's other preferences — these are one person's working habits, not org configuration, so
+  // they do not belong in the database.
+  const VIEWS_KEY = "sentinel.tb.views";
+  const readViews = () => {
+    try { return JSON.parse(localStorage.getItem(VIEWS_KEY) || "{}"); } catch (e) { return {}; }
+  };
+  const writeViews = (v) => {
+    try { localStorage.setItem(VIEWS_KEY, JSON.stringify(v)); } catch (e) { /* private mode */ }
+  };
+  const currentView = () => ({ filters: { ...filters }, search, overdueOnly, mode });
+
+  function applyView(v) {
+    if (!v) return;
+    filters = { client_id: "", team_id: "", priority: "", assignee_id: "", ...(v.filters || {}) };
+    search = v.search || "";
+    overdueOnly = !!v.overdueOnly;
+    if (v.mode && (v.mode !== "monitor" || canMonitor)) mode = v.mode;
+    // Push the restored state back into the controls, or the board would filter by values the
+    // filter bar is not showing — which reads as a bug, not a view.
+    S.qs("#f-client").value = filters.client_id;
+    S.qs("#f-team").value = filters.team_id;
+    S.qs("#f-priority").value = filters.priority;
+    if (S.qs("#f-assignee")) S.qs("#f-assignee").value = filters.assignee_id;
+    S.qs("#f-search").value = search;
+    S.qs("#f-overdue").checked = overdueOnly;
+    load();
   }
 
   function render() {
