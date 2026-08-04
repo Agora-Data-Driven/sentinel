@@ -575,8 +575,16 @@ window.TaskBoard = {
     try { rows = await S.api("/api/tasks/summary"); }
     catch (err) { board.innerHTML = `<div class="empty">${S.esc(err.detail || "Couldn't load the team summary.")}</div>`; return; }
     if (!rows.length) { board.innerHTML = `<div class="empty">No teammates to show.</div>`; return; }
-    const barSegs = ["To Do", "In Progress", "Revision Needed", "Blocked"];
-    const segCls = { "To Do": "s-todo", "In Progress": "s-prog", "Revision Needed": "s-rev", "Blocked": "s-block" };
+    // 🔴 Derived from the live vocabulary and coloured by STAGE, never by the status LABEL. This
+    // was a hardcoded four-name list, which had two failure modes that look identical to the
+    // reader — a silently missing segment. (1) Renaming a column in Manage (WP 1.2 renamed Blocked
+    // to Parked) dropped its work off every workload bar, because `r.counts` is keyed by the
+    // current label. (2) A status somebody ADDED was never counted at all, so a teammate with ten
+    // cards in it read as idle. The bar shows OPEN work, so completed-stage columns are excluded
+    // — everything else earns a segment whatever it is called.
+    const SEG_CLS = { todo: "s-todo", in_progress: "s-prog", revision: "s-rev", blocked: "s-block" };
+    const barSegs = STATUSES.filter((s) => STAGE_OF[s] !== "completed");
+    const segCls = Object.fromEntries(barSegs.map((s) => [s, SEG_CLS[STAGE_OF[s]] || "s-todo"]));
     board.innerHTML = `<table class="mon-tbl">
       <thead><tr><th>Teammate</th><th>Workload</th><th class="num">Open</th><th class="num">Overdue</th><th class="num">Done · 7d</th></tr></thead>
       <tbody>${rows.map((r) => {

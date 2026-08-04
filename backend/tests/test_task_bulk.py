@@ -83,7 +83,7 @@ def test_a_task_already_in_the_target_is_skipped_not_failed(client, auth, make_u
 def test_an_unknown_id_is_skipped_and_the_rest_still_move(client, auth, make_user, db):
     u = auth(make_user(C.ROLE_ADMIN))
     real = _task(db, u)
-    body = _bulk(client, [real.id, 999999], "status", "Blocked").json()
+    body = _bulk(client, [real.id, 999999], "status", C.TASK_BLOCKED).json()
     assert body["updated"] == [real.id]
     assert body["skipped"] == [{"id": 999999, "reason": "Not found"}]
 
@@ -91,7 +91,7 @@ def test_an_unknown_id_is_skipped_and_the_rest_still_move(client, auth, make_use
 def test_duplicate_ids_are_collapsed(client, auth, make_user, db):
     u = auth(make_user(C.ROLE_ADMIN))
     t = _task(db, u)
-    body = _bulk(client, [t.id, t.id, t.id], "status", "Blocked").json()
+    body = _bulk(client, [t.id, t.id, t.id], "status", C.TASK_BLOCKED).json()
     assert body["updated"] == [t.id]      # not three moves, and no "Already there" noise
 
 
@@ -143,7 +143,7 @@ def test_an_invalid_target_is_the_callers_mistake_not_a_per_task_outcome(client,
 
 def test_an_empty_selection_is_rejected(client, auth, make_user):
     auth(make_user(C.ROLE_ADMIN))
-    assert _bulk(client, [], "status", "Blocked").status_code == 400
+    assert _bulk(client, [], "status", C.TASK_BLOCKED).status_code == 400
 
 
 def test_an_unknown_op_is_rejected_by_the_schema(client, auth, make_user, db):

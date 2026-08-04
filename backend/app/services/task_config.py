@@ -29,12 +29,21 @@ STATUS_SEED = (
     ("In Progress", "in_progress", "in_progress"),
     ("Revision Needed", "revision", "revision"),
     ("Completed", "completed", "completed"),
-    ("Blocked", "blocked", "blocked"),
+    ("Parked", "blocked", "blocked"),
 )
+
+# 🔴 A status row is found by NAME in two boot-time healers (`backfill_status_meta` and the seed's
+# own metadata lookup), and WP 1.2 renamed one of the shipped five. A board that has not been
+# migrated yet — or one restored from a pre-1.2 backup — still holds the OLD label, so the name
+# lookup has to know both spellings or that row silently misses its key/stage backfill and the
+# bridge falls back to the legacy literal map for every card on it.
+LEGACY_STATUS_NAMES = {"Parked": ("Blocked",)}
 
 DEFAULT_STATUS_COLORS = {
     "To Do": "#6B7280", "In Progress": "#3B82F6", "Revision Needed": "#F97316",
-    "Completed": "#54B948", "Blocked": "#EF4444",
+    "Completed": "#54B948", "Parked": "#EF4444",
+    # Kept so an un-migrated board still renders its blocked column in red rather than colourless.
+    "Blocked": "#EF4444",
 }
 # One colour per DERIVED label (decision D14). The old hand-picked set
 # (Design/Copy/Ads/SEO/Dev) went with the vocabulary it coloured — see constants.TASK_DEPT_LABEL.
@@ -234,6 +243,9 @@ def backfill_status_meta(db: Session) -> int:
     by_name = {r.name: r for r in _status_rows(db)}
     for name, key, stage in STATUS_SEED:
         row = by_name.get(name)
+        for legacy in LEGACY_STATUS_NAMES.get(name, ()):
+            # The row is the same row whichever label it is wearing — see LEGACY_STATUS_NAMES.
+            row = row or by_name.get(legacy)
         if row is None:
             continue
         if not row.key:
@@ -278,6 +290,54 @@ RETIRED_STATUSES = {
     "For Review": "blocked",
     "Waiting for Client": "blocked",
 }
+
+
+# --- Renamed statuses (WP 1.2) ------------------------------------------------------------------
+# The twin of RETIRED_STATUSES, for the other half-move: a shipped status whose LABEL changed while
+# its key and stage stayed put. Keyed by `key`, because the key is the row's identity and the whole
+# reason D13 split the two facets apart — matching on the old label would be the very bug this
+# table exists to route around.
+#
+# 🔴 Why this is a boot-time sweep and not "an operator renames it in Manage" (§5.1). The manual
+# path has an ORDER hazard baked into it: rename before this code ships and the boot-time retirement
+# sweep files live cards under a status the board has no column for. It also leaves every other
+# environment behind — a fresh dev DB seeds "Parked" while an existing board still says "Blocked",
+# and the two boards go on disagreeing in wording, which is precisely the drift §2.2.1 is about.
+# Running it here makes the rename arrive WITH the code that expects it, on every board, once.
+#
+# 🔴 It rewrites ONE label and only when that label is still untouched. The value's first element is
+# the only string we may overwrite: if a team has already renamed their blocked column to something
+# of their own, `name != old` and this leaves it completely alone. A label is theirs to choose; this
+# is a default being corrected, not a policy being enforced.
+RENAMED_STATUSES = {
+    # key: (the only old label we may rewrite, the new label)
+    "blocked": ("Blocked", "Parked"),
+}
+
+
+def rename_statuses(db: Session) -> list[str]:
+    """Apply RENAMED_STATUSES: relabel the vocab row and cascade onto every task holding it.
+
+    Idempotent and safe on every boot — the second run finds `name != old` and does nothing.
+
+    Renaming a status is SAFE in a way that retiring one is not: `tasks.status` stores the label, so
+    the two writes must happen together, but the key and the stage never move, so nothing that
+    resolves a column (`status_for_stage`, `is_completed`, the bridge) can even observe the change.
+    That is the property D13 was built for, and this function is the first thing to actually use it.
+    """
+    renamed: list[str] = []
+    by_key = {r.key: r for r in _status_rows(db) if r.key}
+    for key, (old, new) in RENAMED_STATUSES.items():
+        row = by_key.get(key)
+        if row is None or row.name != old or old == new:
+            continue
+        moved = db.query(Task).filter(Task.status == old).update(
+            {Task.status: new}, synchronize_session=False)
+        row.name = new
+        renamed.append(f"{old} -> {new} ({moved} task(s))")
+    if renamed:
+        db.commit()
+    return renamed
 
 
 def retire_statuses(db: Session) -> list[str]:

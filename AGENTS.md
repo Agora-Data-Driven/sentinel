@@ -3,7 +3,8 @@
 > **Read this before touching any file.** It is the operating manual for this repo.
 > Product/feature overview: [README.md](README.md). Deploy detail: [deploy/DEPLOY.md](deploy/DEPLOY.md).
 > Deep map: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Task-board rebuild plan (analysis +
-> decisions D1–D15 + build order; **Stages 0, 1.1 and 2 are built**):
+> decisions D1–D15 + build order; **every work package is built as of 2026-08-04** — what is left is
+> three operator passes over live client data, and the runbook for them is §5.4 there):
 > [docs/TASKBOARD_REBUILD.md](docs/TASKBOARD_REBUILD.md).
 > Unit file maps + cookbooks:
 > [backend/README.md](backend/README.md) · [frontend/README.md](frontend/README.md) ·
@@ -495,8 +496,32 @@ Consequences worth knowing:
 - The DB column is `vocab_key`, not `key`: `_ensure_columns` builds raw `ALTER TABLE … ADD COLUMN`,
   and a bare `key` is a keyword in enough dialects to not be worth the risk.
 
-Covered by `tests/test_task_status_stages.py`. **Renaming Blocked → Parked is now a one-field edit
-in Manage** — but only after this code is deployed (docs/TASKBOARD_REBUILD.md §5.1).
+Covered by `tests/test_task_status_stages.py`.
+
+**A SHIPPED rename travels in the deploy — `task_config.RENAMED_STATUSES` (WP 1.2, 2026-08-04).**
+Blocked → **Parked** (and Atrium's client column → **Paused**) went in this way rather than as the
+one-field Manage edit this section used to recommend. Two reasons, and the second is the one people
+miss: a hand-edit has a destructive ORDER constraint on whoever clicks it (rename before the code
+ships and the boot-time retirement sweep files live cards under a column that isn't there), and it
+reaches **one database** — every other environment then seeds the new label while the old board keeps
+the old one, and the two boards disagree in wording forever. `rename_statuses(db)` is the twin of
+`retire_statuses`, and needs all three of these to stay safe:
+
+- **keyed by `key`, never the old label** — so it runs **strictly after `_backfill_status_meta()`** in
+  `main._startup`, which is what fills `key` in on a pre-D13 board. Reversed, it silently matches
+  nothing on exactly the oldest boards;
+- **it rewrites one named old label, and only while that label is untouched** — a team that renamed
+  their blocked column themselves keeps their name through every deploy. It corrects a default, it
+  does not enforce a policy;
+- **`tasks.status` is cascaded in the same commit** — the label is what task rows store.
+
+🔴 **Anything that keys off a status LABEL breaks on the next rename, silently.** Shipping this found
+one that had been there all along: the Monitor's workload bar built its segments from a hardcoded
+`["To Do", …, "Blocked"]`, so on the live board it went from covering 18 of 18 open cards to **8** —
+the ten parked ones just stopped appearing, and any status somebody *added* had never been counted at
+all. It derives from `/api/vocab` and colours by STAGE now. Grep for status literals before renaming
+anything. Both legacy spellings stay listed in `atrium_tasks.STAGE_BY_STATUS` and
+`task_config.LEGACY_STATUS_NAMES` on purpose — those are the paths an un-migrated board takes.
 
 ### 🔴 A task's lifecycle is `services/task_workflow.py` — don't set those columns by hand
 

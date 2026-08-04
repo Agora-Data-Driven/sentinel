@@ -65,11 +65,17 @@ def _gone_or_missing_route(body: dict, message: str = GONE) -> str:
 # — see task_config.RETIRED_STATUSES). Keeping them here after Atrium retired them was a quiet
 # lie: `for_review` still POSTed fine, but Atrium's _STAGE_ALIASES landed the card on Blocked, so
 # the two boards disagreed about where the client's card was.
+# 🔴 BOTH labels of the blocked column are listed, and that is not redundancy. This map is the
+# fallback for a DB with no stage information at all, so it is consulted on precisely the boards
+# that have not been through `rename_statuses` yet (WP 1.2) as well as the ones that have. Listing
+# only the new label would strand every card on an un-migrated board; listing only the old one
+# would strand every card on a fresh install.
 STAGE_BY_STATUS = {
     "To Do": "todo",
     "In Progress": "in_progress",
     "Revision Needed": "revision",
     "Completed": "completed",
+    "Parked": "blocked",
     "Blocked": "blocked",
 }
 

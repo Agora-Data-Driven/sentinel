@@ -129,8 +129,8 @@ def test_status_rename_cascades_to_tasks(client, db, make_user, auth):
 
 def test_delete_status_in_use_is_blocked(client, db, make_user, auth):
     auth(make_user(C.ROLE_SUPER_ADMIN))
-    _task(db, status="Blocked")
-    blocked = next(s for s in client.get("/api/manage/task-vocab?kind=status").json() if s["name"] == "Blocked")
+    _task(db, status=C.TASK_BLOCKED)
+    blocked = next(s for s in client.get("/api/manage/task-vocab?kind=status").json() if s["name"] == C.TASK_BLOCKED)
     assert client.delete(f"/api/manage/task-vocab/{blocked['id']}").status_code == 409  # in use
 
 

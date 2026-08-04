@@ -127,7 +127,13 @@ TASK_TODO = "To Do"
 TASK_IN_PROGRESS = "In Progress"
 TASK_REVISION = "Revision Needed"
 TASK_COMPLETED = "Completed"
-TASK_BLOCKED = "Blocked"
+# WP 1.2 (2026-08-04): the LABEL became "Parked". The key and the Atrium stage are both still
+# `blocked` and must never move — this constant is the display string and nothing else, which is
+# exactly why the name kept its `TASK_BLOCKED` spelling: renaming the symbol would read as though
+# the identity had changed too. Existing boards are migrated by `task_config.rename_statuses`;
+# nothing keys off this value (see `task_config.status_for_stage`), it is only the fallback label
+# for a DB whose vocab table is empty.
+TASK_BLOCKED = "Parked"
 # "For Review" and "Waiting for Client" were REMOVED 2026-07-30 at the user's request — both only
 # ever meant "blocked on someone", so they fold into Blocked. Atrium retired the matching stages
 # first (2026-07-29, workspace._STAGE_ALIASES maps for_review/waiting_client -> blocked), so the two
