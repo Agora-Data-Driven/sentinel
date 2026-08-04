@@ -206,6 +206,13 @@ def _backfill_status_meta() -> None:
         fixed = task_config.backfill_status_meta(db)
         if fixed:
             print(f"[sentinel] status meta backfilled ({fixed} field(s))")
+        # 🔴 STRICTLY AFTER the backfill, and that ordering is the whole reason this lives here
+        # rather than in `_seed_config`. `rename_statuses` finds its row by KEY (D13 — the label is
+        # the one facet that moves, so it cannot also be the handle), and on a board seeded before
+        # `task_vocab.key` existed the key is filled in by the call directly above. Run it first and
+        # it matches nothing, silently, on exactly the old boards that need it most.
+        for line in task_config.rename_statuses(db):
+            print(f"[sentinel] renamed task status: {line}")
     except Exception as exc:            # never let a backfill crash startup
         print(f"[sentinel] status meta backfill skipped: {exc}")
     finally:

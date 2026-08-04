@@ -28,7 +28,7 @@ kiosk. Operating rules (CSP, cache bumping, `api()`-only fetches) live in
 | `static/css/styles.css` | The whole design system (token-driven, dark mode via overrides) |
 | `static/vendor/html5-qrcode.min.js` | The only vendored lib — CSP blocks CDNs |
 | `static/who-we-are.html` | North Star manifesto content (served statically, iframed) |
-| `sw.js` | Service worker: **`CACHE` key line 6** (currently `sentinel-v48`), `CORE` precache list, network-first assets; navigations NOT intercepted except **`/kiosk`** (`:46-53`) |
+| `sw.js` | Service worker: **`CACHE` key line 6** (currently `sentinel-v70`), `CORE` precache list, network-first assets; navigations NOT intercepted except **`/kiosk`** (`:46-53`) |
 | `manifest.json` · icons/favicons | PWA install metadata |
 | `modern_prototype.html` · `sidebar_prototype.html` | Design prototypes — not served, don't ship code in them |
 
@@ -99,7 +99,13 @@ inside any comment that lives in a template literal**, never with a backtick.
 - **A component that queries `S.qsa` document-wide must not collide with its host's markup.**
   `GrowthPanel` keys its collapsibles off `details[data-ui]`; the task board it now shares a page
   with uses `data-uid`. Check before adding an attribute selector.
-- Forgetting the `CACHE` bump ships stale assets to everyone (AGENTS.md §5 has the full two-layer
+- **Never build a list of task statuses from LABEL literals** — statuses are renameable in Manage,
+  and a rename ships in the deploy now (`task_config.RENAMED_STATUSES`). The Monitor's workload bar
+  did exactly this (`["To Do","In Progress","Revision Needed","Blocked"]`) and the 2026-08-04
+  Blocked → Parked rename took it from covering **18 of 18** open cards to **8**, with no error and
+  no empty state — the parked work just stopped being drawn. Any status somebody *added* had never
+  been counted either. Derive from `/api/vocab` (`STATUSES`) and switch on **`STAGE_OF[status]`**,
+  never the name; the same rule is why `isDone` asks the stage rather than comparing to "Completed". (AGENTS.md §5 has the full two-layer
   cache story; the server's `Cache-Control: no-cache` half is pinned by backend tests).
 - No React, no bundler, no TypeScript — keep matching what's here.
 
@@ -107,5 +113,5 @@ inside any comment that lives in a template literal**, never with a backtick.
 
 - Live: `https://sentinel-585951669065.asia-southeast1.run.app` — serving revision
   **`sentinel-00112-mpl`** (verified 2026-07-29).
-- `sw.js` `CACHE` currently **`sentinel-v53`**.
+- `sw.js` `CACHE` currently **`sentinel-v70`**.
 - 22 JS files under `static/js/`; 19 page shells.

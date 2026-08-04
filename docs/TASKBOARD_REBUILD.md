@@ -1,6 +1,6 @@
 # Taskboard rebuild — analysis, decisions, roadmap
 
-> **Status (2026-08-04): EVERY work package is built except three that cannot be finished by writing code.** Stage 0 (bar the 0.3 human pass), 1.1, Stage 2, Stage 3 (3.4 is built but deliberately NOT RUN), Stage 4 (bar 4.3), ALL of Stage 5, and ALL of Stage 6. **The three that remain are decisions, not work:** `1.2` needs 1.1 **deployed** first (§5.1 — the wrong order is destructive); `3.4` is tooling that must be **run against live client data** by an operator who has read its plan; `4.3` unblocks only once 3.4 has genuinely run. `0.3` is a per-row human judgement call. Analysis read off the tree, not remembered —
+> **Status (2026-08-04): EVERY work package is built and Stage 1 is now COMPLETE.** Stage 0 (bar the 0.3 human pass), **ALL of Stage 1**, Stage 2, Stage 3 (3.4 is built but deliberately NOT RUN), Stage 4 (bar 4.3), ALL of Stage 5, and ALL of Stage 6. **What remains is not code:** `3.4` is tooling that must be **run against live client data** by an operator who has read its plan (runbook: §5.4); `4.3` unblocks only once 3.4 has genuinely run; `0.3` is a per-row human judgement call. 🔴 **1.2 landed as a boot-time migration, not the operator Manage edit §5.1 originally called for** — the manual path had an order hazard AND left every other environment behind; see the row below. Analysis read off the tree, not remembered —
 > every claim carries a file:line anchor.
 >
 > **The goal:** Sentinel is the one system where tasks are created, assigned, updated and managed.
@@ -343,9 +343,32 @@ the one work package that touches live client data.
 
 Retiring or renaming a status is **two moves in one order**, and doing it wrong makes cards vanish with
 no error (AGENTS.md §5). `task_config.RETIRED_STATUSES` + `retire_statuses(db)` do both halves and run
-from `main._seed_config` on **every boot**. Meanwhile `constants.TASK_BLOCKED` is a code literal that
-feeds that boot-time sweep. So for `Blocked → Parked`: **deploy the code first, then rename.** The
-reverse order moves live cards onto a status with no column.
+from `main._seed_config` on **every boot**.
+
+🔴 **Resolved 2026-08-04 — the ordering rule still holds, but nobody has to obey it by hand any more.**
+This section used to end "deploy the code first, then rename in Manage", which puts a destructive
+ordering constraint on a human clicking a form weeks later. `Blocked → Parked` instead shipped as
+`task_config.RENAMED_STATUSES` + `rename_statuses(db)`, the twin of the retirement sweep: the rename
+travels **inside the deploy**, so it is impossible for it to precede the code that expects it, and it
+reaches every environment rather than the one database somebody happened to open. Three properties
+make a boot-time sweep over a user-editable label acceptable, and a future rename needs all three:
+
+1. **Keyed by `key`, never by the old label** — the label is the facet that moves (D13), so it cannot
+   also be the handle. That is why it must run **after** `_backfill_status_meta`, which is what fills
+   `key` in on a board seeded before that column existed. Reverse the two and it silently matches
+   nothing on exactly the oldest boards.
+2. **It rewrites one specific old label and only while it is untouched.** A team that renamed their
+   blocked column to something of their own finds it unchanged after every deploy. This corrects a
+   default; it does not enforce a policy.
+3. **`tasks.status` is cascaded in the same commit.** The label is what task rows store, so a vocab-only
+   rename leaves every card in that column grouped under a name no column has — off the board, no error.
+
+Two more places had to learn the new label, and both are the general lesson rather than one-offs: the
+legacy `atrium_tasks.STAGE_BY_STATUS` map lists **both** spellings (it is the fallback for boards with
+no stage data, i.e. precisely the un-migrated ones), and `task_config.LEGACY_STATUS_NAMES` lets the
+backfill recognise a row still wearing the old name. **Anything else that keys off a status label is a
+bug waiting for the next rename** — that is how the Monitor's workload bar lost 10 of 18 open cards
+(WP 1.2 row above). Grep for status literals before renaming anything.
 
 ### 5.2 A new column reaches prod two ways, and needs both
 
@@ -377,6 +400,58 @@ a `task_perms` predicate to take. One more, found only by making Monitor readabl
 `canMonitor` true for a viewer in the frontend silently re-enabled the **Delete** and **Approve**
 buttons for any viewer carrying a `team_id`, because two predicates were `canMonitor && team match`.
 
+### 5.4 Runbook — the three things left, none of which is a code change
+
+Every work package is built. What is outstanding is **three operator passes over live client data**,
+and they are outstanding *because* they are judgement, not because anyone ran out of time. Each one
+below is the exact sequence, what to read before deciding, and how to undo it.
+
+All three need a **super-admin** session on production (admin is deliberately not enough for
+adoption), and all three are **per client** — a mistake is one workspace's problem, never the estate's.
+
+#### A. 3.4 — adoption, one client at a time
+
+The point: every Atrium-origin card currently exists only in Atrium, so it has no Sentinel row, no
+assignee, and cannot take part in anything Stage 4 does. Adoption gives each one a linked Sentinel row
+and thereafter treats the client's card as the projection it is (§4).
+
+```
+1.  GET  /api/tasks/adoption/plan?client=<key>
+2.  READ IT. Every skip names its reason; the `create` list is what will exist afterwards.
+3.  POST /api/tasks/adoption/apply   {"client": "<key>", "confirm": "<key>"}
+4.  KEEP THE RETURNED batch id. It is the only handle on the run.
+5.  Look at the board. Then do the next client.
+```
+
+- **`plan()` and `apply()` are different functions and different URLs on purpose.** There is no
+  `dry_run` flag anywhere for somebody to pass wrongly, and a test asserts neither takes one.
+- **Nothing is ever written to Atrium** (asserted with mocks), so the worst case of a bad run is
+  orphaned Sentinel rows — never damaged client-visible data.
+- **Undo:** `POST /api/tasks/adoption/revert {"batch": "<id>"}` removes exactly that run and
+  **refuses any row worked on since** (a comment, an assignment, a move, a completion), reporting them
+  as `kept`. Undoing those would destroy real work, so the refusal is the feature.
+- 🔴 **Do one client, look at the board, then continue.** The tooling supports a client per call
+  because that is the blast radius worth having, not because looping is hard.
+
+#### B. 0.3 — reconcile the pre-fix shares (D15)
+
+`GET /api/tasks/atrium/stale-shares` lists every row that says `atrium_visible = True` and points at a
+card **that was never created** — the lie the Send-to-Atrium fix uncovered. There is deliberately **no
+bulk publish**, and that is the whole decision: these are live client records, some months old, some
+already delivered. Publishing them all would put finished work back in front of a client as though it
+were pending.
+
+Per row, exactly one of: **share it for real** (the work is still live) or
+`POST /api/tasks/{id}/atrium-clear-share` (it is not — clear the claim, tell nobody). Neither is
+guessable from the data, which is why this is a person's job.
+
+#### C. 4.3 — after A, and only after
+
+Collapsing the two permission models presumes client cards *have* Sentinel assignees. Run it before
+adoption and it scopes Atrium cards by an ownership they do not yet have — i.e. **hides every one of
+them**. It unblocks the day A has genuinely run for the workspaces that matter, not the day the
+adoption code merged.
+
 ---
 
 ## 6. Roadmap
@@ -390,13 +465,13 @@ Sizes: **XS** < 1h · **S** ≤ half a day · **M** 1–2 days · **L** 3+.
 |---|---|---|
 | 0.1 | ✅ **DONE 2026-08-03.** **Wire publish for real.** `send-to-atrium` calls `atrium_tasks.add_task`, stores the returned `atrium:<key>:<id>` on the Sentinel row (new `atrium_task_id` column — §5.2), and fails **loud**. `atrium_visible` finally means what it says. | M |
 | 0.2 | ✅ **DONE 2026-08-03.** **The projection push.** Every mutation that touches a client-safe field on a published row pushes the subset over `task-update` / `task-move`. Enforce the split in one place (`atrium_payload` in `serializers.py`). Failures surface and are retryable — never a silent unpublish. | M |
-| 0.3 | 🟡 **API done, human pass pending.** **Reconcile the lie** (D15). A per-client report of every `atrium_visible=True` row pointing at nothing, with a per-row publish / clear / leave action. Never a bulk publish — some are months old, some already delivered. | M |
+| 0.3 | 🟡 **API done, human pass pending — runbook §5.4 B.** **Reconcile the lie** (D15). A per-client report of every `atrium_visible=True` row pointing at nothing, with a per-row publish / clear / leave action. Never a bulk publish — some are months old, some already delivered. | M |
 | 0.4 | ✅ **DONE 2026-08-04.** Retired the dead surface. **`AtriumApproval`'s three response columns** (`client_response`, `responded_at`, `revision_notes`) dropped — nothing ever wrote them, so they read as "no client has ever responded to anything"; migration `f1a6d3c8b5e2`, batch mode so SQLite and Postgres both work, and `sent_at` (the share log) is kept. **`checklist`** removed from `task_detail`'s payload — `maintasks` is what every surface renders and `MT.normalize` migrates the flat rows into it, so shipping both sent the same steps twice with one copy going stale; `checklist_json` stays on the model as the migration source. **The attachments route is gone** — it read the upload, THREW THE BYTES AWAY and recorded name/size as a comment, so the board showed a paperclip for files that could never be opened; no frontend ever called it. The read plumbing is kept for the real GCS implementation (§7). The "In Atrium" pill was already gone. | S |
 
 ### Stage 1 — status vocabulary made safe (prerequisite for the Parked rename)
 
 | 1.1 | ✅ **DONE 2026-08-03.** `task_vocab.key` + **`stage`** + free label; `STAGE_BY_STATUS` maps **key → stage**; Manage renames labels only, and **a new status must pick a stage** (D13). | M |
-| 1.2 | 🟡 **Ready — needs a deploy first.** Deploy 1.1, **then** rename Blocked → Parked in Manage (now a one-field edit). Never the other order (§5.1). **Plus one line in `atrium`** — see below. | S |
+| 1.2 | ✅ **DONE 2026-08-04, after 1.1 was deployed.** Blocked → **Parked** (team) / **Paused** (client). 🔴 **Landed as `task_config.rename_statuses`, a boot-time sweep — NOT the Manage edit this row used to describe.** Two things were wrong with the manual path, and the second only became visible once it was time to do it: the ORDER hazard §5.1 warns about is a live foot-gun for whoever clicks (rename before the code ships and the retirement sweep files cards under a column that isn't there), and a hand-edit reaches **one database** — a fresh dev DB would seed "Parked" while an existing board still said "Blocked", so the two would disagree in wording, which is the drift §2.2.1 exists to end. The sweep makes the rename arrive WITH the code that expects it, on every board, once. Keyed by `key` (D13 — the label is the facet that moves, so it cannot also be the handle), runs **strictly after `_backfill_status_meta`** or it matches nothing on the oldest boards, and it rewrites the label **only while it is still the untouched default**: a team that renamed their blocked column themselves finds it unchanged after every deploy. `tasks.status` is cascaded in the same commit — a vocab-only rename would leave every parked card grouped under a column that no longer exists. **Atrium's half:** `TASK_STAGE_META` says "Parked" and `TASK_CLIENT_STAGES` — which had quietly become a bare ALIAS of it, so the "client-only change is one line" this plan promised was already false — is a real tuple again saying **"Paused"**. 🔴 **Shipping it exposed a second latent bug the rename would have caused silently:** the Monitor's workload bar built its segments from a hardcoded `["To Do","In Progress","Revision Needed","Blocked"]`, so it is keyed by the LABEL — measured on the live board, the old list covered **8 of 18** open cards after the rename (the 10 parked ones vanished from every bar) and any status somebody ADDED had never been counted at all. Now derived from the live vocabulary and coloured by STAGE: 18/18. Verified end-to-end on the populated dev DB (10 tasks moved on boot) + the jsdom harness. Pinned by 6 new cases in `tests/test_task_status_stages.py`. | S |
 
 **The two boards do NOT need the same columns — but they must not disagree in WORDING.** Three
 separate layers, and only the middle one crosses the bridge:
@@ -465,7 +540,7 @@ Stage 1.2 rename cannot break them. Built in `services/task_workflow.py`; pinned
 >    string (it either short-circuits or renders the form), so `?open=` would be lost. The new
 >    `sentinel_base` template var is `SENTINEL_URL` minus `/login` for exactly this.
 | 3.3 | ✅ **DONE 2026-08-04.** **Intake queue** (D3) — cross-repo. **Sentinel:** new `task_requests` table (migration `a2f7c4e9d1b6`). 🔴 A separate TABLE, not a flag on `tasks`: modelling a request as a task keeps the exact problem — every board query, rollup and count would have to remember to exclude them, and the first one that forgot would put a client's wish back on the board. `POST /api/internal/task-request` (HMAC, same `platform-sso-key`) is the inbound leg, **idempotent on `source_ref`** because Atrium retries and clients double-tap Send; a repeat returns the existing row with `duplicate: true` rather than a 4xx, since the caller's job did succeed. An unlinked workspace still files (`client_key` is always kept, `client_id` is nullable) — losing what the client said is worse than a missing FK. Triage is manager-only via `GET /api/tasks/requests` + `POST /requests/{id}/{accept,decline}`; accepting mints an ordinary task (D14 label, D6 share included) so it is indistinguishable from work the team raised, and **a decision is terminal** (409) because the client has already been told. Declining **requires a reason** and is recorded, never deleted — a request that quietly disappears is how the same ask gets raised four times. Board UI: a manager-only **Requests** button with a pending badge. **Atrium:** new `sentinel_requests.py` (mirrors `sentinel_directory`'s HMAC + cold-start retry) and `POST /w/<c>/task-add` now FILES for a client instead of calling `workspace.add_task`; the team's own quick-add still writes locally, because the team is the delivery side. 🔴 A bridge failure is surfaced as a 502 and **never falls back to writing a task** — telling a client "sent" when nobody has it is the one outcome worse than an error, and a fallback would restore the bug D3 fixes. Pinned by `tests/test_task_requests.py` (16) + a rewritten `_atrium_smoketest.py` block that now asserts the INVERSE of what it used to (a client ask must never reach the board). ✅ **Polish landed the same day:** the per-column "+ Add card" is now **team-only** (their add still writes locally, so it is gated rather than deleted) — a client was being offered a column choice that could not do anything. Its `note` field was the client's only way to give context, so the top composer gained a **description** that travels to the intake queue as `details`; there is deliberately **no due date** on a request, for the same reason there is no column — a request is not scheduled work, and the team sets dates when they accept it. ⚠️ Worth remembering: asserting the form's absence on `"data-pgcol-form="` FAILED, because the toggle script builds that selector as a string literal and **the script ships to every viewer** — the test has to match the rendered attribute *with a stage key*. Same trap as keying team-only CSS off `[data-admin]`. | M |
-| 3.4 | 🟡 **TOOLING BUILT 2026-08-04 — NOT RUN.** **Adoption** (§4): import every existing Atrium-origin card into a linked Sentinel row. The code is complete and tested; **nothing has been executed against a real workspace**, and doing so is an operator decision. Safety is structural, not advisory: **`plan()` and `apply()` are different functions** (and different URLs) — there is deliberately no `dry_run=False` for anyone to pass by accident, and a test asserts neither takes such a parameter. `plan()` writes nothing and names a reason for every skip. `apply()` stamps every row it creates with an **`adoption_batch`** (migration `c7e4b1a9f2d3`), which is the whole reason a run is reversible; `revert()` removes exactly that run and **refuses any row worked on since** (a comment, an assignment, a move, a completion), reporting them as `kept` rather than silently skipping — undoing those would destroy real work. **Nothing is ever written to Atrium**, asserted with mocks, so the worst case is orphaned Sentinel rows rather than damaged client-visible data. Per client, always: `client_key` is required, so a mistake is one workspace's problem. Endpoints are **super-admin only** (admin is not enough) and `apply` requires `confirm` to repeat the client key exactly. 🔴 The already-adopted check is scoped by client, because `atrium_task_id` is only unique WITHIN a workspace — a global comparison would skip a card because a *different* client happens to own that id (regression test). Pinned by `tests/test_task_adoption.py` (17). **To actually run it:** `GET /api/tasks/adoption/plan?client=<key>`, read it, then `POST /api/tasks/adoption/apply` with the confirmation; keep the returned batch id. **4.3 stays blocked until this has genuinely run.** | L |
+| 3.4 | 🟡 **TOOLING BUILT 2026-08-04 — NOT RUN.** **Adoption** (§4): import every existing Atrium-origin card into a linked Sentinel row. The code is complete and tested; **nothing has been executed against a real workspace**, and doing so is an operator decision. Safety is structural, not advisory: **`plan()` and `apply()` are different functions** (and different URLs) — there is deliberately no `dry_run=False` for anyone to pass by accident, and a test asserts neither takes such a parameter. `plan()` writes nothing and names a reason for every skip. `apply()` stamps every row it creates with an **`adoption_batch`** (migration `c7e4b1a9f2d3`), which is the whole reason a run is reversible; `revert()` removes exactly that run and **refuses any row worked on since** (a comment, an assignment, a move, a completion), reporting them as `kept` rather than silently skipping — undoing those would destroy real work. **Nothing is ever written to Atrium**, asserted with mocks, so the worst case is orphaned Sentinel rows rather than damaged client-visible data. Per client, always: `client_key` is required, so a mistake is one workspace's problem. Endpoints are **super-admin only** (admin is not enough) and `apply` requires `confirm` to repeat the client key exactly. 🔴 The already-adopted check is scoped by client, because `atrium_task_id` is only unique WITHIN a workspace — a global comparison would skip a card because a *different* client happens to own that id (regression test). Pinned by `tests/test_task_adoption.py` (17). **To actually run it: the full runbook is §5.4 A** — plan, read it, apply per client, keep the batch id, look at the board before the next one. **4.3 stays blocked until this has genuinely run.** | L |
 | 3.5 | ✅ **DONE 2026-08-04.** **Reverse channel** (D4) — cross-repo, and the half that makes the projection a CONVERSATION rather than a broadcast. Sentinel had pushed cards to clients since 0.1/0.2, but anything a client said back lived only in Atrium's workspace JSON, so the team learned of it by re-reading the client's own board — which nobody does. This is what replaces `atrium_approvals`' three response columns dropped in 0.4: the same intent, landing where the conversation already lives. **Sentinel:** `POST /api/internal/task-feedback` (HMAC) with `kind = comment \| changes`; migration `b5d9e2a7c3f4` makes `task_comments.author_id` **nullable** and adds `client_author`, because a client is not a Sentinel user and must never need to be — minting shadow accounts would put clients in every people picker, rollup and assignee dropdown. `comment_dict` exposes `is_client` so a client's words are unmistakable on an internal thread. A change request also raises the new `tasks.client_changes_open`; 🔴 **deliberately NOT `review_state`**, which is the internal approval gate (D5) — folding them together would let a client satisfy or block a team lead's sign-off. `POST /{id}/resolve-client-changes` clears the flag (`can_edit`, idempotent — two people clicking it is a normal race); the thread itself is never touched, because the counter is a flag, not a log. 🔴 The lookup is scoped by **client key as well as `atrium_task_id`**: that column holds Atrium's RAW id, which is only unique *within* a workspace, so without the key two clients could cross-post onto each other's cards (regression test). Idempotent on the Atrium comment id, or a retry would keep climbing the counter and the pill could never honestly clear. **Atrium:** `sentinel_requests.send_feedback`, called after the workspace comment is written. 🔴 **Best-effort, the OPPOSITE posture to the intake queue** — there Sentinel is the only store so silence would be a lie; here the client's words are already saved locally, so an outage must not fail their post (the miss is audited instead). Pinned by `tests/test_task_reverse_channel.py` (16). | M |
 
 ### Stage 4 — permissions and assignment
@@ -478,7 +553,7 @@ Stage 1.2 rename cannot break them. Built in `services/task_workflow.py`; pinned
 | 4.2f | ✅ **DONE 2026-08-03** — the live hole is closed. `update_task` compares the breakdown's owner set before/after (`maintasks.owner_ids`) and refuses any change that involves anybody but the actor, unless `can_reassign`. Ticking, renaming, adding and deleting steps stay open to whoever can edit; self-assignment stays open to everyone. Pinned by 6 cases in `test_security_rbac.py`. | S |
 | 4.2g | ✅ **DONE 2026-08-04.** **Assignment as controls** (D12). The prototype's hardcoded `Route to Acquisition` / `Delegate to Justine & Zhen` buttons only ever fit the one example they were drawn for; these are the general form of the same three actions, placed in the drawer where the breakdown already lives. **Routing:** a team select (`#bd-team`) gated by a new frontend `canReassign(t)` mirroring `task_perms.can_reassign` — disabled with a reason rather than hidden, and a failed PATCH snaps it back to the stored value. Re-routing reloads the board because it also moves the derived label (D14). **Owner pickers:** every phase and step picker renders **two `<optgroup>`s** — the routed team first, "Everyone else" below — because work is routed to a department and then owned inside it ~90% of the time, while "anyone in the company" is still a real need and a picker that hid them would send people back to the Edit form to re-route first. An Atrium roster carries no team, so it degrades to one flat list. **Bulk sweep:** "Assign the N unowned steps to…" appears only when N > 0 and touches **only** steps nobody owns — it never reassigns work that already has an owner, because that is someone's job and a sweep is not where you take it off them. Server-side nothing changed: 4.2f already gates owner changes (`maintasks.owner_ids` vs `can_reassign`), and self-assignment stays open to everyone. Verified in the jsdom harness: routing bound to the right team, "Assign the 9 unowned steps to…", optgroups `["Acquisition","Everyone else"]`. ⚠️ Caught pre-flight: `canReassign` did not exist on the frontend and would have been a `ReferenceError` on every drawer open. | M |
 | 4.2e | ✅ **DONE 2026-08-03.** `POST /{id}/send-back` — only while unassigned, only for `can_review`, clears the team AND assigns the filer so ownership is never vague, records the reason in **history** (no new columns) and notifies them. The reason reaches the filer's *Filed by me* row and never the projection. | S |
-| 4.3 | ⛔ **BLOCKED on 3.4.** Collapse the two permission models — the premise is that client cards *have* Sentinel assignees, which is only true once adoption has run. Doing it first would scope Atrium cards by an ownership they do not yet have, i.e. hide every one of them. | M |
+| 4.3 | ⛔ **BLOCKED on 3.4 having RUN (§5.4 C), not on it having merged.** Collapse the two permission models — the premise is that client cards *have* Sentinel assignees, which is only true once adoption has run. Doing it first would scope Atrium cards by an ownership they do not yet have, i.e. hide every one of them. | M |
 | 4.4 | ✅ **DONE 2026-08-03.** The read-only seat (D8). `ROLE_VIEWER` at the FLOOR of `ROLE_RANK` so no `require_min_role` gate can open, named explicitly in the new `constants.VIEW_ALL_ROLES` for the reads it needs. **`can_edit` split from `can_view` and `can_edit_atrium` from `can_view_atrium`** — the two bare aliases that made the seat impossible. `_require_atrium_write` added: four of the five Atrium branches were writes guarded by the read predicate. Comments and attachments were also writes gated on `can_view`. Pinned by 17 parametrised write cases + the alias check in `test_security_rbac.py`, and verified live (22 cards + the rollup readable, all 9 writes 403). | M |
 
 > **Pulled forward out of Stage 5 (2026-08-03): the client-note field.** The New/Edit task form had
