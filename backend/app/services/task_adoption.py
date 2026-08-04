@@ -3,8 +3,12 @@
 Cards that originated in Atrium — typed into the old console board, or filed by a client's
 quick-add before D3 routed that to intake — have no Sentinel row. With the console board gone no
 NEW ones appear, but the existing ones are stranded: the board renders them read-only over the
-bridge, they cannot be assigned, reviewed, parked or counted, and 4.3 (collapsing the two
-permission models) is blocked until they have Sentinel assignees to be scoped by.
+bridge, they cannot be assigned, reviewed, parked or counted.
+
+🔴 Adoption is only safe BECAUSE of 4.3, not the other way round (the plan had this dependency
+backwards). Every row created here carries `atrium_task_id`, and the board drops any Atrium card a
+Sentinel row already claims — without that de-duplication each adopted card would render twice, and
+the two copies would diverge the moment anybody moved one.
 
 🔴 THIS IS THE ONE WORK PACKAGE THAT TOUCHES LIVE CLIENT DATA. Three rules follow from that, and
 they are structural rather than advisory:
@@ -63,6 +67,33 @@ def _existing_links(db: Session, client_key: str) -> set[str]:
     if owner:
         q = q.where(Task.client_id == owner.id)
     return {row for (row,) in db.execute(q).all() if row}
+
+
+def claimed_atrium_ids(db: Session) -> set[tuple[str, str]]:
+    """Every `(atrium client key, atrium task id)` a Sentinel row already owns.
+
+    🔴 This is what stops the board rendering the SAME piece of work twice (WP 4.3). A Sentinel row
+    linked to an Atrium card — whether the link was made by Send to Atrium (0.1/0.2) or by adoption
+    (3.4) — means the card and the row are one thing. The row is the real one: it can be assigned,
+    parked, reviewed and counted. But `atrium_tasks.fetch_tasks()` still lists that same card, so
+    without this the board appends a second, read-only copy of it, and the pair diverges the instant
+    anybody moves one of them.
+
+    🔴 Keyed by `(client_key, id)`, never by the id alone — `atrium_task_id` holds Atrium's RAW id,
+    which is unique only WITHIN a workspace (the trap §3.5 hit). A global comparison would hide one
+    client's card because a different client happens to own a card with that id, and a card silently
+    missing from the board is the worst failure this system has (AGENTS.md §5).
+
+    A row whose client is not linked to a Sentinel `Client` is therefore unattributable and is NOT
+    claimed here — it shows as a duplicate rather than risking hiding somebody else's work. `apply()`
+    refuses to create such rows in the first place, which is the real fix.
+    """
+    keys = {c.id: c.atrium_client_id
+            for c in db.execute(select(Client)).scalars().all() if c.atrium_client_id}
+    rows = db.execute(
+        select(Task.atrium_task_id, Task.client_id).where(Task.atrium_task_id.is_not(None))
+    ).all()
+    return {(keys[cid], tid) for tid, cid in rows if tid and cid in keys}
 
 
 def plan(db: Session, client_key: str) -> dict:
@@ -129,11 +160,20 @@ def apply(db: Session, client_key: str, batch: str, actor: User) -> dict:
     if not batch:
         raise ValueError("a batch id is required — it is what makes the run reversible")
     todo = plan(db, client_key)
-    owner_id = None
-    if todo["client_linked"]:
-        owner = db.execute(
-            select(Client).where(Client.atrium_client_id == client_key)).scalars().first()
-        owner_id = owner.id if owner else None
+    # 🔴 REFUSE AN UNLINKED WORKSPACE (added with WP 4.3). Rows created for a workspace with no
+    # Sentinel `Client` carry `client_id = NULL`, so `claimed_atrium_ids` cannot attribute them and
+    # the board's de-duplication cannot see them — every adopted card would then render TWICE, and
+    # the two copies diverge the moment anybody moves one. De-duplicating on the bare id instead
+    # would be worse: that id is unique only within a workspace, so it would HIDE another client's
+    # card. Linking the workspace first is a one-field fix; this is refusing to create a mess that
+    # has no good cleanup.
+    if not todo["client_linked"]:
+        raise ValueError(
+            f"“{client_key}” is not linked to a Sentinel client — set that client's "
+            "atrium_client_id first, or its adopted cards will appear twice on the board")
+    owner = db.execute(
+        select(Client).where(Client.atrium_client_id == client_key)).scalars().first()
+    owner_id = owner.id if owner else None
 
     created = []
     for item in todo["adopt"]:

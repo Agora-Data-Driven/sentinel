@@ -145,6 +145,21 @@ Adding a router? Register it in the tuple at [main.py:322](backend/app/main.py#L
 | reaches the board via | `task_card` | `atrium_tasks.fetch_tasks()` → `as_board_card` (fail-soft: an Atrium outage just hides them) |
 | who sees it | `task_perms.can_view` (employee/intern: **only what's assigned to them**) | `task_perms.can_view_atrium` — **team lead and up** |
 
+🔴 **A card is one kind or the other, never both (WP 4.3, 2026-08-04).** The moment a Sentinel row
+carries `atrium_task_id` — whether Send to Atrium put it there or adoption did — that row **is** the
+client's card, and `list_tasks` drops the bridge's copy of it
+(`task_adoption.claimed_atrium_ids(db)`). Without that the board rendered the same work twice: the
+row (assignable, parkable, reviewable, counted) plus a read-only ghost that diverges from it the
+instant either one moves. That was live from 2026-08-03, when Send to Atrium began really
+publishing. Two rules if you touch it:
+
+- **The claim set is keyed by `(client_key, atrium_task_id)`, never the id alone** — that id is
+  unique only *within* a workspace. Matching globally would HIDE another client's card, and a card
+  silently missing from a board is far worse than a visible duplicate.
+- **A linked row with `client_id = NULL` is unattributable**, so it claims nothing and its card
+  shows twice on purpose. `task_adoption.apply()` refuses to create such rows — link the workspace
+  (`Client.atrium_client_id`) first.
+
 **Both are fully editable here** (since 2026-07-29 — before that, opening an Atrium card said "open
 it in Atrium to view or edit", which is a dead end, not an answer). Every route in `tasks.py` looks
 for the prefix first (`atrium_tasks.split_id`) and, when it matches, writes across the bridge
@@ -356,6 +371,15 @@ Two consequences that look like bugs and are not:
   it answers "where did my work go" without putting the card back (§2.4d, D10).
 - **A lead who sends work back can no longer see it** (`POST /{id}/send-back`, D11). The team link is
   cleared and the filer owns it again. Refusing work stops it being yours.
+
+**The third state, added with WP 4.3: `_unowned_client_work`.** A row linked to a client's Atrium
+card with no assignee *and* no team is on every **manager's** board (team lead and up) until somebody
+owns it. It exists because adoption creates exactly that shape — no assignee, no team, and a creator
+tag naming whoever ran the import — so every other clause of `can_view` says no, and a team lead
+would have silently stopped seeing client work they can see today. It is `_team_queue`'s twin for
+work that has not been routed to a team yet, and it obeys the same rule: **the moment it is owned it
+leaves the boards it is not on.** It never widens to employees/interns — the manager surface has to
+survive the collapse of the two permission models without becoming a wider one.
 
 ### 🔴 The Task Board is a PAGE — and `/dashboard?open=<id>` must forward to it forever
 
@@ -805,6 +829,14 @@ suite too — from `backend/`:
 
 Existing coverage: attendance engine, CSRF, events, gym plan, internal HMAC endpoints, leave,
 observability, security headers, RBAC.
+
+🔴 **Never run two pytest processes at once — the suite is not concurrency-safe with itself.**
+`tests/conftest.py` pins `DATABASE_URL` to ONE fixed path (`%TEMP%/sentinel_pytest.db`) and rebuilds
+the schema for every test, so a second run drops the first run's tables mid-test. The damage looks
+nothing like a race: you get `sqlite3.OperationalError: no such table: shift_templates`, fixture
+ERRORs, and a scatter of 500s in unrelated files — i.e. it reads as "my change broke everything".
+If you see that, check for another run (including a backgrounded one) before debugging your diff.
+The same applies to a CI runner executing two jobs on one machine.
 
 **If you touch auth, RBAC, or headers, run the suite before deploying.** Those tests exist
 because those areas broke in production before.

@@ -2,7 +2,9 @@
 
 Cards typed into the old console board — or filed by a client before D3 routed that to intake —
 have no Sentinel row. They render read-only over the bridge, cannot be assigned, reviewed, parked
-or counted, and 4.3 is blocked until they have Sentinel assignees to be scoped by.
+or counted. (This module's header used to say 4.3 was blocked on adoption; it is the other way
+round — 4.3 is what makes adoption safe to run, by stopping an adopted card rendering both as its
+new Sentinel row and as the bridge's copy of itself.)
 
 🔴 This is the one work package that touches LIVE CLIENT DATA, so the safety properties are the
 thing under test, not an afterthought:
@@ -252,3 +254,58 @@ def test_the_full_endpoint_round_trip(client, auth, make_user, db):
     reverted = client.post("/api/tasks/adoption/revert", json={"batch": "b7"})
     assert reverted.json()["counts"]["removed"] == 2
     assert db.query(Task).count() == 0
+
+
+# --- WP 4.3: adoption must not create rows the board cannot de-duplicate -------------------------
+
+def test_apply_refuses_an_unlinked_workspace(db, make_user):
+    """🔴 A row created for a workspace with no Sentinel `Client` carries `client_id = NULL`, so
+    `claimed_atrium_ids` cannot attribute it to a workspace and the board's de-duplication cannot
+    see it — every adopted card would then render TWICE, and the two copies diverge the moment
+    anybody moves one. De-duplicating on the bare id instead would be worse: that id is unique only
+    within a workspace, so it would HIDE another client's card. Linking is a one-field fix; this
+    refuses to create a mess with no good cleanup."""
+    import pytest
+
+    actor = make_user(C.ROLE_SUPER_ADMIN)
+    with _stub():
+        assert task_adoption.plan(db, "acme")["client_linked"] is False   # plan still reports
+        with pytest.raises(ValueError, match="not linked"):
+            task_adoption.apply(db, "acme", "b1", actor)
+    assert db.query(Task).count() == 0, "a refused run must create nothing"
+
+
+def test_the_apply_endpoint_reports_the_refusal_as_a_400(client, auth, make_user):
+    auth(make_user(C.ROLE_SUPER_ADMIN))
+    with _stub():
+        r = client.post("/api/tasks/adoption/apply", json={"client": "acme", "confirm": "acme"})
+    assert r.status_code == 400
+    assert "not linked" in r.json()["detail"]
+
+
+def test_claimed_ids_are_scoped_by_workspace(db, make_user):
+    """The same reasoning as `_existing_links`: `atrium_task_id` is unique only WITHIN a workspace,
+    so the claim set is keyed by `(client_key, id)`. Keyed by id alone, one client's row would
+    suppress another client's card."""
+    acme = _client(db, "acme")
+    other = Client(name="Other", atrium_client_id="other")
+    db.add(other)
+    db.commit()
+    db.add(Task(title="theirs", client_id=other.id, atrium_task_id="a1"))
+    db.commit()
+
+    claimed = task_adoption.claimed_atrium_ids(db)
+    assert ("other", "a1") in claimed
+    assert ("acme", "a1") not in claimed, "another workspace's link must not claim this card"
+
+    db.add(Task(title="ours", client_id=acme.id, atrium_task_id="a1"))
+    db.commit()
+    assert {("other", "a1"), ("acme", "a1")} <= task_adoption.claimed_atrium_ids(db)
+
+
+def test_an_unattributable_link_is_not_claimed(db):
+    """A linked row with no client cannot be tied to a workspace, so it claims nothing — the card
+    shows as a duplicate rather than risking hiding somebody else's work."""
+    db.add(Task(title="orphan", atrium_task_id="a1"))
+    db.commit()
+    assert task_adoption.claimed_atrium_ids(db) == set()

@@ -17,7 +17,7 @@ from __future__ import annotations
 import pytest
 
 from app import constants as C
-from app.models import Task
+from app.models import Client, Task
 from app.services import atrium_tasks
 
 ATRIUM_CARD = {
@@ -33,6 +33,15 @@ def _mk(db, **kw):
     db.commit()
     db.refresh(t)
     return t
+
+
+def _client(db, name, key):
+    """A Sentinel Client linked to an Atrium workspace — the link the de-dup is keyed on."""
+    row = Client(name=name, atrium_client_id=key)
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
 
 
 def _ids(resp):
@@ -181,3 +190,83 @@ def test_unassigned_is_its_own_assignee_choice(client, db, make_user, auth, brid
     # Naming a person wins over the flag (a card cannot be both), and excludes Atrium cards.
     named = _ids(client.get(f"/api/tasks?unassigned=1&assignee_id={emp.id}"))
     assert named == {taken.id}
+
+
+# --- WP 4.3: one piece of work is ONE card -------------------------------------------------------
+
+def test_a_linked_row_replaces_the_bridge_copy_of_the_same_card(client, db, make_user, auth,
+                                                                bridge_on):
+    """🔴 The hole 4.3 closes. A Sentinel row carrying `atrium_task_id` IS the card the bridge is
+    about to hand back, so the board must render one of them, not both.
+
+    It opened the day Send to Atrium began really publishing (2026-08-03) and adoption (3.4) would
+    have widened it to every client card at once. The linked ROW wins: it is the copy that can be
+    assigned, parked, reviewed and counted, while the bridge copy is a read-only ghost that drifts
+    away from it the moment either one moves.
+    """
+    owner = _client(db, "Melo Yelo", "melo-yelo")
+    auth(make_user(C.ROLE_ACCOUNT_MANAGER))
+
+    # Before linking: the bridge copy is the only card there is, and it must still show.
+    assert "atrium:melo-yelo:tk_1" in _ids(client.get("/api/tasks"))
+
+    row = _mk(db, title="No brainer campaign", client_id=owner.id,
+              atrium_task_id="tk_1", atrium_visible=True)
+    ids = _ids(client.get("/api/tasks"))
+    assert row.id in ids
+    assert "atrium:melo-yelo:tk_1" not in ids, "the same work rendered twice"
+
+
+def test_another_clients_card_with_the_same_id_is_NOT_swallowed(client, db, make_user, auth,
+                                                                bridge_on):
+    """🔴 `atrium_task_id` is unique only WITHIN a workspace (the trap §3.5 hit). De-duplicating on
+    the bare id would hide a DIFFERENT client's card — and a card silently missing from the board is
+    strictly worse than a visible duplicate, because nobody can see that it is gone."""
+    other = _client(db, "Honey Tribe", "honeytribe")
+    _mk(db, title="theirs", client_id=other.id, atrium_task_id="tk_1", atrium_visible=True)
+    auth(make_user(C.ROLE_ACCOUNT_MANAGER))
+    assert "atrium:melo-yelo:tk_1" in _ids(client.get("/api/tasks"))
+
+
+def test_an_unattributable_link_shows_a_duplicate_rather_than_hiding_work(client, db, make_user,
+                                                                         auth, bridge_on):
+    """A linked row whose client is not linked to a Sentinel `Client` cannot be attributed to a
+    workspace, so it is deliberately NOT claimed — the card stays visible. `apply()` refuses to
+    create such rows, which is where this is actually prevented."""
+    _mk(db, title="orphan link", atrium_task_id="tk_1", atrium_visible=True)   # client_id NULL
+    auth(make_user(C.ROLE_ACCOUNT_MANAGER))
+    assert "atrium:melo-yelo:tk_1" in _ids(client.get("/api/tasks"))
+
+
+def test_an_adopted_card_stays_on_a_team_leads_board(client, db, make_user, auth):
+    """🔴 The half of the collapse that is NOT deletion. Adoption turns a client card into a row
+    with no assignee, no team, and a creator tag naming the super-admin who ran the import — so
+    every clause of `can_view` says no, and a team lead who could see that card yesterday would
+    simply stop seeing it. The manager surface survives as a STATE (`_unowned_client_work`)."""
+    owner = _client(db, "Melo Yelo", "melo-yelo")
+    boss = make_user(C.ROLE_SUPER_ADMIN)
+    adopted = _mk(db, title="adopted card", client_id=owner.id, atrium_task_id="tk_9",
+                  atrium_visible=True, created_by_id=boss.id)
+    lead = make_user(C.ROLE_TEAM_LEAD)
+    auth(lead)
+    assert adopted.id in _ids(client.get("/api/tasks"))
+
+
+def test_once_owned_it_leaves_the_boards_it_is_not_on(client, db, make_user, auth):
+    """The same rule as `_team_queue`: a shared queue stops being shared the moment it is somebody's
+    job. Otherwise every adopted card would sit on every manager's board forever."""
+    owner = _client(db, "Melo Yelo", "melo-yelo")
+    someone = make_user(C.ROLE_EMPLOYEE)
+    taken = _mk(db, title="taken", client_id=owner.id, atrium_task_id="tk_9",
+                atrium_visible=True, assigned_to_id=someone.id)
+    auth(make_user(C.ROLE_TEAM_LEAD))
+    assert taken.id not in _ids(client.get("/api/tasks"))
+
+
+def test_an_employee_never_gets_unowned_client_work(client, db, make_user, auth):
+    """The manager surface is still a MANAGER surface — collapsing the models must not widen it."""
+    owner = _client(db, "Melo Yelo", "melo-yelo")
+    unowned = _mk(db, title="unowned client work", client_id=owner.id, atrium_task_id="tk_9",
+                  atrium_visible=True)
+    auth(make_user(C.ROLE_EMPLOYEE))
+    assert unowned.id not in _ids(client.get("/api/tasks"))

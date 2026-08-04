@@ -104,13 +104,34 @@ def _team_queue(user: User, task: Task) -> bool:
             and task.assigned_to_id is None)
 
 
+def _unowned_client_work(task: Task) -> bool:
+    """A row linked to a client's Atrium card that nobody owns and no team has been given.
+
+    🔴 This is the state ADOPTION creates (WP 3.4/4.3), and it is why collapsing the two permission
+    models is not just deleting the Atrium ones. An adopted card becomes an ordinary Sentinel row —
+    but one with no assignee, no team and a creator tag naming whichever super-admin ran the import.
+    Every clause of `can_view` is written in terms of those three, so a team lead who can see that
+    client's card TODAY (via the role-based `can_view_atrium`) would stop seeing it the moment it
+    was adopted. Client work would quietly leave the boards of the people who deliver it.
+
+    So the manager surface survives the collapse as a STATE rather than as a card source: unowned,
+    unrouted client work is everybody-senior's to triage, exactly like `_team_queue` but with no
+    team to key on yet. The moment somebody owns it or it is routed, the ordinary rules take over
+    and it leaves the boards it is not on — which is the same rule the rest of this module follows.
+    """
+    return (getattr(task, "atrium_task_id", None) is not None
+            and task.assigned_to_id is None
+            and task.assigned_team_id is None)
+
+
 def can_view(user: User, task: Task) -> bool:
     # A viewer sees the whole board — that is the seat's entire purpose (D8). Cross-client, because
     # it is a monitoring seat and a per-team viewer would answer no useful question.
     if user.role in VIEW_ALL_ROLES:
         return True
     if user.role == ROLE_TEAM_LEAD:
-        return _leads_team(user, task) or _assigned(user, task) or _created(user, task)
+        return (_leads_team(user, task) or _assigned(user, task) or _created(user, task)
+                or _unowned_client_work(task))
     # Employee / intern: what is handed to them, plus their team's untriaged queue. Their board still
     # answers "what am I working on" -- it just no longer pretends work routed to their team doesn't
     # exist until somebody names them on it.
@@ -186,10 +207,20 @@ def can_bridge(user: User) -> bool:
 
 
 # --- Atrium-owned cards ----------------------------------------------------
-# A card Atrium owns (board id "atrium:<client_key>:<task_id>") has no local Task row: no assignee,
-# no team, no creator tag. Every rule above is written in terms of those three, so none of them can
-# apply — these three are the whole model for that kind of card, and the only honest way to scope
-# them is by role.
+# 🔴 SCOPE NARROWED BY WP 4.3: these three now govern ONLY a card with no Sentinel row — one that
+# has never been shared from here and has not been adopted. Every card is governed by exactly one
+# model, and which one is decided by a fact about the card (does a linked row exist?) rather than by
+# which list it arrived in. That is the "collapse" 4.3 asked for; the two models no longer overlap.
+#
+# The board list drops any Atrium card already claimed by a Sentinel row
+# (`task_adoption.claimed_atrium_ids`), so an adopted or shared card reaches these predicates never
+# — it is a `Task` and answers `can_view` / `can_edit` / `can_move` like anything else, with
+# `_unowned_client_work` above keeping it on the managers' boards until somebody owns it.
+#
+# What is left below is the genuinely unadopted card, which still has no local Task row: no
+# assignee, no team, no creator tag. Every rule above is written in terms of those three, so none of
+# them can apply — the only honest way to scope it is by role. These stay until adoption has run
+# everywhere; they are not dead code, they are the pre-adoption path.
 #
 # Visibility is a MANAGER surface (team lead and up). Until 2026-07-30 `list_tasks` appended every
 # Atrium card to every board unfiltered, so an intern's "your tasks" board filled up with unassigned
