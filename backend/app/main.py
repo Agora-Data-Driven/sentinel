@@ -160,6 +160,9 @@ def _ensure_columns() -> None:
         # neither true nor false in SQL.
         ("tasks", "client_changes_open", "INTEGER DEFAULT 0"),
         ("task_comments", "client_author", "VARCHAR(160)"),
+        # WP 3.4 — which adoption run created the row. What makes importing live client cards
+        # reversible; NULL for everything a human raised.
+        ("tasks", "adoption_batch", "VARCHAR(40)"),
     ]
     try:
         insp = inspect(engine)

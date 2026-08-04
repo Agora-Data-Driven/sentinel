@@ -119,4 +119,12 @@ def run(db: Session, day: date | None = None) -> dict:
     att = process_attendance(db, target)
     rem = send_reminders(db)
     db.commit()
-    return {"ok": True, "attendance": att, "reminders": rem}
+
+    # Retainer deliverables (WP 6.1). 🔴 Generated against TODAY, not `target`: the attendance pass
+    # deliberately processes YESTERDAY (a day is only complete once it has ended), but a recurring
+    # task must appear on the day it is due, and running it a day behind would put every monthly
+    # deliverable on the board one day late — and, on the 1st, in the previous month's period.
+    # Safe to run repeatedly: each recurrence claims its period, so a second tick creates nothing.
+    from . import task_recurring
+    made = task_recurring.run(db, today_ph())
+    return {"ok": True, "attendance": att, "reminders": rem, "recurring": made}

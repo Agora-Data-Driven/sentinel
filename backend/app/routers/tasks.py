@@ -21,10 +21,13 @@ from ..constants import (
     label_for_department,
 )
 from ..database import get_db
-from ..models import (AtriumApproval, Client, Task, TaskComment, TaskHistory, TaskRequest,
-                      Team, User)
+from ..models import (AtriumApproval, Client, RecurringService, Task, TaskComment, TaskHistory,
+                      TaskRequest, Team, User)
 from ..schemas import (
     CommentIn,
+    RecurringServiceIn,
+    TaskAdoptionApplyIn,
+    TaskAdoptionRevertIn,
     TaskBulkIn,
     TaskCreateIn,
     TaskParkIn,
@@ -40,7 +43,8 @@ from ..services import atrium_tasks
 from ..services import audit
 from ..services import maintasks as maintasks_svc
 from ..services import notifications as notif
-from ..services import task_bridge, task_config, task_perms, task_templates, task_workflow
+from ..services import (task_adoption, task_bridge, task_config, task_perms, task_recurring,
+                        task_templates, task_workflow)
 from ..utils.time import today_ph, to_ph, utcnow
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
@@ -310,6 +314,155 @@ def employee_summary(user: User = Depends(get_current_user), db: Session = Depen
     # Heaviest / most-behind first is what a manager wants to see.
     rows.sort(key=lambda r: (r["overdue"], r["open_total"]), reverse=True)
     return rows
+
+
+def _recurring_dict(r, db: Session) -> dict:
+    client = db.get(Client, r.client_id) if r.client_id else None
+    team = db.get(Team, r.assigned_team_id) if r.assigned_team_id else None
+    return {
+        "id": r.id, "title": r.title, "cadence": r.cadence,
+        "day_of_period": r.day_of_period, "due_in_days": r.due_in_days,
+        "priority": r.priority, "is_active": bool(r.is_active),
+        "service_key": r.service_key,
+        "client_id": r.client_id, "client_name": client.name if client else None,
+        "assigned_team_id": r.assigned_team_id, "team_name": team.name if team else None,
+        "assignee": user_public(db.get(User, r.assigned_to_id)) if r.assigned_to_id else None,
+        # The period already generated. Surfaced because "why hasn't this month's appeared?" is
+        # the only question anyone ever asks about a recurrence, and this is the answer.
+        "last_period": r.last_period,
+        "next_due": task_recurring.trigger_day(r, today_ph()).isoformat(),
+    }
+
+
+# 🔴 Declared BEFORE `GET /{task_id}` or FastAPI matches "recurring" as a task id (AGENTS.md §5).
+@router.get("/recurring", dependencies=[Depends(require_roles(*AM_PLUS))])
+def list_recurring(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Retainer deliverables that generate themselves (WP 6.1, M10)."""
+    rows = db.execute(select(RecurringService).order_by(RecurringService.title)).scalars().all()
+    return [_recurring_dict(r, db) for r in rows]
+
+
+@router.post("/recurring", dependencies=[Depends(require_roles(*AM_PLUS))])
+def create_recurring(payload: RecurringServiceIn,
+                     user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Set up a recurrence.
+
+    🔴 It is stamped with the CURRENT period on creation whenever this period's trigger day has
+    already passed, so it can never retro-generate work for months it did not exist for. Setting
+    up "the 10th" on the 5th still fires this month; setting it up on the 20th starts next month.
+    """
+    if payload.priority not in task_config.priorities(db):
+        raise HTTPException(status_code=400, detail="Invalid priority")
+    rec = RecurringService(
+        title=payload.title[:200], client_id=payload.client_id,
+        service_key=payload.service_key, assigned_team_id=payload.assigned_team_id,
+        assigned_to_id=payload.assigned_to_id, priority=payload.priority,
+        cadence=payload.cadence, day_of_period=payload.day_of_period,
+        due_in_days=payload.due_in_days, is_active=payload.is_active,
+        created_by_id=user.id,
+    )
+    task_recurring.seed_period(rec, today_ph())
+    db.add(rec)
+    db.commit()
+    db.refresh(rec)
+    audit.record(db, actor_id=user.id, table_name="recurring_services", record_id=rec.id,
+                 action="create", new={"title": rec.title, "cadence": rec.cadence})
+    return _recurring_dict(rec, db)
+
+
+@router.patch("/recurring/{rec_id}", dependencies=[Depends(require_roles(*AM_PLUS))])
+def update_recurring(rec_id: int, payload: RecurringServiceIn,
+                     user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    rec = db.get(RecurringService, rec_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Recurring service not found")
+    for field in ("title", "client_id", "service_key", "assigned_team_id", "assigned_to_id",
+                  "priority", "cadence", "day_of_period", "due_in_days", "is_active"):
+        setattr(rec, field, getattr(payload, field))
+    # 🔴 `last_period` is deliberately NOT reset by an edit. Renaming a recurrence, or fixing its
+    # owner, must never cause this period's task to be generated a second time.
+    db.commit()
+    return _recurring_dict(rec, db)
+
+
+@router.delete("/recurring/{rec_id}", dependencies=[Depends(require_roles(*AM_PLUS))])
+def delete_recurring(rec_id: int, user: User = Depends(get_current_user),
+                     db: Session = Depends(get_db)):
+    """Stop a recurrence. Tasks it already generated are ordinary tasks and are left alone."""
+    rec = db.get(RecurringService, rec_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Recurring service not found")
+    db.delete(rec)
+    db.commit()
+    audit.record(db, actor_id=user.id, table_name="recurring_services", record_id=rec_id,
+                 action="delete", old={"title": rec.title})
+    return {"ok": True}
+
+
+@router.post("/recurring/run", dependencies=[Depends(require_roles(*AM_PLUS))])
+def run_recurring_now(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Generate anything due right now, without waiting for the nightly tick.
+
+    Safe to press twice: each recurrence claims its period, so the second press creates nothing.
+    """
+    return task_recurring.run(db, today_ph(), user)
+
+
+_SUPER = ("super_admin",)
+
+
+@router.get("/adoption/plan", dependencies=[Depends(require_roles(*_SUPER))])
+def adoption_plan(client: str = Query(..., min_length=1),
+                  user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """What adopting this workspace's Atrium cards WOULD do (WP 3.4). Writes nothing.
+
+    Super-admin only, and `client` is required: adoption is the one work package that touches live
+    client data, so a mistake should be one workspace's problem rather than the estate's.
+    """
+    try:
+        return task_adoption.plan(db, client)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/adoption/apply", dependencies=[Depends(require_roles(*_SUPER))])
+def adoption_apply(payload: TaskAdoptionApplyIn,
+                   user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Actually import them. A DIFFERENT endpoint from the plan, on purpose.
+
+    🔴 Requires `confirm` to equal the client key. Not ceremony: this writes rows derived from live
+    client data, and a typed confirmation is the difference between "I ran the plan and read it"
+    and "I posted the wrong body". There is deliberately no `dry_run=false` flag anywhere — the
+    safe call and the dangerous one are different URLs.
+
+    Reversible via `POST /adoption/revert` with the returned batch id.
+    """
+    if payload.confirm != payload.client:
+        raise HTTPException(
+            status_code=400,
+            detail="To apply, `confirm` must repeat the client key exactly. Run the plan first.")
+    batch = payload.batch or f"adopt-{payload.client}-{int(utcnow().timestamp())}"
+    try:
+        result = task_adoption.apply(db, payload.client, batch, user)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    audit.record(db, actor_id=user.id, table_name="tasks", record_id=0, action="adopt",
+                 new={"client": payload.client, "batch": batch,
+                      "created": result["counts"]["created"]})
+    return result
+
+
+@router.post("/adoption/revert", dependencies=[Depends(require_roles(*_SUPER))])
+def adoption_revert(payload: TaskAdoptionRevertIn,
+                    user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Undo one adoption run. Rows that have been worked on since are KEPT and reported."""
+    try:
+        result = task_adoption.revert(db, payload.batch)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    audit.record(db, actor_id=user.id, table_name="tasks", record_id=0, action="adopt-revert",
+                 new={"batch": payload.batch, **result["counts"]})
+    return result
 
 
 @router.get("/throughput")
