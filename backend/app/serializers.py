@@ -205,6 +205,9 @@ def task_card(t: Task, db: Session) -> dict:
         "on_hold": bool(getattr(t, "on_hold", False)),
         "archived": bool(getattr(t, "archived", False)),
         "review_state": getattr(t, "review_state", None),
+        # The client's open change requests (D4). Named to match the field an Atrium-owned card
+        # already reports, so the board's pill renders identically whoever owns the row.
+        "open_changes": getattr(t, "client_changes_open", 0) or 0,
         "completed_at": _iso(getattr(t, "completed_at", None)),
     }
 
@@ -273,9 +276,20 @@ def atrium_payload(t: Task, db: Session) -> dict:
 
 
 def comment_dict(c: TaskComment, db: Session) -> dict:
+    """One comment. EITHER a colleague or the client wrote it (D4 / WP 3.5).
+
+    A client has no `users` row — and must not need one — so a client comment carries a
+    `client_author` name instead of an `author_id`. `is_client` is what the UI keys off: a
+    client's words on an internal thread need to be unmistakable, because the reply is written
+    differently depending on who is going to read it.
+    """
+    author = user_public(db.get(User, c.author_id)) if c.author_id else None
+    client_name = getattr(c, "client_author", None)
     return {
         "id": c.id,
-        "author": user_public(db.get(User, c.author_id)),
+        "author": author or ({"id": None, "name": client_name, "initials":
+                              (client_name or "?")[:1].upper()} if client_name else None),
+        "is_client": bool(client_name and not c.author_id),
         "body": c.body,
         "attachments": _loads(c.attachments_json, []),
         "created_at": _iso(c.created_at),

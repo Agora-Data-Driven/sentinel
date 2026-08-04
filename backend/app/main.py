@@ -153,6 +153,13 @@ def _ensure_columns() -> None:
         ("tasks", "resume_to", "VARCHAR(32)"),
         ("tasks", "review_state", "VARCHAR(20)"),
         ("tasks", "reviewer_id", "INTEGER"),
+        # The reverse channel (D4 / WP 3.5). `client_changes_open` counts the CLIENT's open change
+        # requests — separate from `review_state`, which is the internal approval gate (D5): a
+        # client must never be able to satisfy or block a team lead's sign-off.
+        # DEFAULT 0, not NULL: the board renders the pill on `> 0`, and a NULL comparison is
+        # neither true nor false in SQL.
+        ("tasks", "client_changes_open", "INTEGER DEFAULT 0"),
+        ("task_comments", "client_author", "VARCHAR(160)"),
     ]
     try:
         insp = inspect(engine)

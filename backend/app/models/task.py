@@ -61,6 +61,12 @@ class Task(Base):
     # claim. `reviewer_id` is who decided, stamped on the decision, not on the request.
     review_state: Mapped[str | None] = mapped_column(String(20), nullable=True)
     reviewer_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    # How many change requests the CLIENT has open on this card (D4 / WP 3.5).
+    # 🔴 Deliberately NOT `review_state`. That field is the internal approval gate (D5): a team
+    # lead saying "this is done". A client asking for a revision is a different fact from a
+    # different person, and folding them together would mean a client could satisfy — or block —
+    # an internal sign-off. They are counted separately and displayed separately.
+    client_changes_open: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     # Internal-only money field (never crosses to Atrium). Optional; stored bare — digits with an
     # optional decimal, no "$" or thousands commas. Empty/blank = no charge set.
     service_charge: Mapped[str | None] = mapped_column(String(32), nullable=True)
@@ -105,7 +111,13 @@ class TaskComment(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id"), nullable=False, index=True)
-    author_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    # 🔴 NULLABLE since 2026-08-04 (D4 / WP 3.5). A CLIENT can now reach this thread over the
+    # reverse channel, and a client is not a Sentinel user — there is no row to point at, and
+    # there must never need to be one (creating shadow user accounts for clients would put them
+    # in every people picker and every rollup). A comment therefore has EITHER an author_id (a
+    # colleague) or a client_author name; `serializers.comment_dict` resolves whichever is set.
+    author_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    client_author: Mapped[str | None] = mapped_column(String(160), nullable=True)
     body: Mapped[str] = mapped_column(Text, nullable=False)
     attachments_json: Mapped[str] = mapped_column(Text, default="[]")  # [{name,url}]
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
@@ -186,6 +198,50 @@ class TaskVocabItem(Base):
     color: Mapped[str | None] = mapped_column(String(16), nullable=True)  # #RRGGBB
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class TaskRequest(Base):
+    """A CLIENT'S ASK, before anyone has agreed to do it (decision D3, WP 3.3).
+
+    🔴 A request is deliberately NOT a task. Atrium's quick-add composer used to write straight
+    into `ws["tasks"]`, so anything a client typed during a call became a live card on the delivery
+    board — unowned, unestimated, unscheduled, and indistinguishable from work the agency had
+    actually committed to. The board stopped meaning "what we are doing".
+
+    So the composer now FILES here instead, and a human turns it into a task by accepting it. That
+    keeps the one thing clients genuinely use (capturing an ask mid-call) without letting them
+    write onto the delivery board.
+
+    `status`: pending -> accepted | declined. Terminal either way; a decision is never un-made,
+    because the client has already been told. `task_id` links an accepted request to what it
+    became, which is what lets Atrium show the client that their ask turned into real work.
+
+    The client is identified by the ATRIUM workspace key, not a Sentinel client id: the request
+    arrives over the bridge from a workspace, and mapping it to a `Client` row is a lookup that may
+    legitimately fail (an unlinked workspace) — which must not lose the request.
+    """
+
+    __tablename__ = "task_requests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    client_key: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    client_id: Mapped[int | None] = mapped_column(ForeignKey("clients.id"), nullable=True, index=True)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    details: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Who asked, as Atrium knows them. Free text on purpose: the requester is a CLIENT, so there is
+    # no Sentinel user row to point at, and there must never need to be one.
+    requester_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    requester_email: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # Atrium's own id for the composer entry, so a re-send cannot file the same ask twice.
+    source_ref: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    decided_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    decline_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    task_id: Mapped[int | None] = mapped_column(ForeignKey("tasks.id"), nullable=True, index=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class AtriumApproval(Base):

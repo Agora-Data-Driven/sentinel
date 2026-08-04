@@ -107,7 +107,28 @@ window.TaskBoard = {
       .tcard .t-pick ~ .t-del{right:30px}
       #tb-bulkbar{gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 12px;padding:10px 12px;
         border:1px solid var(--line);border-radius:10px;background:var(--card)}
-      #tb-bulkbar select{height:30px;font-size:12px;width:auto;min-width:130px}`;
+      /* Load-bearing: the bar carries .row (display:flex), and an author display rule BEATS the UA
+         [hidden]{display:none}. Without this the hidden attribute did nothing and the empty bar
+         showed as a stray white strip under the filters on every load. Same trap as .ctxbar.
+         (No backticks in this comment -- it lives inside a template literal.) */
+      #tb-bulkbar[hidden]{display:none}
+      #tb-bulkbar select{height:30px;font-size:12px;width:auto;min-width:130px}
+
+      /* THROUGHPUT (WP 6.2). A plain flex bar chart -- no charting library on this page, and one
+         would be absurd for eight numbers. */
+      .tp-chart{display:flex;align-items:flex-end;gap:8px;height:120px;padding:0 2px;
+        border-bottom:1px solid var(--line)}
+      .tp-col{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;
+        height:100%;gap:4px}
+      .tp-bar{width:100%;max-width:46px;border-radius:5px 5px 0 0;background:var(--accent);
+        min-height:2px}
+      /* The partial week reads as provisional rather than as a cliff. */
+      .tp-bar.tp-partial{background:repeating-linear-gradient(45deg,var(--accent),var(--accent) 4px,
+        transparent 4px,transparent 8px);border:1px dashed var(--accent);opacity:.75}
+      .tp-n{font-size:11px;color:var(--muted)}
+      .tp-clients{list-style:none;margin:0;padding:0;max-width:420px}
+      .tp-clients li{display:flex;justify-content:space-between;gap:12px;padding:7px 0;
+        border-bottom:1px solid var(--line-soft);font-size:13px}`;
     document.head.appendChild(st);
   }
 
@@ -152,6 +173,7 @@ window.TaskBoard = {
           <button type="button" data-view="employee" role="tab">By Employee</button>
           <button type="button" data-view="monitor" role="tab">Monitor</button>
         </div>` : ""}
+        ${canManage ? `<button class="btn ghost" id="tb-requests" title="What clients have asked for, awaiting triage">Requests<span id="tb-req-n" class="pill violet" style="margin-left:6px" hidden></span></button>` : ""}
         <button class="btn ghost" id="filed-by-me" title="Work you raised for another team, and where it went">Filed by me</button>
         <button class="btn ghost" id="past-work" title="Completed work that has been filed">Past work</button>
         ${canCreate ? `<button class="btn primary" id="new-task">${S.ICON.plus}New Task</button>` : ""}
@@ -162,7 +184,7 @@ window.TaskBoard = {
       <select id="f-team"><option value="">All Departments</option>${teams.map((t) => `<option value="${t.id}">${S.esc(t.name)}</option>`).join("")}</select>
       <select id="f-priority"><option value="">All Priority</option>${vocab.priorities.map((p) => `<option>${p}</option>`).join("")}</select>
       ${canMonitor ? `<select id="f-assignee"><option value="">All Assignees</option><option value="none">Unassigned</option>${people.map((p) => `<option value="${p.id}">${S.esc(p.name)}</option>`).join("")}</select>` : ""}
-      <label class="chip" style="cursor:pointer" title="Only tasks past their due date (Manila), excluding finished work"><input type="checkbox" id="f-overdue" style="width:auto"> Overdue</label>
+      <label class="chip" style="cursor:pointer" title="Only tasks past their due date (Manila), excluding finished work"><input type="checkbox" id="f-overdue"> Overdue</label>
       <button type="button" class="btn sm ghost" id="f-mine" title="Just the work assigned to me">My work</button>
       <select id="f-view" title="Saved views"><option value="">Saved views…</option></select>
       <button type="button" class="btn sm ghost" id="f-save-view">Save view</button>
@@ -360,6 +382,90 @@ window.TaskBoard = {
     };
   }
 
+  // --- The client intake queue (D3, WP 3.3) ------------------------------------------------
+  // A client's ask is NOT a task. It waits here until a manager accepts it, at which point it
+  // becomes ordinary work; declining is a first-class outcome and needs a reason, because "we
+  // are not doing this, because…" is an answer the client is owed.
+  async function refreshRequestCount() {
+    const badge = S.qs("#tb-req-n");
+    if (!badge) return;
+    try {
+      const { pending } = await S.api("/api/tasks/requests?status=pending");
+      badge.textContent = pending;
+      badge.hidden = !pending;      // no badge at all when the queue is empty, not a "0"
+    } catch (e) { badge.hidden = true; }
+  }
+
+  async function openRequests() {
+    let data;
+    try { data = await S.api("/api/tasks/requests?status=pending"); }
+    catch (err) { S.toast(err.detail || "Couldn't load the requests", "err"); return; }
+    const rows = data.requests || [];
+    const body = rows.length ? rows.map((r) => `
+      <div class="card pad" data-req="${r.id}" style="margin-bottom:10px">
+        <div class="row between" style="align-items:flex-start;gap:10px">
+          <div style="min-width:0">
+            <div style="font-weight:600">${S.esc(r.title)}</div>
+            <div class="sub" style="font-size:12px;margin-top:2px">
+              ${S.esc(r.client_name || r.client_key)}${r.requester_name ? " · " + S.esc(r.requester_name) : ""} · ${S.timeAgo(r.created_at)}
+            </div>
+            ${r.details ? `<div class="sub" style="margin-top:6px">${S.esc(r.details)}</div>` : ""}
+          </div>
+          <div class="row" style="gap:6px;flex:none">
+            <select data-rq-team="${r.id}" title="Which department takes this on">
+              <option value="">Department…</option>
+              ${teams.map((tm) => `<option value="${tm.id}">${S.esc(tm.name)}</option>`).join("")}
+            </select>
+            <button class="btn sm primary" data-rq-accept="${r.id}">Accept</button>
+            <button class="btn sm ghost" data-rq-decline="${r.id}">Decline</button>
+          </div>
+        </div>
+      </div>`).join("")
+      : `<div class="empty card pad">Nothing waiting. Client asks filed from Atrium land here.</div>`;
+
+    const m = S.modal({
+      title: "Client requests",
+      wide: true,
+      body: `<div class="lead" style="margin-bottom:12px">Asks filed by clients from their Atrium workspace. Accepting one turns it into a task on this board; declining records why.</div>${body}`,
+      footer: `<button class="btn ghost" id="rq-close">Close</button>`,
+    });
+    S.qs("#rq-close").onclick = m.close;
+
+    const after = async (msg) => {
+      S.toast(msg, "ok");
+      m.close();
+      await refreshRequestCount();
+      load();
+    };
+    S.qsa("[data-rq-accept]").forEach((b) => b.onclick = async () => {
+      const id = b.dataset.rqAccept;
+      const teamSel = S.qs(`[data-rq-team="${id}"]`);
+      b.disabled = true;
+      try {
+        await S.api(`/api/tasks/requests/${id}/accept`, {
+          method: "POST",
+          body: { assigned_team_id: teamSel && teamSel.value ? Number(teamSel.value) : null },
+        });
+        await after("Accepted — it is on the board now");
+      } catch (err) { b.disabled = false; S.toast(err.detail || "Couldn't accept that", "err"); }
+    });
+    S.qsa("[data-rq-decline]").forEach((b) => b.onclick = async () => {
+      const reason = (prompt("Why are we not doing this? The client is owed a reason.") || "").trim();
+      if (!reason) return;
+      b.disabled = true;
+      try {
+        await S.api(`/api/tasks/requests/${b.dataset.rqDecline}/decline`,
+                    { method: "POST", body: { reason } });
+        await after("Declined, with the reason on record");
+      } catch (err) { b.disabled = false; S.toast(err.detail || "Couldn't decline that", "err"); }
+    });
+  }
+
+  if (S.qs("#tb-requests")) {
+    S.qs("#tb-requests").onclick = openRequests;
+    refreshRequestCount();
+  }
+
   function setMode(next) {
     mode = next;
     const u = new URLSearchParams(location.search);
@@ -490,6 +596,43 @@ window.TaskBoard = {
       tr.onclick = () => jump(tr.dataset.uid);
       tr.onkeydown = (e) => { if (e.key === "Enter") jump(tr.dataset.uid); };
     });
+    renderThroughput(board);
+  }
+
+  // WP 6.2 (§2.4i): Monitor was a snapshot — no trend, no history, no per-client view. Appended
+  // after the roster paints and fails SILENTLY: a trend is context, and losing it must never cost
+  // a manager the workload table they came for.
+  async function renderThroughput(board) {
+    let data;
+    try { data = await S.api("/api/tasks/throughput?weeks=8"); }
+    catch (e) { return; }
+    const weeks = data.weeks || [];
+    if (!weeks.length) return;
+    const peak = Math.max(1, ...weeks.map((w) => w.completed));
+    const bars = weeks.map((w) => {
+      // 🔴 The current week is PARTIAL. It is drawn, because people want to see it, but marked —
+      // a 2-day week next to full ones otherwise reads as a collapse that never happened.
+      const h = Math.round(100 * w.completed / peak);
+      const label = w.complete ? `Week of ${w.week_start}: ${w.completed} shipped`
+                               : `This week so far: ${w.completed} shipped (still running)`;
+      return `<div class="tp-col" title="${S.esc(label)}">
+        <div class="tp-bar${w.complete ? "" : " tp-partial"}" style="height:${Math.max(h, 2)}%"></div>
+        <span class="tp-n">${w.completed}</span>
+      </div>`;
+    }).join("");
+    const clients = (data.by_client || []).slice(0, 5).map((c) =>
+      `<li><span>${S.esc(c.client_name)}</span><b>${c.completed}</b></li>`).join("");
+
+    const wrap = document.createElement("div");
+    wrap.className = "tp-wrap";
+    wrap.innerHTML = `<div class="row between" style="align-items:baseline;margin:26px 0 10px">
+        <div class="section-label">Throughput · last ${weeks.length} weeks</div>
+        <span class="sub" style="font-size:12px">${data.weekly_average} / week on average<span class="muted"> · complete weeks only</span></span>
+      </div>
+      <div class="tp-chart">${bars}</div>
+      ${clients ? `<div class="section-label" style="margin:22px 0 8px">Shipped by client</div>
+        <ul class="tp-clients">${clients}</ul>` : ""}`;
+    board.appendChild(wrap);
   }
 
   function focusLane(uid) {
