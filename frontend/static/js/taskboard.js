@@ -90,7 +90,18 @@ window.TaskBoard = {
           pointer-events:auto;height:32px;font-size:12px}
         /* The delete affordance already sits top-right; keep it clear of the select. */
         .tcard{padding-bottom:10px}
-      }`;
+      }
+
+      /* BULK SELECTION (M7, WP 5.4). Opt-in: a permanent checkbox on every card is clutter on a
+         board people mostly read, and it competes with drag for the same pointer. */
+      .tcard .t-pick{position:absolute;top:8px;right:8px;width:16px;height:16px;margin:0;
+        cursor:pointer;z-index:2}
+      .tcard.picked{outline:2px solid var(--accent);outline-offset:-2px}
+      /* With a checkbox in the corner the delete button would sit under it. */
+      .tcard .t-pick ~ .t-del{right:30px}
+      #tb-bulkbar{gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 12px;padding:10px 12px;
+        border:1px solid var(--line);border-radius:10px;background:var(--card)}
+      #tb-bulkbar select{height:30px;font-size:12px;width:auto;min-width:130px}`;
     document.head.appendChild(st);
   }
 
@@ -162,6 +173,36 @@ window.TaskBoard = {
     monitor: "Team workload at a glance: open work, what's overdue, and what shipped this week. Click a row to see that person's tasks.",
   };
 
+  // --- Saved views (M8, WP 5.4) -----------------------------------------------------------------
+  // Every manager re-applied the same four filters on every visit. Stored per browser, like the
+  // board's other preferences — these are one person's working habits, not org configuration, so
+  // they do not belong in the database.
+  const VIEWS_KEY = "sentinel.tb.views";
+  const readViews = () => {
+    try { return JSON.parse(localStorage.getItem(VIEWS_KEY) || "{}"); } catch (e) { return {}; }
+  };
+  const writeViews = (v) => {
+    try { localStorage.setItem(VIEWS_KEY, JSON.stringify(v)); } catch (e) { /* private mode */ }
+  };
+  const currentView = () => ({ filters: { ...filters }, search, overdueOnly, mode });
+
+  function applyView(v) {
+    if (!v) return;
+    filters = { client_id: "", team_id: "", priority: "", assignee_id: "", ...(v.filters || {}) };
+    search = v.search || "";
+    overdueOnly = !!v.overdueOnly;
+    if (v.mode && (v.mode !== "monitor" || canMonitor)) mode = v.mode;
+    // Push the restored state back into the controls, or the board would filter by values the
+    // filter bar is not showing — which reads as a bug, not a view.
+    S.qs("#f-client").value = filters.client_id;
+    S.qs("#f-team").value = filters.team_id;
+    S.qs("#f-priority").value = filters.priority;
+    if (S.qs("#f-assignee")) S.qs("#f-assignee").value = filters.assignee_id;
+    S.qs("#f-search").value = search;
+    S.qs("#f-overdue").checked = overdueOnly;
+    load();
+  }
+
   S.qs("#f-search").oninput = (e) => { search = e.target.value.trim().toLowerCase(); render(); };
   S.qs("#f-client").onchange = (e) => { filters.client_id = e.target.value; load(); };
   S.qs("#f-team").onchange = (e) => { filters.team_id = e.target.value; load(); };
@@ -214,6 +255,105 @@ window.TaskBoard = {
     S.toast(`Saved "${name}"`, "ok");
   };
 
+  // --- M7 bulk actions ---------------------------------------------------------------------
+  // Selection mode is OPT-IN: a permanent checkbox on every card is clutter on a board people
+  // mostly read, and it competes with drag-and-drop for the same pointer.
+  let selecting = false;
+  const bulkBar = S.qs("#tb-bulkbar");
+  const selectBtn = S.qs("#tb-select-toggle");
+
+  function bulkOptions() {
+    // Only offer what this actor can actually do, so the bar never promises a 403.
+    const status = `<select id="bk-status"><option value="">Move to…</option>${STATUSES.map((s) => `<option>${S.esc(s)}</option>`).join("")}</select>`;
+    const prio = canPrioritizeOnForm ? `<select id="bk-prio"><option value="">Priority…</option>${vocab.priorities.map((p) => `<option>${S.esc(p)}</option>`).join("")}</select>` : "";
+    const who = canMonitor ? `<select id="bk-who"><option value="">Assign to…</option><option value="none">Unassigned</option>${people.map((p) => `<option value="${p.id}">${S.esc(p.name)}</option>`).join("")}</select>` : "";
+    return status + prio + who;
+  }
+
+  function renderBulkBar() {
+    if (!selecting) { bulkBar.hidden = true; bulkBar.innerHTML = ""; return; }
+    bulkBar.hidden = false;
+    bulkBar.innerHTML = `<span class="section-label" id="bk-count">${selection.size} selected</span>
+      ${bulkOptions()}
+      <button type="button" class="btn sm ghost" id="bk-all">Select all shown</button>
+      <button type="button" class="btn sm ghost" id="bk-none">Clear</button>`;
+    const run = async (op, value) => {
+      if (!selection.size) { S.toast("Nothing selected", "err"); return; }
+      try {
+        const res = await S.api("/api/tasks/bulk", {
+          method: "POST", body: { ids: [...selection], op, value },
+        });
+        // 🔴 Report the skips. Partial success is the contract, and silently moving 7 of 10 cards
+        // while the board redraws is exactly how someone loses track of the other three.
+        const { updated, skipped } = res;
+        if (skipped.length) {
+          const why = [...new Set(skipped.map((s) => s.reason))].join("; ");
+          S.toast(`${updated.length} updated · ${skipped.length} skipped — ${why}`, updated.length ? "ok" : "err");
+        } else {
+          S.toast(`${updated.length} updated`, "ok");
+        }
+        selection.clear();
+        load();
+      } catch (err) { S.toast(err.detail || "Bulk update failed", "err"); }
+    };
+    const st = S.qs("#bk-status");
+    st.onchange = () => { const v = st.value; st.value = ""; if (v) run("status", v); };
+    const pr = S.qs("#bk-prio");
+    if (pr) pr.onchange = () => { const v = pr.value; pr.value = ""; if (v) run("priority", v); };
+    const wh = S.qs("#bk-who");
+    if (wh) wh.onchange = () => {
+      const v = wh.value; wh.value = "";
+      if (v) run("assignee", v === "none" ? null : Number(v));
+    };
+    S.qs("#bk-all").onclick = () => {
+      // "Shown" needs no visibility test: this board REBUILDS its columns from the filtered list
+      // (renderBoard takes `tasks.filter(matches)`), so every .tcard in the DOM is by definition a
+      // card the current filters kept. An earlier version gated on `offsetParent !== null`, which
+      // is a layout question — it selected nothing wherever layout is not computed.
+      // Atrium-owned cards live in another system and the endpoint refuses their composite ids,
+      // so they stay out — offering them could only ever produce a skip.
+      S.qsa(".tcard").forEach((c) => {
+        if (!String(c.dataset.id).startsWith("atrium:")) selection.add(Number(c.dataset.id));
+      });
+      syncSelection();
+    };
+    S.qs("#bk-none").onclick = () => { selection.clear(); syncSelection(); };
+  }
+
+  function syncSelection() {
+    S.qsa(".tcard").forEach((c) => {
+      const box = c.querySelector(".t-pick");
+      if (box) box.checked = selection.has(Number(c.dataset.id));
+      c.classList.toggle("picked", selection.has(Number(c.dataset.id)));
+    });
+    const n = S.qs("#bk-count");
+    if (n) n.textContent = `${selection.size} selected`;
+  }
+
+  function wirePickers() {
+    S.qsa(".t-pick").forEach((box) => {
+      box.onclick = (e) => e.stopPropagation();      // ticking must not open the card
+      box.onchange = (e) => {
+        e.stopPropagation();
+        const id = Number(box.closest(".tcard").dataset.id);
+        if (box.checked) selection.add(id); else selection.delete(id);
+        syncSelection();
+      };
+    });
+    syncSelection();
+  }
+
+  if (selectBtn) {
+    selectBtn.onclick = () => {
+      selecting = !selecting;
+      selectBtn.classList.toggle("primary", selecting);
+      selectBtn.textContent = selecting ? "Done" : "Select";
+      if (!selecting) selection.clear();
+      renderBulkBar();
+      render();
+    };
+  }
+
   function setMode(next) {
     mode = next;
     const u = new URLSearchParams(location.search);
@@ -246,36 +386,6 @@ window.TaskBoard = {
       .some((s) => (s || "").toLowerCase().includes(search));
   }
 
-  // --- Saved views (M8, WP 5.4) -----------------------------------------------------------------
-  // Every manager re-applied the same four filters on every visit. Stored per browser, like the
-  // board's other preferences — these are one person's working habits, not org configuration, so
-  // they do not belong in the database.
-  const VIEWS_KEY = "sentinel.tb.views";
-  const readViews = () => {
-    try { return JSON.parse(localStorage.getItem(VIEWS_KEY) || "{}"); } catch (e) { return {}; }
-  };
-  const writeViews = (v) => {
-    try { localStorage.setItem(VIEWS_KEY, JSON.stringify(v)); } catch (e) { /* private mode */ }
-  };
-  const currentView = () => ({ filters: { ...filters }, search, overdueOnly, mode });
-
-  function applyView(v) {
-    if (!v) return;
-    filters = { client_id: "", team_id: "", priority: "", assignee_id: "", ...(v.filters || {}) };
-    search = v.search || "";
-    overdueOnly = !!v.overdueOnly;
-    if (v.mode && (v.mode !== "monitor" || canMonitor)) mode = v.mode;
-    // Push the restored state back into the controls, or the board would filter by values the
-    // filter bar is not showing — which reads as a bug, not a view.
-    S.qs("#f-client").value = filters.client_id;
-    S.qs("#f-team").value = filters.team_id;
-    S.qs("#f-priority").value = filters.priority;
-    if (S.qs("#f-assignee")) S.qs("#f-assignee").value = filters.assignee_id;
-    S.qs("#f-search").value = search;
-    S.qs("#f-overdue").checked = overdueOnly;
-    load();
-  }
-
   function render() {
     S.qs("#tb-lead").textContent = LEADS[mode];
     S.qsa("#view-seg button").forEach((b) => b.classList.toggle("on", b.dataset.view === mode));
@@ -302,6 +412,7 @@ window.TaskBoard = {
     wireAddButtons();
     wireCardClicks();
     wireMoveSelects();
+    wirePickers();
   }
 
   // Swimlanes: one lane per person that has tasks, plus an Unassigned lane. Cards sit in mini
@@ -342,6 +453,7 @@ window.TaskBoard = {
     wireDnD({ sameLane: true });
     wireCardClicks();
     wireMoveSelects({ sameLane: true });
+    wirePickers();
   }
 
   async function renderMonitor(board) {
@@ -432,7 +544,12 @@ window.TaskBoard = {
 
   function card(t) {
     const dueCls = dueClass(t.due_date);
+    // An Atrium-owned card cannot be bulk-edited (it lives in another system and the endpoint
+    // refuses composite ids), so it never gets a checkbox — better than offering one that only
+    // ever produces a skip.
+    const pickable = selecting && !String(t.id).startsWith("atrium:");
     return `<div class="tcard" draggable="true" data-id="${t.id}">
+      ${pickable ? `<input type="checkbox" class="t-pick" aria-label="Select ${S.esc(t.title)}">` : ""}
       ${t.labels.length ? `<div class="labels">${S.labelPills(t.labels)}</div>` : ""}
       <div class="t-title">${S.esc(t.title)}</div>
       <div class="t-meta">${S.priorityDot(t.priority)}<span>${S.esc(t.priority)}</span>
