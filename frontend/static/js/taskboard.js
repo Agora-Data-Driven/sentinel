@@ -173,6 +173,47 @@ window.TaskBoard = {
 
   S.qsa("#view-seg button").forEach((b) => b.onclick = () => setMode(b.dataset.view));
 
+  // --- M9 overdue + M8 saved views ---------------------------------------------------------
+  S.qs("#f-overdue").onchange = (e) => { overdueOnly = e.target.checked; render(); };
+
+  // "My work" is the default M8 asks for, built in rather than saved: it is the same answer for
+  // everyone and should not need setting up once per person.
+  S.qs("#f-mine").onclick = () => applyView({
+    filters: { assignee_id: String(S.user.id) }, search: "", overdueOnly: false, mode: "board",
+  });
+
+  const viewSel = S.qs("#f-view");
+  function refreshViewList() {
+    const names = Object.keys(readViews()).sort((a, b) => a.localeCompare(b));
+    viewSel.innerHTML = `<option value="">Saved views…</option>`
+      + names.map((n) => `<option value="${S.esc(n)}">${S.esc(n)}</option>`).join("")
+      + (names.length ? `<option value="__del">Delete a view…</option>` : "");
+  }
+  refreshViewList();
+  viewSel.onchange = () => {
+    const pick = viewSel.value;
+    viewSel.value = "";
+    if (!pick) return;
+    if (pick === "__del") {
+      const name = prompt("Delete which view?\n\n" + Object.keys(readViews()).join("\n"));
+      if (!name) return;
+      const all = readViews();
+      if (!(name in all)) { S.toast("No view called " + name, "err"); return; }
+      delete all[name];
+      writeViews(all); refreshViewList(); S.toast("View deleted", "ok");
+      return;
+    }
+    applyView(readViews()[pick]);
+  };
+  S.qs("#f-save-view").onclick = () => {
+    const name = (prompt("Save the current filters as:") || "").trim();
+    if (!name || name === "__del") return;
+    const all = readViews();
+    all[name] = currentView();
+    writeViews(all); refreshViewList();
+    S.toast(`Saved "${name}"`, "ok");
+  };
+
   function setMode(next) {
     mode = next;
     const u = new URLSearchParams(location.search);
