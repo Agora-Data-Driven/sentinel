@@ -27,6 +27,7 @@ from ..services import board_mirror
 from ..services import development as dev_svc
 from ..services import mentor_search as mentor_svc
 from ..services import notifications as notif
+from ..services import work_digest
 
 router = APIRouter(prefix="/api/internal", tags=["internal"])
 
@@ -399,3 +400,89 @@ def internal_mentor_search(
     out["found"] = True
     out["mentors"] = mentor_svc.roster(db, user.id)
     return out
+
+
+@router.get("/work-digest")
+def internal_work_digest(
+    email: str,
+    x_academy_ts: str | None = Header(default=None),
+    x_academy_sig: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    """The TASK BOARD as `email` is permitted to see it — for the Mastery Engine AI coach.
+
+    The coach already knows this person's development (`holistic-profile`); this is their working
+    life. It answers "what should I do today?", "am I behind?" and, for a manager, "who is buried?"
+    from the same chat box that already knows their goals and their training load.
+
+    🔴 **UNLIKE every other endpoint on this router, this payload is ABOUT OTHER PEOPLE — so it is
+    ROLE-SCOPED, and that scoping is the security property.** `holistic-profile` and `growth-detail`
+    can each say "always the user's OWN data, so no manager check applies"; the board cannot. Every
+    card goes through `task_perms.can_view(user, task)` — the same predicate the real board filters
+    with — and the per-person rollup copies `/api/tasks/summary`'s cohort rule (AM/admin see everyone,
+    a team lead sees their own team, employees/interns get none). Without that, the Coach FAB would be
+    an RBAC bypass with a chat box on it: an intern asking "what is everyone working on?" would get
+    the whole estate's delivery board.
+
+    🔴 **And unlike `/board`, this is NOT the staff mirror.** That endpoint hands Atrium's superadmin
+    console everything (`services/board_mirror.py`, deliberately). This one is scoped to ONE viewer
+    and drops `service_charge` outright — see `services/work_digest.py` for the field-exposure
+    argument. If a change ever makes these two payloads converge, this is the one that is wrong.
+
+    Unknown/inactive email → an empty digest, and the coach simply has no work context (exactly how
+    every other bridge here degrades).
+    """
+    _verify(x_academy_ts, x_academy_sig, "work-digest")
+    norm = (email or "").strip().lower()
+    user = db.execute(
+        select(User).where(func.lower(User.email) == norm)
+    ).scalars().first() if norm else None
+    if user is None or not user.is_active:
+        return {"found": False, "digest": None}
+    return {"found": True, "digest": work_digest.work_digest(db, user)}
+
+
+@router.get("/work-detail")
+def internal_work_detail(
+    email: str,
+    ids: str = "",
+    x_academy_ts: str | None = Header(default=None),
+    x_academy_sig: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    """Full bodies for specific task cards — the "big" half of small-to-big retrieval.
+
+    `work-digest` lists every card the viewer may see as a compact line (title, status, dates, who
+    holds it); this returns the prose for the handful a conversation is actually about: description,
+    internal notes, the pause reason, the breakdown with its owners, and the comment thread. Same
+    split, and same reasoning, as `holistic-profile` / `growth-detail`: the index is complete so the
+    coach can always tell what exists, and only the bodies are fetched on demand.
+
+    🔴 **Every id is re-checked against `task_perms.can_view`.** The caller names ids it read out of
+    an index we scoped, but an id is just an integer and this endpoint must not trust it — a coach, or
+    a prompt injection reaching one, could name any number. An id the viewer may not see is absent
+    exactly as an unknown id is, so no one can walk the table by guessing.
+
+    Sentinel rows only: an `atrium:<key>:<id>` card lives in Atrium's workspace JSON and reaches the
+    coach through the digest's compact form. `ids` is comma-separated, capped at
+    `MAX_WORK_DETAIL_IDS` per call — a limit on the REQUEST, never on any card's text.
+    """
+    _verify(x_academy_ts, x_academy_sig, "work-detail")
+    norm = (email or "").strip().lower()
+    user = db.execute(
+        select(User).where(func.lower(User.email) == norm)
+    ).scalars().first() if norm else None
+    if user is None or not user.is_active:
+        return {"found": False, "cards": []}
+    wanted: list[int] = []
+    for part in (ids or "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            wanted.append(int(part))
+        except ValueError:
+            # A malformed id (or an `atrium:` board id) is the caller's problem, not a reason to fail
+            # the worker's whole turn — skip it and serve whatever else was asked for.
+            continue
+    return {"found": True, "cards": work_digest.work_detail(db, user, wanted)}

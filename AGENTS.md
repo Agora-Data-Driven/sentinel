@@ -146,7 +146,7 @@ deploy/            deploy.ps1, seed-job.ps1, DEPLOY.md
 | `meta.py` | Enums/constants for the frontend |
 | `cron.py` | Scheduled job endpoints |
 | `stream.py` | SSE push to the browser |
-| `internal.py` | **HMAC-signed** service-to-service (Mastery Engine ↔ Sentinel, Atrium → Sentinel). Purposes: `user-lookup`, `academy-people`, `holistic-profile`, `growth-detail`, `mentor-search`, `task-request`, `task-feedback`, **`board`** |
+| `internal.py` | **HMAC-signed** service-to-service (Mastery Engine ↔ Sentinel, Atrium → Sentinel). Purposes: `user-lookup`, `academy-people`, `holistic-profile`, `growth-detail`, `mentor-search`, `task-request`, `task-feedback`, **`board`**, **`work-digest`**, **`work-detail`** |
 
 Adding a router? Register it in the tuple at [main.py:322](backend/app/main.py#L322).
 
@@ -937,6 +937,39 @@ Atrium hands over the entire archive in a byte-budgeted response, so this is a c
 are matched on `source_url` (falling back to title), per user — so the button doubles as "catch me
 up since Atrium fetched more", and a mid-way failure returns what was already collected rather than
 discarding megabytes. Covered by `tests/test_atrium_import_all.py`.
+
+### 🔴 The AI coach can READ the task board — and the SCOPING is the security property
+
+`services/work_digest.py` + `GET /api/internal/{work-digest,work-detail}` (purposes `work-digest`,
+`work-detail`), added 2026-08-05. The Mastery Engine coach already knew a worker's development; now
+the same chat box knows their actual plate, so "what should I do today?" is answered against real
+cards, and a manager can ask "who is buried?". The engine half is `workDigest`/`workDetail` in its
+`lib/sentinel.js` and `workBlock` in its `lib/gemini.js`.
+
+**Why this endpoint is unlike every other one on that router.** `holistic-profile`, `growth-detail`
+and `mentor-search` each say "always the user's OWN data, so no manager check applies". The board is
+not that — it is other people's work — so every card goes through **`task_perms.can_view(user, task)`,
+the same predicate `list_tasks` filters the real board with**, and the per-person rollup copies
+`/api/tasks/summary`'s cohort rule (AM/admin/viewer see everyone, a team lead their own team,
+employees/interns none). Widen either and the Coach FAB becomes an RBAC bypass with a chat box on it.
+
+Four rules that hold it together:
+
+| Rule | Why |
+|---|---|
+| **The viewer's OWN index is complete** — open cards AND their whole finished history | The coach concludes "you have nothing about X" from X's absence. Live probing the two endpoints against each other found a card completed last month that appeared in NO list yet `work-detail` would hydrate it — the coach would have denied work the person can see on their own Past-work list. Same failure as the 600-char `other_info` cap |
+| **`work-detail` re-checks every id** | An id is just an integer, and the caller is an LLM. An id the viewer may not see is absent exactly as an unknown one is, so nobody can walk the table by guessing |
+| **A truncation is DECLARED** (`board.truncated`, `mine.done_truncated`) | An AM sees the estate, so the wider board is capped — and the prompt says how much it could not see, so a miss reads as "there are 12 more" rather than "there are none" |
+| **`service_charge` never crosses**; `internal_notes`/`hold_reason` only via `work-detail` | Not needed to coach anybody, and the one field whose leak into a chat transcript is a commercial problem. Pinned by a test |
+
+🔴 **This is NOT the staff mirror.** `GET /api/internal/board` hands Atrium's superadmin console
+everything on purpose (§2). This is scoped to ONE viewer. If a change makes the two converge, this
+one is wrong. Nothing here keys off a status LABEL either (D13) — `stage_for`/`is_completed` only.
+
+The coach is **read-only** on the board: `workBlock` states it cannot move, assign, reschedule or
+close a card, and no `agora-action` op touches tasks. Adding writes means extending the action
+protocol (§ the holistic profile's approval flow) — the digest alone must never become a write path.
+Covered by `tests/test_work_digest.py` (20 cases, weighted toward the refusals).
 
 ### 🟡 The coach answers "what would Nick say?" by RETRIEVAL, not a bigger prompt
 
