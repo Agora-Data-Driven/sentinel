@@ -337,7 +337,14 @@ def test_detail_maps_onto_the_shape_the_drawer_renders():
     assert d["atrium_lead_name"] == "Leo" and d["atrium_support_names"] == ["Ian"]
     assert d["on_hold"] is True and d["hold_reason"] == "waiting on assets"
     # Sentinel-only concepts stay empty rather than being faked from an Atrium value.
-    assert d["assignee"] is None and d["account_manager"] is None and d["description"] == ""
+    assert d["account_manager"] is None and d["description"] == ""
+    # 🔴 CHANGED 2026-08-05: `assignee` now carries Atrium's LEAD as an ID-LESS person, because
+    # hiding it made the board render owned client work as "Unassigned" while this very drawer said
+    # "Lead: Leo". The rule was never "show nothing" — it is "never fake a Sentinel identity", and
+    # that is `assigned_to_id`/`assignee.id` staying None, asserted right below.
+    # See tests/test_atrium_card_owner.py.
+    assert d["assignee"] == {"id": None, "name": "Leo", "profile_pic_url": None}
+    assert d["assigned_to_id"] is None and d["assigned_team_id"] is None
 
 
 def test_every_write_purpose_matches_the_route_it_signs(monkeypatch):

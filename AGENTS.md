@@ -194,6 +194,23 @@ instead of to Postgres: `GET /{id}`, `PATCH /{id}`, `DELETE /{id}`, `PATCH /{id}
   three decisions Sentinel reserves for managers. Every Atrium branch in `tasks.py` calls
   `_require_atrium` (or the stricter `can_manage_atrium`) — scoping only the board LIST would be
   theatre while the id still opened and edited the card.
+- 🔴 **An Atrium card's OWNER shows on the board; its owner is still not a Sentinel user
+  (2026-08-05).** `as_board_card` hardcoded `assignee: None`, so a client card whose **Lead** was set
+  in Atrium rendered **"Unassigned"** on this board while its own drawer said "Lead: Charles". Two
+  causes, and both are worth remembering: Atrium's LIST payload (`_internal_task_view`) carried
+  `lead_id` — an *email* — while only its DETAIL payload resolved names, so the board genuinely had
+  nothing to print; and "absent, never faked" was being applied to the wrong field. Not inventing a
+  Sentinel **user id** is right; hiding the **name** just made the board lie about who holds client
+  work. Now: `assigned_to_id` stays `None` (nothing joins on an Atrium owner, and every
+  assignee-keyed filter still excludes these cards — that is what keeps them off employees' boards),
+  `assignee` is an **id-less** `_person`, and `owner_label()` derives a display name from the email
+  when Atrium sent none, so Sentinel works whether or not Atrium has redeployed. Both payloads now
+  derive it in ONE place (`as_board_card`); `as_task_detail` no longer re-maps those fields, because
+  two derivations is exactly how the card and the drawer disagreed. Atrium's half
+  (`lead_name`/`support_names` in the list payload) is pinned by its `_atrium_smoketest.py`; this
+  half by `tests/test_atrium_card_owner.py`.
+  > The **By Employee** swimlanes still put these cards in the *Unassigned* lane, on purpose: that
+  > view groups by Sentinel user id, and an Atrium lead has none. The lane means "no Sentinel owner".
 - 🔴 **Only Atrium's own 404 may surface as "that card is gone."** The board LIST is fail-soft, but
   every explicit act (open / edit / delete / comment) reports its failure — the router keys its 404
   off `atrium_tasks.GONE`/`GONE_COMMENT` and answers **502** for anything else, so a timeout is

@@ -313,9 +313,33 @@ def to_atrium_fields(data: dict) -> dict:
 
 
 def _person(name: str) -> dict | None:
-    """An Atrium owner/author as the {name} object the board's avatar + labels expect."""
+    """An Atrium owner/author as the {name} object the board's avatar + labels expect.
+
+    🔴 `id` is always None, and that is load-bearing: an Atrium owner is a roster EMAIL, not a
+    Sentinel user, so nothing may join on it or treat this as an assignment Sentinel can act on.
+    `S.avatar` needs only `name` (it falls back to initials), which is why a name with no id renders
+    perfectly well.
+    """
     name = (name or "").strip()
     return {"id": None, "name": name, "profile_pic_url": None} if name else None
+
+
+def owner_label(person_id: str) -> str:
+    """A roster EMAIL rendered as a display name — the fallback when Atrium sent no resolved name.
+
+    Atrium's LIST payload (`_internal_task_view`) carries `lead_id`/`support_ids` but no names; only
+    its DETAIL payload resolves them against the roster. That asymmetry is why a client card whose
+    Lead was set in Atrium rendered **"Unassigned"** on the board while the drawer for the same card
+    said "Lead: Charles" — the board simply had no name to show and printed the empty state.
+
+    So: prefer whatever name Atrium resolved, and derive one from the email's local part when it
+    didn't. `charles.reyes@agora.ph` → "Charles Reyes". Same derivation the history mapper already
+    uses for `actor`. It is a DISPLAY fallback, never an identity — see `_person`.
+    """
+    local = (person_id or "").split("@")[0].strip()
+    if not local:
+        return ""
+    return local.replace(".", " ").replace("_", " ").replace("-", " ").title()
 
 
 def as_task_detail(envelope: dict, client: object = None) -> dict:
@@ -378,11 +402,11 @@ def as_task_detail(envelope: dict, client: object = None) -> dict:
             "changed_at": h.get("at") or "",
         } for i, h in enumerate(reversed(t.get("history") or []))],
         # --- Atrium-only: the values and vocabularies a Sentinel row has no column for ----------
-        "atrium_department": t.get("department") or "",
-        "atrium_lead_id": t.get("lead_id") or "",
-        "atrium_lead_name": t.get("lead_name") or "",
-        "atrium_support_ids": list(t.get("support_ids") or []),
-        "atrium_support_names": list(t.get("support_names") or []),
+        # 🔴 `atrium_department` / `atrium_lead_*` / `atrium_support_*` are NOT re-mapped here — they
+        # come from `as_board_card` above, which is now the single place they are derived. They used
+        # to be set in both, and the two disagreed: the card hardcoded no owner while this branch
+        # read the resolved name, which is exactly how a card with a Lead showed "Unassigned" on the
+        # board and "Lead: Charles" in its own drawer. One derivation, both surfaces.
         "atrium_roster": envelope.get("roster") or [],
         "atrium_departments": envelope.get("departments") or [],
         "start_date": t.get("start_date") or "",
@@ -439,9 +463,27 @@ def as_board_card(t: dict, client: object = None) -> dict:
 
     `client` is the matching Sentinel Client row (resolved via Client.atrium_client_id) when there
     is one, so the board's client filter and client name work on Atrium cards exactly as they do on
-    Sentinel's own. Internal-only Sentinel concepts it has no equivalent for (assignee objects,
-    team ids) come back empty rather than faked, and `source` marks the card so the UI can badge it
-    and route edits back to Atrium."""
+    Sentinel's own. Internal-only Sentinel concepts it has no equivalent for (team ids, the creator
+    tag) come back empty rather than faked, and `source` marks the card so the UI can badge it
+    and route edits back to Atrium.
+
+    🔴 **`assigned_to_id` stays None but `assignee` now carries Atrium's LEAD (2026-08-05).** Both
+    were hardcoded `None`, so a client card with a Lead set in Atrium rendered **"Unassigned"** on
+    the board while its own drawer said "Lead: Charles" — the board had nowhere to read a name from,
+    because Atrium's list payload sends `lead_id` (a roster email) and only its DETAIL payload
+    resolves names. "Absent, never faked" was the right instinct applied to the wrong field: not
+    inventing a Sentinel **user id** is correct, and refusing to show the **name** on the card while
+    showing it in the drawer just made the board lie about who is holding client work.
+
+    So the split is: `assigned_to_id = None` (nothing may join on an Atrium owner, and every filter
+    keyed on it still excludes these cards, which is what keeps them off employees' boards), while
+    `assignee` is an id-less `_person` the avatar can render. `owner_label` supplies a name derived
+    from the email when Atrium sent no resolved one, so this works before Atrium's side ships.
+    """
+    lead_name = (t.get("lead_name") or "").strip() or owner_label(t.get("lead_id") or "")
+    support_names = [n for n in (t.get("support_names") or []) if str(n).strip()]
+    if not support_names:
+        support_names = [n for n in (owner_label(s) for s in (t.get("support_ids") or [])) if n]
     return {
         "id": ATRIUM_ID_PREFIX + (t.get("atrium_id") or ""),
         "title": t.get("title") or "",
@@ -452,11 +494,20 @@ def as_board_card(t: dict, client: object = None) -> dict:
         "client_id": getattr(client, "id", None),
         "client_name": (getattr(client, "name", None)
                         or t.get("client_name") or t.get("client_key") or ""),
+        # 🔴 None on purpose — an Atrium owner is a roster email, not a Sentinel user (see above).
         "assigned_to_id": None,
-        "assignee": None,
+        "assignee": _person(lead_name),
         "assigned_team_id": None,
         "created_by_id": None,
         "created_by": None,
+        # Atrium's own ownership vocabulary, `atrium_`-prefixed so nothing mistakes it for a Sentinel
+        # column. On the CARD as well as the drawer now: the drawer's "Lead" field reads these, and
+        # the board needs the same values to stop rendering owned client work as "Unassigned".
+        "atrium_lead_id": t.get("lead_id") or "",
+        "atrium_lead_name": lead_name,
+        "atrium_support_ids": list(t.get("support_ids") or []),
+        "atrium_support_names": support_names,
+        "atrium_department": t.get("department") or "",
         "comment_count": t.get("comment_count") or 0,
         "attachment_count": 0,
         "checklist_total": t.get("checklist_total") or 0,
