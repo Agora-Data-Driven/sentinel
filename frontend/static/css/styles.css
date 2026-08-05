@@ -893,7 +893,10 @@ textarea { resize: vertical; min-height: 78px; }
 .unfiled .prewrap { font-size:13px; color:var(--sub); max-height:18em; overflow:auto; }
 
 @media (prefers-reduced-motion: reduce) {
-  .dc-main, .dc-more, .dc-open, .day-item, .pace-row, .pr-chev svg, .goal-item summary svg, .ds-right svg { transition:none; }
+  .dc-main, .dc-more, .dc-open, .day-item, .pace-row, .pr-chev svg, .goal-item summary svg, .ds-right svg,
+  .mw-tile, .mw-go, .mw-row, .mw-chev, .mw-open .svg-ic, .mw-more .svg-ic { transition:none; }
+  .mw-tile:hover { transform:none; }
+  .mw-tile:hover .mw-go, .mw-row:hover .mw-chev, .mw-open:hover .svg-ic, .mw-more:hover .svg-ic { transform:none; }
 }
 
 /* Cards inside the ledger: quieter, hairline-led, green-forward */
@@ -926,6 +929,106 @@ a.day-item:hover { border-color:var(--green-line); box-shadow:var(--shadow-sm); 
 .sect-head { align-items:baseline; margin:30px 0 12px; gap:14px; }
 .sect-head .sub { font-size:12.5px; text-align:right; }
 @media (max-width:760px){ .sect-head .sub{ display:none; } }
+
+/* ---------------- Overview · "My work" (renderMyWork in dashboard.js) ----------------
+   Three tiles + the shortlist beneath them. Deliberately NOT '.kpi's, which is what this strip
+   reached for first: a kpi is a read-only org metric, and every one of these is a DOOR into
+   /tasks — so each carries a chevron, a hover lift and a sub-line saying what its number means.
+   (It also used '.k-val' with no '.kpi' ancestor, so the numbers were styled by nothing at all
+   except an inline font-size.)
+
+   The tone is one custom prop, the way the growth ledger drives everything off --hue: a tile sets
+   --tone / --tone-bg and the rail, icon chip, value and sub-line all follow. is-quiet is the
+   load-bearing one — "0 overdue" is GOOD NEWS, and drawing it in the same heavy ink as real work
+   is what made the old strip unreadable at a glance, which is the only job it has. */
+.mw-tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:14px; }
+.mw-tile { --tone:var(--green-strong); --tone-bg:var(--green-soft);
+  position:relative; display:flex; flex-direction:column; min-width:0; overflow:hidden;
+  padding:15px 16px 14px 18px; text-decoration:none; color:inherit;
+  background:var(--card); border:1px solid var(--line); border-radius:var(--radius);
+  box-shadow:var(--shadow-sm); transition:transform .18s, box-shadow .18s, border-color .18s; }
+/* The tone rail — a hairline of state down the leading edge, so the three tiles read as one
+   instrument panel instead of three unrelated white slabs. */
+.mw-tile::before { content:""; position:absolute; left:0; top:0; bottom:0; width:3px; background:var(--tone); }
+.mw-tile:hover { transform:translateY(-2px); box-shadow:var(--shadow); border-color:var(--tone); }
+.mw-tile.is-warn { --tone:var(--warn); --tone-bg:color-mix(in srgb, var(--warn) 16%, transparent); }
+.mw-tile.is-info { --tone:var(--violet-d); --tone-bg:var(--violet-bg); }
+.mw-tile.is-quiet { --tone:var(--line-strong); --tone-bg:var(--input); }
+.mw-head { display:flex; align-items:center; gap:9px; }
+.mw-ic { width:26px; height:26px; border-radius:8px; flex:none; display:grid; place-items:center;
+  background:var(--tone-bg); color:var(--tone); }
+.mw-ic .svg-ic { width:15px; height:15px; }
+.mw-k { font-size:11px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--muted);
+  min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.mw-go { margin-left:auto; flex:none; display:flex; opacity:.45; transition:opacity .14s, transform .14s; }
+.mw-go .svg-ic { width:15px; height:15px; stroke:var(--sub); }
+.mw-tile:hover .mw-go { opacity:1; transform:translateX(2px); }
+.mw-tile:hover .mw-go .svg-ic { stroke:var(--tone); }
+.mw-n { margin-top:12px; font-size:34px; line-height:1; font-weight:800; letter-spacing:-.03em;
+  color:var(--ink); font-variant-numeric:tabular-nums; }
+.mw-s { margin-top:6px; font-size:12px; font-weight:600; color:var(--sub); }
+.mw-tile.is-warn .mw-n, .mw-tile.is-warn .mw-s { color:var(--warn); }
+.mw-tile.is-quiet .mw-n { color:var(--muted); font-weight:700; }
+.mw-tile.is-quiet .mw-s { color:var(--muted); }
+
+/* The shortlist. Rows run flush to the card's leading edge so their stage rail lines up with the
+   tiles' tone rails above — one shared left margin is what makes the two blocks read as one
+   section rather than a stat row with an unrelated list stuck under it. */
+.mw-list { margin-top:14px; overflow:hidden; }
+.mw-list .card-head { padding:12px 16px; }
+.mw-list .card-head h3 { font-size:11px; font-weight:700; letter-spacing:.08em;
+  text-transform:uppercase; color:var(--sub); }
+.mw-open, .mw-more { display:inline-flex; align-items:center; gap:3px; font-size:12px; font-weight:700;
+  color:var(--green-d); text-decoration:none; white-space:nowrap; }
+.mw-open .svg-ic, .mw-more .svg-ic { width:13px; height:13px; transition:transform .14s; }
+.mw-open:hover .svg-ic, .mw-more:hover .svg-ic { transform:translateX(2px); }
+/* minmax(0,1fr) rather than a bare 1fr, which means minmax(AUTO,1fr): the title track has to be
+   allowed to shrink below its content, or a long task name widens the card instead of truncating.
+   What holds it today is '.mw-title''s own overflow:hidden + min-width:0 (either one zeroes its
+   min-content contribution, so a bare 1fr measures the same) — this makes the track say so itself,
+   so the row survives someone dropping the ellipsis rule. */
+.mw-row { display:grid; grid-template-columns:3px minmax(0,1fr) auto 15px; align-items:center; gap:0 12px;
+  padding:11px 16px 11px 0; border-top:1px solid var(--line-soft);
+  text-decoration:none; color:inherit; transition:background .12s; }
+.mw-row:hover { background:var(--hover); }
+/* One hue per STAGE, matching the Monitor's workload bar ('.wl-bar') exactly — a red rail has to
+   mean the same thing wherever you meet it. Never keyed off a status label; see dashboard.js. */
+.mw-stage { width:3px; height:24px; border-radius:0 2px 2px 0; background:var(--muted); }
+.mw-stage.s-todo { background:var(--muted); }
+.mw-stage.s-prog { background:var(--info); }
+.mw-stage.s-rev { background:var(--warn); }
+.mw-stage.s-block { background:var(--danger); }
+.mw-stage.s-done { background:var(--green); }
+.mw-title { font-size:13.5px; font-weight:600; min-width:0;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.mw-row:hover .mw-title { color:var(--green-d); }
+.mw-meta { display:flex; align-items:center; gap:8px; flex:none; }
+.mw-st { font-size:11px; font-weight:700; padding:2px 9px; border-radius:var(--pill);
+  background:var(--input); color:var(--sub); white-space:nowrap; }
+.mw-due { font-size:12px; font-weight:700; color:var(--sub); white-space:nowrap; font-variant-numeric:tabular-nums; }
+.mw-due.today { color:var(--warn); }
+.mw-due.late { color:var(--danger); }
+.mw-due.none { color:var(--muted); font-weight:600; }
+.mw-chev { display:flex; opacity:.4; transition:opacity .14s, transform .14s; }
+.mw-chev .svg-ic { width:15px; height:15px; stroke:var(--muted); }
+.mw-row:hover .mw-chev { opacity:1; transform:translateX(2px); }
+.mw-row:hover .mw-chev .svg-ic { stroke:var(--green-d); }
+/* Overrides the shared inline-flex above: this one is a full-width card FOOTER, so its rule and
+   its hover have to span the card rather than hug the text. */
+.mw-more { display:flex; justify-content:center; padding:11px 16px; border-top:1px solid var(--line-soft); }
+.mw-more:hover { background:var(--hover); }
+/* Clear-desk state. It gets a tick and a way OUT (into the board) rather than the bare grey
+   sentence it used to be — an empty state offering no next action is a dead end. */
+.mw-none { display:flex; flex-direction:column; align-items:center; gap:10px;
+  padding:30px 20px; text-align:center; font-size:13.5px; color:var(--sub); }
+.mw-none > .svg-ic { width:32px; height:32px; stroke:var(--green-d); opacity:.55; }
+
+@media (max-width:560px){
+  .mw-tiles { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .mw-n { font-size:28px; }
+  .mw-row { grid-template-columns:3px minmax(0,1fr) auto; }
+  .mw-chev, .mw-row .mw-st { display:none; }   /* the rail already carries the stage */
+}
 
 @media (max-width:820px){
   .dim-rings{ grid-template-columns:repeat(2,1fr); }
