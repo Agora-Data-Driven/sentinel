@@ -13,7 +13,7 @@ kiosk. Operating rules (CSP, cache bumping, `api()`-only fetches) live in
 | `static/js/app.js` | The shell every page loads: `NAV` array `:78` (roles/`min`/`hideRoles` gate visibility), `api()` (CSRF echo + FastAPI error flattening), `toast`, `skeleton`, `modal`, `esc`/`qs`/`qsa`, `ICON`, `avatar`, command palette (`initCommandPalette`), Coach FAB, `setTheme`/`engineUrl`/`themeEmbeds` (hands our light/dark to every embedded Mastery Engine) |
 | `static/js/taskboard.js` | Mountable Kanban (`TaskBoard.mount`). Optimistic DnD (native HTML5 — deliberate, see AGENTS.md §9), SSE reload, quick-add, Atrium-card editing, and the lifecycle controls: Park/Resume, Submit/Approve/Request changes, Past work |
 | `static/js/tasks.js` | **The Task Board page** (`/tasks`) — its own page again since 2026-08-03 (decision D7); a thin shell that mounts `taskboard.js` full-width. It was embedded in the dashboard from 2026-07-26 until then, so `/dashboard?open=<id>` forwards here forever (the notifications minted in that window are permanent rows) |
-| `static/js/dashboard.js` | **The Overview** (`/dashboard`, labelled "Overview" since 2026-08-03): greeting + the day strip (attendance/gym as two buttons), then `GrowthPanel`'s rings, the **"my work"** strip (`renderMyWork` — open/overdue/awaiting-my-approval counts + your 5 newest, each linking into `/tasks`; fails silently), `GrowthPanel`'s ledger, and — admins only, last — the org KPIs/chart/late list/handovers |
+| `static/js/dashboard.js` | **The Overview** (`/dashboard`, labelled "Overview" since 2026-08-03): greeting + the day strip (attendance/gym as two buttons), then `GrowthPanel`'s rings, the **"my work"** strip (`renderMyWork` — three `.mw-tile` doors into `/tasks` + the "Up next" shortlist, **soonest deadline first**, undated last; fails silently), `GrowthPanel`'s ledger, and — admins only, last — the org KPIs/chart/late list/handovers |
 | `static/js/growth-page.js` | `/growth` = a manager's read-only view of ONE person (`?user=<id>`); without a `?user` it redirects to the Overview |
 | `static/js/attendance.js` · `approvals.js` | Time page · combined attendance+leave approvals inbox (team_lead+) |
 | `static/js/gym.js` | Calendar, no-lock day editor, saved routines (one-tap workout templates), history |
@@ -90,6 +90,13 @@ inside any comment that lives in a template literal**, never with a backtick.
 - **`modal()` reuses ONE `#modal-ov` node, so modals cannot stack** — opening a second one replaces
   the first. Anything that needs a picker *inside* an editor must render the editor inline (that is
   why `gym.js`'s routine editor lives in `#tabc`, not a dialog) and keep the modal for the picker.
+- **A KPI class only styles inside `.kpi`** — `.k-val`, `.k-label`, `.k-ic` and `.k-sub` are all
+  written as `.kpi .k-val` descendants, so a `<div class="k-val">` in a plain `.card` is styled by
+  **nothing** and looks "unfinished" for no visible reason. The Overview's "my work" strip did this
+  until 2026-08-05 (three near-empty white slabs, each with one inline `font-size:30px`). Either put
+  the value inside a `.kpi`, or give the block its own classes — `renderMyWork` took the second
+  route (`.mw-*`) because its tiles are LINKS into `/tasks`, not read-only metrics, so they need
+  affordances a kpi deliberately doesn't have.
 - **Two renderers must never share a host element.** `renderGoals` and `renderBodyStats` both wrote
   `#gym-body` and each set `innerHTML`, so whichever fetch resolved last silently erased the other
   card. They own `#gym-goals` / `#gym-body` now — give every async renderer its own node.
@@ -113,5 +120,5 @@ inside any comment that lives in a template literal**, never with a backtick.
 
 - Live: `https://sentinel-585951669065.asia-southeast1.run.app` — serving revision
   **`sentinel-00112-mpl`** (verified 2026-07-29).
-- `sw.js` `CACHE` currently **`sentinel-v70`**.
+- `sw.js` `CACHE` currently **`sentinel-v74`**.
 - 22 JS files under `static/js/`; 19 page shells.

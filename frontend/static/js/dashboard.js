@@ -170,9 +170,22 @@ window.pageInit = async (S) => {
     const PH_TODAY = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
     const box = S.qs("#dash-mywork");
     if (!box) return;
-    let tasks;
-    try { tasks = await S.api("/api/tasks"); }
-    catch (e) { return; }
+    // The vocabulary is what colours each row's stage rail. It is a SECOND, optional fetch: a
+    // colourless rail is a cosmetic loss, a missing strip is not, so it degrades on its own.
+    const [tasks, vocab] = await Promise.all([
+      S.api("/api/tasks").catch(() => null),
+      S.api("/api/vocab").catch(() => null),
+    ]);
+    if (!tasks) return;
+    // 🔴 Stage, never the status LABEL. Statuses are renameable in Manage and a rename now ships in
+    // the deploy (task_config.RENAMED_STATUSES), so any literal like "Blocked" silently stops
+    // matching — that is exactly how the Monitor's workload bar lost ten parked cards on
+    // 2026-08-04. The vocabulary names the stage; the class names only the colour.
+    const STAGE_OF = Object.fromEntries(((vocab && vocab.task_status_meta) || []).map((s) => [s.name, s.stage]));
+    // Same colour vocabulary as the Monitor's workload bar (.wl-bar) on purpose: one hue per stage
+    // across the whole product, so a red rail means the same thing wherever you meet it.
+    const STAGE_CLS = { todo: "s-todo", in_progress: "s-prog", revision: "s-rev", blocked: "s-block", completed: "s-done" };
+
     // The list is already scoped by the server (task_perms.can_view), so "mine" is a filter on top
     // of it, never a second source of truth. Atrium-owned cards have no assignee to be mine.
     const mine = tasks.filter((t) => t.assigned_to_id === S.user.id && !t.archived);
@@ -184,24 +197,95 @@ window.pageInit = async (S) => {
       || (S.can("team_lead") && S.user.team_id != null);
     const toReview = !canReview ? [] : tasks.filter((t) => t.review_state === "pending"
       && (S.can("account_manager") || t.assigned_team_id === S.user.team_id));
-    const tile = (n, label, href, bad) => `<a class="card pad" href="${href}" style="text-decoration:none;flex:1;min-width:150px">
-        <div class="section-label">${label}</div>
-        <div class="k-val ${bad && n ? "bad" : ""}" style="font-size:30px;margin-top:6px">${n}</div>
+
+    // Whole days between an ISO date and today, both read as UTC midnight so the arithmetic can't
+    // drift by a day the way local-midnight Date parsing does.
+    const dayDiff = (iso) => Math.round((Date.parse(iso + "T00:00:00Z") - Date.parse(PH_TODAY + "T00:00:00Z")) / 864e5);
+    const plural = (n, w) => n + " " + w + (n === 1 ? "" : "s");
+
+    // A tile is a DOOR into the board, not a KPI readout — hence the chevron and the sub-line that
+    // says what the number MEANS. A count of zero renders quiet (is-quiet -> muted): "0 overdue" is
+    // good news, and drawing it in the same 34px ink as real work makes the strip unreadable at a
+    // glance, which is the only thing this strip is for. An empty `tone` keeps the tile's default
+    // (green) — only the tiles whose meaning changes with the number name one.
+    const tile = (n, label, sub, icon, tone, href) => `
+      <a class="mw-tile ${n ? tone : "is-quiet"}" href="${href}">
+        <span class="mw-head">
+          <span class="mw-ic">${S.ICON[icon] || S.ICON.board}</span>
+          <span class="mw-k">${label}</span>
+          <span class="mw-go">${S.ICON.chev}</span>
+        </span>
+        <span class="mw-n">${n}</span>
+        <span class="mw-s">${sub}</span>
       </a>`;
-    box.innerHTML = `<div class="pagehead" style="margin:30px 0 14px"><div>
-        <h3 style="font-size:18px;letter-spacing:-.01em">My work</h3>
-        <div class="lead">Everything else is on the <a href="/tasks">Task Board</a>.</div></div></div>
-      <div class="row" style="gap:12px;align-items:stretch;flex-wrap:wrap">
-        ${tile(open.length, "Open tasks", "/tasks")}
-        ${tile(overdue.length, "Overdue", "/tasks", true)}
-        ${canReview ? tile(toReview.length, "Waiting on my approval", "/tasks") : ""}
+
+    // Sub-lines, in the order they stop being reassuring.
+    const dueToday = open.filter((t) => t.due_date === PH_TODAY).length;
+    const nextDue = open.filter((t) => t.due_date && t.due_date > PH_TODAY)
+      .map((t) => t.due_date).sort()[0];
+    const openSub = !open.length ? "nothing on you right now"
+      : dueToday ? dueToday + " due today"
+      : nextDue ? "next due " + S.fmtDate(nextDue + "T00:00:00+08:00")
+      : "none of them dated";
+    const worst = overdue.length ? Math.max(...overdue.map((t) => -dayDiff(t.due_date))) : 0;
+    const lateSub = overdue.length ? "oldest " + plural(worst, "day") + " late" : "nothing is late";
+    const revSub = toReview.length ? "ready for your call" : "nothing waiting";
+
+    // "Up next" = soonest deadline first, undated last. The old strip showed the 5 newest, which is
+    // the one ordering that answers no question anybody opens the Overview with.
+    // Sorts as "9999-…" so an undated card lands after every dated one without a special case, and
+    // never before them the way a bare null-vs-string comparison would.
+    const dueKey = (t) => t.due_date || "9999-12-31";
+    const upNext = open.slice().sort((a, b) => {
+      if (dueKey(a) !== dueKey(b)) return dueKey(a) < dueKey(b) ? -1 : 1;
+      return b.id - a.id;
+    }).slice(0, 5);
+
+    const dueChip = (iso) => {
+      if (!iso) return '<span class="mw-due none">no date</span>';
+      const n = dayDiff(iso);
+      const txt = n < 0 ? plural(-n, "day") + " late" : n === 0 ? "Today"
+        : n === 1 ? "Tomorrow" : S.fmtDate(iso + "T00:00:00+08:00");
+      return `<span class="mw-due ${n < 0 ? "late" : n === 0 ? "today" : ""}">${txt}</span>`;
+    };
+    // Two states that change what you should DO with the card, so they earn a pill; everything else
+    // about a task belongs in the drawer, not in a five-row shortlist.
+    const flags = (t) => (t.on_hold ? '<span class="pill grey">Paused</span>' : "")
+      + (t.review_state === "pending" ? '<span class="pill amber">In review</span>' : "");
+
+    const row = (t) => `
+      <a class="mw-row" href="/tasks?open=${t.id}">
+        <i class="mw-stage ${STAGE_CLS[STAGE_OF[t.status]] || "s-todo"}" title="${S.esc(t.status)}"></i>
+        <span class="mw-title">${S.esc(t.title)}</span>
+        <span class="mw-meta">${flags(t)}<span class="mw-st">${S.esc(t.status)}</span>${dueChip(t.due_date)}</span>
+        <span class="mw-chev">${S.ICON.chev}</span>
+      </a>`;
+
+    box.innerHTML = `
+      <div class="row between sect-head">
+        <div class="section-label">${S.ICON.board}My work</div>
+        <span class="sub">Everything else is on the <a href="/tasks">Task Board</a>.</span>
       </div>
-      ${open.length ? `<div class="card" style="margin-top:12px">${open.slice(0, 5).map((t) => `
-        <a class="row" href="/tasks?open=${t.id}" style="text-decoration:none;justify-content:space-between;gap:10px;padding:11px 14px;border-bottom:1px solid var(--line-soft)">
-          <span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${S.esc(t.title)}</span>
-          <span class="sub" style="flex:none;font-size:12px">${S.esc(t.status)}${t.due_date
-            ? ` · <span class="${t.due_date < PH_TODAY ? "bad" : ""}">${S.fmtDate(t.due_date + "T00:00:00+08:00")}</span>` : ""}</span>
-        </a>`).join("")}</div>` : `<div class="empty card pad" style="margin-top:12px">Nothing assigned to you right now.</div>`}`;
+      <div class="mw-tiles">
+        ${tile(open.length, "Open tasks", openSub, "board", "", "/tasks")}
+        ${tile(overdue.length, "Overdue", lateSub, "clock", "is-warn", "/tasks")}
+        ${canReview ? tile(toReview.length, "Waiting on me", revSub, "inbox", "is-info", "/tasks") : ""}
+      </div>
+      <div class="card mw-list">
+        <div class="card-head">
+          <h3>Up next</h3>
+          <a class="mw-open" href="/tasks">Open the board${S.ICON.chev}</a>
+        </div>
+        ${upNext.length
+          ? upNext.map(row).join("")
+            + (open.length > upNext.length
+              ? `<a class="mw-more" href="/tasks">${plural(open.length - upNext.length, "more task")} on the board${S.ICON.chev}</a>`
+              : "")
+          : `<div class="mw-none">${S.ICON.check}
+              <div>You're clear. Nothing is assigned to you right now.</div>
+              <a class="btn sm ghost" href="/tasks">Pick something up${S.ICON.chev}</a>
+            </div>`}
+      </div>`;
   }
 
   // Clock-in chart (admin only) — fetched after paint so the page never blocks on it.

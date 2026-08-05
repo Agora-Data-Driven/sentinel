@@ -1035,8 +1035,34 @@ window.TaskBoard = {
     // anything. An Atrium roster carries no team, so it degrades to one flat list on its own.
     const optionFor = (p, current) =>
       `<option value="${S.esc(p.id)}" ${p.id === current ? "selected" : ""}>${S.esc(p.name)}</option>`;
+    const ownerName = (oid) => {
+      const p = owners.find((x) => x.id === oid);
+      return p ? p.name : "Somebody else";
+    };
+    // 🔴 Both of these mirror the server, which is where they are enforced (routers/tasks.py: the
+    // per-slot owner diff + task_perms.can_tick_step). Without them the drawer offered every step to
+    // everyone and answered with a 403 that ALSO threw away the rest of the edit — the breakdown
+    // saves whole.
+    // Delegating an owner: AM+ anywhere, a team lead on their own department's card. Self-assignment
+    // (taking an unowned step, dropping your own) stays open to every role, which is why a
+    // non-delegator still gets a picker — it just only lists them.
+    // An ATRIUM-owned card is unchanged: its owners are roster emails, not Sentinel users, so no
+    // ownership rule can apply to them and `can_edit_atrium` (team lead and up) governs its content
+    // wholesale. Narrowing that here would take an ability team leads have today.
+    const mayDelegateStep = isAtrium ? !readOnly : canReassign(t);
+    // Ticking: the step's owner, the card's lead, or a lead/manager. An unowned step is anyone's to
+    // tick (that is how a team queue gets worked through). Atrium cards have no Sentinel owners at
+    // all — their roster is emails — so they keep the old open behaviour.
+    const mayTick = (owner) => isAtrium || !owner || owner === S.user.id
+      || t.assigned_to_id === S.user.id || canReassign(t);
 
     function ownerOptions(current) {
+      // A non-delegator may only ever write their own id, so listing the company is a promise the
+      // server will refuse. They keep sight of who holds it via the disabled select's own value.
+      if (!mayDelegateStep) {
+        return owners.filter((p) => p.id === S.user.id || p.id === current)
+          .map((p) => optionFor(p, current)).join("");
+      }
       const teamId = t.assigned_team_id;
       const teamName = teamsById[teamId] ? teamsById[teamId].name : null;
       const inTeam = teamId ? owners.filter((p) => p.team_id === teamId) : [];
@@ -1046,11 +1072,19 @@ window.TaskBoard = {
         + (rest.length ? `<optgroup label="Everyone else">${rest.map((p) => optionFor(p, current)).join("")}</optgroup>` : "");
     }
 
-    const assigneeSelect = (act, mid, sid, current, placeholder) =>
-      `<select class="bd-assignee" data-act="${act}" data-mid="${mid}"${sid ? ` data-sid="${sid}"` : ""}>
+    const assigneeSelect = (act, mid, sid, current, placeholder) => {
+      // Somebody else's slot is shown, never editable: taking work off a colleague is the same power
+      // as giving it to them, and the server refuses both.
+      const locked = !mayDelegateStep && !!current && current !== S.user.id;
+      const title = locked
+        ? `${ownerName(current)} owns this — only a team lead or manager can change that`
+        : (mayDelegateStep ? "" : "You can take this on yourself, or hand it back");
+      return `<select class="bd-assignee" data-act="${act}" data-mid="${mid}"${sid ? ` data-sid="${sid}"` : ""}
+        ${locked ? "disabled" : ""} title="${S.esc(title)}">
         <option value="">${placeholder}</option>
         ${ownerOptions(current)}
       </select>`;
+    };
 
     // D12: assignment and routing are CONTROLS, not action buttons. The prototype had hardcoded
     // "Route to Acquisition" / "Delegate to Justine & Zhen" buttons, which only ever fit the one
@@ -1089,7 +1123,8 @@ window.TaskBoard = {
           </div>
           <ul class="mtask-subs">${m.subs.map((s) => `
             <li class="${s.done ? "done" : ""}" data-sid="${s.id}">
-              <input type="checkbox" data-act="sub-toggle" data-mid="${m.id}" data-sid="${s.id}" ${s.done ? "checked" : ""}>
+              <input type="checkbox" data-act="sub-toggle" data-mid="${m.id}" data-sid="${s.id}" ${s.done ? "checked" : ""}
+                ${mayTick(s.assignee_id) ? "" : `disabled title="${S.esc(ownerName(s.assignee_id) + " owns this step — only they or a lead can tick it")}"`}>
               <input class="sub-text" data-act="sub-text" data-mid="${m.id}" data-sid="${s.id}" value="${S.esc(s.text)}" aria-label="Sub-task">
               ${assigneeSelect("sub-assignee", m.id, s.id, s.assignee_id, "Assign…")}
               <button class="bd-x" data-act="sub-del" data-mid="${m.id}" data-sid="${s.id}" title="Delete sub-task">✕</button>
@@ -1520,6 +1555,19 @@ window.TaskBoard = {
     // derived from the template's content type — no flag column, no migration (the alternative
     // the doc floated). Existing rows keep their duplicated value until someone edits them.
     const isCampaignType = (ct) => (ct || "").trim().toLowerCase() === "campaign";
+    // 🔴 WHO MAY NAME A PERSON — mirrors the server, and the server is what enforces it:
+    // an existing card asks `task_perms.can_reassign` (AM+ anywhere, a team lead while the card is
+    // routed to their OWN department); a new one asks `create_task`'s `may_delegate`, which is the
+    // same rule against the department being picked in this form right now.
+    // This field was ungated until 2026-08-05 — the only one in the block that wasn't (Priority two
+    // rows down always was) — so an employee could set it, hit Save, and lose the WHOLE edit to a
+    // 403; on create the person they picked was silently dropped and the card landed on them.
+    const mayNamePerson = (teamId) => (existing
+      ? canReassign(existing)
+      : (canManage || (S.can("team_lead") && teamId != null && teamId === S.user.team_id)));
+    const LEAD_LOCKED = existing
+      ? "Only an account manager — or a team lead on this department's work — can change who leads this."
+      : "Pick a department instead: its leads are notified and triage it. Naming a person is a lead or manager call.";
     // 🔴 "What the client will read" (#t-cnote) sits UP FRONT with the dates, not behind More
     // options: it is the entire content of the client's card. It had no field ANYWHERE in this form
     // until 2026-08-03, so every task published by Send to Atrium reached the client's board with an
@@ -1551,7 +1599,9 @@ window.TaskBoard = {
                 <div class="form-hint">On by default (D6) — the client watches the work cross their board from day one instead of meeting it finished. Untick to keep this one internal; you can share it later from the card.</div>
               </div>` : ""}
               <label class="field"><span>Department</span><select id="t-team"><option value="">—</option>${teams.map((t) => `<option value="${t.id}" ${t.id === e.assigned_team_id ? "selected" : ""}>${S.esc(t.name)}</option>`).join("")}</select></label>
-              <label class="field"><span>Lead (main)</span><select id="t-assignee"><option value="">Unassigned</option>${people.map((p) => `<option value="${p.id}" ${p.id === e.assigned_to_id ? "selected" : ""}>${S.esc(p.name)}</option>`).join("")}</select></label>
+              <label class="field"><span>Lead (main)</span>
+                <select id="t-assignee"${mayNamePerson(e.assigned_team_id) ? "" : " disabled"} title="${mayNamePerson(e.assigned_team_id) ? "" : S.esc(LEAD_LOCKED)}"><option value="">Unassigned</option>${people.map((p) => `<option value="${p.id}" ${p.id === e.assigned_to_id ? "selected" : ""}>${S.esc(p.name)}</option>`).join("")}</select>
+                <div class="form-hint" id="t-assignee-hint"${mayNamePerson(e.assigned_team_id) ? " hidden" : ""}>${LEAD_LOCKED}</div></label>
               ${!existing ? `<label class="field" style="grid-column:1/-1"><span>Service type</span><select id="t-svc"><option value="">Custom (blank)</option></select></label>
               <div class="field" style="grid-column:1/-1"><div class="form-hint">Pick a department, then a service type. The phases, steps, and labels are created for you. Choose Custom (blank) to start empty.</div></div>
               <div class="field" style="grid-column:1/-1" id="t-svc-preview" hidden></div>` : ""}
@@ -1585,6 +1635,24 @@ window.TaskBoard = {
       if (wrap) wrap.hidden = !clientBox.value;
     };
     if (clientBox) clientBox.addEventListener("change", syncShare);
+
+    // A team lead's right to name somebody follows the DEPARTMENT they are filing into, so on a new
+    // card the picker has to follow that select rather than sit there enabled until the save fails.
+    // Only on create: on an existing card the server judges `can_reassign` against the department the
+    // card has NOW, not the one being picked in this form.
+    const assigneeBox = S.qs("#t-assignee");
+    const syncAssignee = () => {
+      const allowed = mayNamePerson(numOrNull("t-team"));
+      assigneeBox.disabled = !allowed;
+      assigneeBox.title = allowed ? "" : LEAD_LOCKED;
+      const hint = S.qs("#t-assignee-hint");
+      if (hint) hint.hidden = allowed;
+      // Never leave a name sitting in a locked picker: the server now REFUSES it rather than quietly
+      // dropping it, and a save that dies on a field they cannot even reach is no better than the
+      // silent version.
+      if (!allowed) assigneeBox.value = "";
+    };
+    if (!existing) S.qs("#t-team").addEventListener("change", syncAssignee);
 
     const ctypeBox = S.qs("#t-ctype");
     const syncCampaign = () => {
