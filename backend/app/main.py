@@ -323,12 +323,17 @@ def _ensure_default_shift() -> None:
 def _mirror_clients() -> None:
     """Pull Atrium's client registry on boot (Atrium owns clients; Sentinel owns staff).
 
+    🔴 **ADDITIVE ONLY** — `deactivate` is left at its default False. A boot must never switch a
+    client off: deactivation is driven by ABSENCE, and any name Atrium spells differently reads as a
+    client that left, so the first boot after this shipped would have retired most of the estate and
+    left the board's tasks hanging off deactivated clients. Retiring a client is a deliberate act:
+    `GET /api/manage/clients/sync-preview`, then `POST …/clients/sync?deactivate=1`.
+
     🔴 **Runs LAST and can never stop the boot.** It reaches over the network to another service, so
     every failure mode — bridge unconfigured, Atrium cold-starting, a timeout, a shape we don't
     understand — is logged and swallowed. `client_sync.sync` already refuses to act on an empty or
-    failed answer (deactivation is driven by absence, so "no answer" must never be read as "no
-    clients"); this handler is the second belt: a client list that is one boot stale is a nuisance,
-    a Sentinel that will not start is an outage.
+    failed answer ("no answer" must never be read as "no clients"); this handler is the second belt:
+    a client list that is one boot stale is a nuisance, a Sentinel that will not start is an outage.
     """
     from .database import SessionLocal
     from .services import client_sync
@@ -337,8 +342,12 @@ def _mirror_clients() -> None:
     try:
         report = client_sync.sync(db)
         if report["ok"]:
+            pending = report.get("would_deactivate") or []
             print(f"[sentinel] client mirror: +{report['created']} new, "
-                  f"{report['linked']} linked, {report['deactivated']} deactivated")
+                  f"{report['linked']} linked"
+                  + (f", {len(pending)} not in Atrium (left ACTIVE — retire them deliberately "
+                     f"via /api/manage/clients/sync?deactivate=1): {', '.join(pending)}"
+                     if pending else ""))
         else:
             print(f"[sentinel] client mirror skipped: {report['error']}")
     except Exception as exc:                                   # noqa: BLE001 — see the docstring

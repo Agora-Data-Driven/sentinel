@@ -20,9 +20,18 @@ on — but it is now FILLED by this module instead of by people. What the sync d
 2. **Adopt an unlinked client whose NAME unambiguously matches** an Atrium workspace — the same
    fallback `atrium_tasks.resolve_client` already uses, so this only writes down a link the board was
    already inferring at read time. Ambiguous or unmatched names are left alone.
-3. **Deactivate the rest.** Never delete: `Task.client_id` would be nulled and every past task would
-   lose its client, blanking historical reports. An inactive client keeps its history and drops out
-   of the pickers.
+3. **Deactivate the rest — only when explicitly asked.** Never delete: `Task.client_id` would be
+   nulled and every past task would lose its client, blanking historical reports. An inactive client
+   keeps its history and drops out of the pickers.
+
+   🔴 **`deactivate` defaults to FALSE, so the automatic sync is ADDITIVE-ONLY.** Deactivation is
+   driven by ABSENCE, and absence is unreliable the first time this runs against a live estate:
+   Atrium spelled clients "Rooming House Expert", "Riverdance RV" and "The Contract Shop" where
+   Sentinel had "Rooming House Experts", "Riverdance" and "TCS", so a blind first pass would have
+   created a duplicate for each and switched off the original — leaving the board's tasks hanging
+   off deactivated clients while empty look-alikes filled the pickers. Candidates are always
+   reported in `would_deactivate`, so the gap is visible instead of silent, and `preview()` shows
+   the whole plan before anything writes.
 4. **Reactivate** anything that comes back.
 
 🔴 **The sync REFUSES to run on an empty or failed answer.** Deactivation is driven by absence, so
@@ -60,14 +69,41 @@ def _match_by_name(unlinked: list[Client], name: str) -> Client | None:
     return hits[0] if len(hits) == 1 else None
 
 
-def sync(db: Session) -> dict:
+def preview(db: Session) -> dict:
+    """What `sync` WOULD do, writing nothing. Same code path — see below.
+
+    🔴 Exists because the FIRST reconciliation runs against a live client list, and names diverge:
+    Atrium had "Rooming House Expert" where Sentinel had "Rooming House Experts", "Riverdance RV" vs
+    "Riverdance", "The Contract Shop" vs "TCS". Left to run blind that produces a duplicate for each
+    mismatch AND deactivates the original, so the board's tasks hang off deactivated clients while
+    empty look-alikes fill the pickers. A mirror is easy to write and hard to trust; this is how you
+    check it against your own data before it writes.
+
+    Implemented as `sync(dry_run=True)` rather than as its own walk, deliberately. A preview that
+    re-derives the plan is a second definition of it, and the two drift — this session has fixed that
+    exact bug three times (`is_assigned`, `lead_name`, `atrium_lead_*`).
+    """
+    return sync(db, dry_run=True)
+
+
+def sync(db: Session, deactivate: bool = False, dry_run: bool = False) -> dict:
     """Run the mirror. Returns a report; raises nothing.
 
-    `{"ok": bool, "error": str, "created": n, "updated": n, "linked": n,
-      "deactivated": n, "reactivated": n, "skipped": [names]}`
+    `{"ok", "error", "created", "updated", "linked", "deactivated", "reactivated",
+      "would_deactivate": [names], "plan": [human-readable lines]}`
+
+    🔴 **`deactivate` defaults to FALSE — the automatic sync is ADDITIVE-ONLY.** Creating and linking
+    are safe in every direction: worst case an extra client appears and somebody links it properly
+    later. Deactivating is not: it is driven by ABSENCE, so any name Atrium spells differently looks
+    like a client that left, and the very first boot after this shipped would have switched off most
+    of the estate. Deactivation is therefore an explicit operator act (`POST …/sync?deactivate=1`)
+    taken AFTER reading `preview`. Candidates are always reported in `would_deactivate` so the gap is
+    visible rather than silent.
+
+    `dry_run` computes the whole plan and rolls back instead of committing.
     """
     report = {"ok": False, "error": "", "created": 0, "updated": 0, "linked": 0,
-              "deactivated": 0, "reactivated": 0, "skipped": []}
+              "deactivated": 0, "reactivated": 0, "would_deactivate": [], "plan": []}
 
     rows, err = atrium_tasks.fetch_clients()
     if err:
@@ -99,13 +135,16 @@ def sync(db: Session) -> dict:
                 client.atrium_client_id = key
                 by_key[_norm(key)] = client
                 report["linked"] += 1
+                report["plan"].append(f"link “{client.name}” → {key}")
 
         if client is None:
-            client = Client(name=_free_name(existing, name, key), atrium_client_id=key,
+            new_name = _free_name(existing, name, key)
+            client = Client(name=new_name, atrium_client_id=key,
                             contact_email=email, is_active=True)
             db.add(client)
             existing.append(client)
             report["created"] += 1
+            report["plan"].append(f"create “{new_name}” ({key})")
         else:
             changed = False
             # Follow Atrium's rename, but only where the new name is actually free — a collision
@@ -113,6 +152,7 @@ def sync(db: Session) -> dict:
             if client.name != name:
                 free = _free_name(existing, name, key, ignore=client)
                 if free != client.name:
+                    report["plan"].append(f"rename “{client.name}” → “{free}”")
                     client.name = free
                     changed = True
             if email and client.contact_email != email:
@@ -128,18 +168,25 @@ def sync(db: Session) -> dict:
         db.flush()                      # so a freshly created row has an id for `seen`
         seen.add(client.id)
 
-    # Step 3: everything Atrium no longer lists. Deactivated, never deleted.
+    # Step 3: everything Atrium no longer lists. Deactivated (NEVER deleted) — and only when the
+    # caller asked for it. See the `deactivate` note in the docstring: absence is an unreliable
+    # signal on the first run, so the default is to REPORT the candidates and change nothing.
     for client in existing:
-        if client.id in seen:
+        if client.id in seen or not getattr(client, "is_active", True):
             continue
-        if getattr(client, "is_active", True):
+        report["would_deactivate"].append(client.name)
+        if deactivate:
             client.is_active = False
             report["deactivated"] += 1
-            report["skipped"].append(client.name)
+            report["plan"].append(f"deactivate “{client.name}” (Atrium no longer lists it)")
 
-    db.commit()
+    if dry_run:
+        db.rollback()
+    else:
+        db.commit()
     report["ok"] = True
-    log.info("client mirror: %s", {k: v for k, v in report.items() if k != "skipped"})
+    log.info("client mirror%s: %s", " (preview)" if dry_run else "",
+             {k: v for k, v in report.items() if k not in ("plan", "would_deactivate")})
     return report
 
 

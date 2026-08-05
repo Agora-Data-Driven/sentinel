@@ -232,7 +232,7 @@ What the mirror does, and the rule behind each step:
 |---|---|
 | Upsert by `atrium_client_id` | A linked client's name follows Atrium's — that is what the console's Rename button edits and what the client sees |
 | Adopt an unlinked client by **unambiguous name** | Writes down the link `resolve_client` was already inferring at read time, so nobody hand-types a key. Ambiguous → left alone |
-| **Deactivate** what Atrium no longer lists | 🔴 NEVER delete: that NULLs `Task.client_id` on every past task and blanks that client's reporting. `Client.is_active` keeps the history and drops it from the pickers |
+| **Deactivate** what Atrium no longer lists — **opt-in only** | 🔴 NEVER delete: that NULLs `Task.client_id` on every past task and blanks that client's reporting. `Client.is_active` keeps the history and drops it from the pickers. And `deactivate` defaults to **False** — see below |
 | Reactivate anything that returns | — |
 
 🔴 **The sync refuses to act on an empty or failed answer.** Deactivation is driven by *absence*, so
@@ -240,6 +240,20 @@ What the mirror does, and the rule behind each step:
 every client in the estate in one pass. This is why `atrium_tasks.fetch_clients` returns an explicit
 error instead of degrading to `[]` like every other read in that module, and why a zero-length list
 with no error is refused too (a real estate is never empty).
+
+🔴 **The automatic sync is ADDITIVE-ONLY: `deactivate` defaults to False.** Creating and linking are
+safe in every direction; switching a client off is driven by ABSENCE, and absence is a lie whenever the
+two systems spell a client differently. Measured on the live estate 2026-08-05: Atrium had **"Rooming
+House Expert"** where Sentinel had *"Rooming House Experts"*, **"Riverdance RV"** vs *"Riverdance"*, and
+**"The Contract Shop"** vs *"TCS"* — a blind first pass would have created a duplicate for each **and
+retired the original**, leaving the board's tasks hanging off deactivated clients while empty
+look-alikes filled the pickers. Candidates are always reported in `would_deactivate` (and in the boot
+log) so the gap is visible rather than silent.
+
+Retiring a client is therefore a deliberate two-step: read
+`GET /api/manage/clients/sync-preview` — which is literally `sync(dry_run=True)`, **not** a second
+walk, because a preview that re-derives the plan is a second definition of it — then
+`POST /api/manage/clients/sync?deactivate=1`.
 
 It runs on boot (`main._mirror_clients`, last and fully swallowed — a client list one boot stale is a
 nuisance, a Sentinel that won't start is an outage) and on `POST /api/manage/clients/sync`. The
