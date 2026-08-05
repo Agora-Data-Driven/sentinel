@@ -783,7 +783,7 @@ window.TaskBoard = {
         ${t.client_name ? `<span class="muted">· ${S.esc(t.client_name)}</span>` : ""}
         ${t.created_by ? `<span class="muted" title="Created by ${S.esc(t.created_by.name)}">· by ${S.esc(t.created_by.name.split(" ")[0])}</span>` : ""}</div>
       <div class="t-foot">
-        <div class="row">${t.assignee ? S.avatar(t.assignee, "sm") + `<span class="sub" style="font-size:12px">${S.esc(t.assignee.name.split(" ")[0])}</span>` : '<span class="muted" style="font-size:12px">Unassigned</span>'}</div>
+        <div class="row"${t.source === "atrium" && t.assignee ? ` title="Lead on the client's Atrium card — Atrium's roster, not a Sentinel account"` : ""}>${t.assignee ? S.avatar(t.assignee, "sm") + `<span class="sub" style="font-size:12px">${S.esc(t.assignee.name.split(" ")[0])}</span>` : '<span class="muted" style="font-size:12px">Unassigned</span>'}</div>
         <div class="icons">${t.on_hold ? '<span class="pill amber" style="font-size:9px" title="Parked — see the card for why">⏸ parked</span>' : ""}${REVIEW_PILL[t.review_state] || ""}${t.atrium_sync_error ? '<span class="pill red" style="font-size:9px" title="The client copy of this card is out of date">⚠ stale</span>' : ""}${t.comment_count ? S.ICON.comment + t.comment_count : ""} ${t.attachment_count ? S.ICON.paperclip + t.attachment_count : ""} ${t.checklist_total ? `<span title="checklist">${t.checklist_done}/${t.checklist_total}</span>` : ""}</div>
       </div>
       ${canDelete(t) ? `<button class="t-del" data-del="${t.id}" title="Delete task" aria-label="Delete task">✕</button>` : ""}
