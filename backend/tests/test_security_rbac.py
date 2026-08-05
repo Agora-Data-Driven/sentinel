@@ -172,6 +172,168 @@ def test_a_team_lead_may_assign_a_step_within_their_team(client, db, make_user, 
                         json={"maintasks": _breakdown(step_owner=member.id)}).status_code == 200
 
 
+# --- 🔴 …and comparing the owner SET was not enough (2026-08-05) ---------------------------------
+#
+# The fix above diffed `{owner ids} before` against `{owner ids} after`, so every edit that left the
+# set intact answered 200 — and each of the six cases above ADDS or REMOVES a person, which is
+# precisely why none of them could see it. An employee could therefore still rearrange a colleague's
+# work: move their step, pile more onto them, swap two colleagues over. The diff is per SLOT now
+# (`maintasks.slots` / `foreign_owner_changes`), so these hold the owner of each phase and step.
+
+def _task_with_two_steps(db, owners=(None, None), assignee_id=None, team_id=None):
+    from app.models import Task
+    subs = ",".join(
+        '{"id":"s%d","text":"Step %d","done":false,"assignee_id":%s}'
+        % (i + 1, i + 1, o if o else "null") for i, o in enumerate(owners))
+    t = Task(title="Two steps", assigned_to_id=assignee_id, assigned_team_id=team_id,
+             maintasks_json='[{"id":"m1","title":"Phase","assignee_id":null,"subs":[' + subs + "]}]")
+    db.add(t)
+    db.commit()
+    db.refresh(t)
+    return t
+
+
+def _two_steps(owners, done=(False, False), text=("Step 1", "Step 2")):
+    return [{"id": "m1", "title": "Phase", "assignee_id": None, "subs": [
+        {"id": f"s{i + 1}", "text": text[i], "done": done[i], "assignee_id": owners[i]}
+        for i in range(2)]}]
+
+
+def test_employee_cannot_move_a_colleagues_step_to_another_step(client, db, make_user, auth):
+    """The set-diff hole: {victim} before, {victim} after — and the victim now holds different work."""
+    victim = make_user(C.ROLE_EMPLOYEE, name="Colleague")
+    me = make_user(C.ROLE_EMPLOYEE, name="Me")
+    t = _task_with_two_steps(db, owners=(victim.id, None), assignee_id=me.id)
+    auth(me)
+    r = client.patch(f"/api/tasks/{t.id}", json={"maintasks": _two_steps((None, victim.id))})
+    assert r.status_code == 403
+    assert "someone else" in r.json()["detail"]
+
+
+def test_employee_cannot_pile_more_steps_onto_a_colleague(client, db, make_user, auth):
+    """Doubling somebody's workload does not change the owner SET at all."""
+    victim = make_user(C.ROLE_EMPLOYEE)
+    me = make_user(C.ROLE_EMPLOYEE)
+    t = _task_with_two_steps(db, owners=(victim.id, None), assignee_id=me.id)
+    auth(me)
+    assert client.patch(f"/api/tasks/{t.id}",
+                        json={"maintasks": _two_steps((victim.id, victim.id))}).status_code == 403
+
+
+def test_employee_cannot_swap_two_colleagues_steps(client, db, make_user, auth):
+    victim_a = make_user(C.ROLE_EMPLOYEE)
+    victim_b = make_user(C.ROLE_EMPLOYEE)
+    me = make_user(C.ROLE_EMPLOYEE)
+    t = _task_with_two_steps(db, owners=(victim_a.id, victim_b.id), assignee_id=me.id)
+    auth(me)
+    assert client.patch(f"/api/tasks/{t.id}",
+                        json={"maintasks": _two_steps((victim_b.id, victim_a.id))}).status_code == 403
+
+
+def test_editing_the_work_around_a_colleagues_step_still_saves(client, db, make_user, auth):
+    """The other side of the same rule: leave the owners alone and the breakdown is ordinary data."""
+    victim = make_user(C.ROLE_EMPLOYEE)
+    me = make_user(C.ROLE_EMPLOYEE)
+    t = _task_with_two_steps(db, owners=(victim.id, None), assignee_id=me.id)
+    auth(me)
+    r = client.patch(f"/api/tasks/{t.id}", json={
+        "maintasks": _two_steps((victim.id, None), text=("Step 1 reworded", "Step 2 reworded"))})
+    assert r.status_code == 200
+    assert r.json()["maintasks"][0]["subs"][0]["text"] == "Step 1 reworded"
+
+
+def test_a_lead_may_rearrange_their_teams_steps(client, db, make_user, make_team, auth):
+    team = make_team(name="Acquisition")
+    lead = make_user(C.ROLE_TEAM_LEAD, team_id=team.id)
+    member = make_user(C.ROLE_EMPLOYEE, team_id=team.id)
+    t = _task_with_two_steps(db, owners=(member.id, None), team_id=team.id)
+    auth(lead)
+    assert client.patch(f"/api/tasks/{t.id}",
+                        json={"maintasks": _two_steps((None, member.id))}).status_code == 200
+
+
+# --- 🔴 Ticking somebody else's step (2026-08-05, task_perms.can_tick_step) -----------------------
+#
+# "Done" is a claim about work another person performed, and it is what the progress bar and the D5
+# review gate read. It used to be open to anyone who could edit the card, so on a card with several
+# owners every one of them could close each other's steps. Everything ELSE about a step — its text,
+# whether it exists at all — is still open to whoever can edit.
+
+def test_employee_cannot_tick_a_colleagues_step(client, db, make_user, auth):
+    victim = make_user(C.ROLE_EMPLOYEE, name="Zhen")
+    me = make_user(C.ROLE_EMPLOYEE, name="Me")
+    t = _task_with_two_steps(db, owners=(victim.id, me.id), assignee_id=None)
+    auth(me)
+    r = client.patch(f"/api/tasks/{t.id}",
+                     json={"maintasks": _two_steps((victim.id, me.id), done=(True, False))})
+    assert r.status_code == 403
+    assert "Zhen" in r.json()["detail"]          # name the owner, or the refusal is a riddle
+
+
+def test_anyone_on_the_card_may_tick_an_UNOWNED_step(client, db, make_user, auth):
+    """This is how a team's queue gets worked through — an unowned step is nobody's to protect."""
+    me = make_user(C.ROLE_EMPLOYEE)
+    t = _task_with_two_steps(db, owners=(None, None), assignee_id=me.id)
+    auth(me)
+    assert client.patch(f"/api/tasks/{t.id}",
+                        json={"maintasks": _two_steps((None, None), done=(True, False))}).status_code == 200
+
+
+def test_you_may_always_tick_your_own_step(client, db, make_user, auth):
+    victim = make_user(C.ROLE_EMPLOYEE)
+    me = make_user(C.ROLE_EMPLOYEE)
+    t = _task_with_two_steps(db, owners=(victim.id, me.id))
+    auth(me)
+    r = client.patch(f"/api/tasks/{t.id}",
+                     json={"maintasks": _two_steps((victim.id, me.id), done=(False, True))})
+    assert r.status_code == 200
+    assert r.json()["maintasks"][0]["subs"][1]["done"] is True
+
+
+def test_the_cards_lead_may_tick_anybodys_step(client, db, make_user, auth):
+    """`assigned_to_id` is accountable for the card as a whole, so they may close it out."""
+    victim = make_user(C.ROLE_EMPLOYEE)
+    me = make_user(C.ROLE_EMPLOYEE)
+    t = _task_with_two_steps(db, owners=(victim.id, None), assignee_id=me.id)
+    auth(me)
+    assert client.patch(f"/api/tasks/{t.id}",
+                        json={"maintasks": _two_steps((victim.id, None), done=(True, False))}).status_code == 200
+
+
+def test_a_team_lead_may_tick_within_their_team(client, db, make_user, make_team, auth):
+    """Somebody on leave must not be able to block the column — a lead can already decide who holds
+    the step, so they may also close it."""
+    team = make_team(name="Acquisition")
+    lead = make_user(C.ROLE_TEAM_LEAD, team_id=team.id)
+    member = make_user(C.ROLE_EMPLOYEE, team_id=team.id)
+    t = _task_with_two_steps(db, owners=(member.id, None), team_id=team.id)
+    auth(lead)
+    assert client.patch(f"/api/tasks/{t.id}",
+                        json={"maintasks": _two_steps((member.id, None), done=(True, False))}).status_code == 200
+
+
+def test_deleting_a_colleagues_step_is_still_refused(client, db, make_user, auth):
+    """Removing the slot removes their hold on it, which is the same power as granting it."""
+    victim = make_user(C.ROLE_EMPLOYEE)
+    me = make_user(C.ROLE_EMPLOYEE)
+    t = _task_with_two_steps(db, owners=(victim.id, None), assignee_id=me.id)
+    auth(me)
+    r = client.patch(f"/api/tasks/{t.id}", json={"maintasks": [
+        {"id": "m1", "title": "Phase", "assignee_id": None,
+         "subs": [{"id": "s2", "text": "Step 2", "done": False, "assignee_id": None}]}]})
+    assert r.status_code == 403
+
+
+def test_a_tick_reads_the_owner_from_BEFORE_the_edit():
+    """Unit-level, because no role can reach it through the API (changing the owner is refused
+    first): clearing a step's owner in the same PATCH must not present the tick as unowned. The two
+    guards must not be able to launder each other."""
+    from app.services import maintasks as MT
+    before = MT.slots(MT.normalize(_two_steps((7, None))))
+    after = MT.slots(MT.normalize(_two_steps((None, None), done=(True, False))))
+    assert [c["owner"] for c in MT.tick_changes(before, after)] == [7]
+
+
 # --- The read-only seat (decision D8, docs/TASKBOARD_REBUILD.md §5.3, WP 4.4) --------------------
 #
 # A viewer SEES everything and WRITES nothing. §5.3 is explicit that the audit is the work, not the

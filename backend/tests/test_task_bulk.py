@@ -131,6 +131,30 @@ def test_assigning_someone_else_still_needs_delegation_rights(client, auth, make
     assert _bulk(client, [t2.id], "assignee", me.id).json()["updated"] == [t2.id]
 
 
+def test_an_employee_cannot_TAKE_a_card_somebody_already_owns(client, auth, make_user, db, make_team):
+    """🔴 Fixed 2026-08-05. The condition was `value != user.id`, so "assign to myself" was allowed
+    unconditionally — and taking a card off the person doing it is not self-assignment, it is
+    delegation aimed at yourself. Claiming is allowed only while the card is UNOWNED, which is
+    exactly the state `task_perms._team_queue` puts on their board in the first place.
+
+    (The bulk bar only offers this control to team_lead+, so this was reachable through the API
+    rather than the UI. The guard belongs at the write either way — that is the §2.4e lesson.)
+    """
+    team = make_team("Acquisition")
+    me = auth(make_user(C.ROLE_EMPLOYEE, team_id=team.id))
+    owner = make_user(C.ROLE_EMPLOYEE, team_id=team.id)
+    theirs = _task(db, me, assigned_to_id=owner.id, assigned_team_id=team.id)
+
+    body = _bulk(client, [theirs.id], "assignee", me.id).json()
+    assert body["updated"] == []
+    assert "team lead or manager" in body["skipped"][0]["reason"]
+    assert db.get(Task, theirs.id).assigned_to_id == owner.id
+
+    # The queue case still works: routed to my team, owned by nobody -> mine to pick up.
+    queued = _task(db, me, assigned_team_id=team.id)
+    assert _bulk(client, [queued.id], "assignee", me.id).json()["updated"] == [queued.id]
+
+
 # --- validation ---------------------------------------------------------------------------------
 
 def test_an_invalid_target_is_the_callers_mistake_not_a_per_task_outcome(client, auth, make_user, db):

@@ -6,6 +6,7 @@ The rules (higher roles inherit lower ones):
     | view          | assigned + team queue | team + own | all             | all               |
     | create        | yes             | yes              | yes             | yes               |
     | edit fields   | assigned        | team + own       | all             | all               |
+    | tick a step   | own + unowned   | team             | all             | all               |
     | reassign      | self only       | team             | all             | all               |
     | priority      | no              | team (scoped)    | all             | all               |
     | review/approve| no              | team (scoped)    | all             | all               |
@@ -162,6 +163,33 @@ def can_reassign(user: User, task: Task) -> bool:
     if _is_viewer(user):
         return False
     return _is_full(user) or _leads_team(user, task)
+
+
+def can_tick_step(user: User, task: Task, step_owner_id: int | None) -> bool:
+    """Tick / untick ONE step of the breakdown (2026-08-05).
+
+    Editing the work — renaming a step, adding one, deleting one, reordering — stays open to whoever
+    can edit the card. Marking a step **done** is different: it is a claim about work somebody else
+    performed, it is what the progress bar and the review gate read, and on a card with several
+    owners it was silently available to all of them. So:
+
+        no owner        -> anyone who can edit (this is how the team queue is worked through)
+        the owner       -> yes, obviously
+        the card's lead -> yes; `assigned_to_id` is accountable for the card as a whole
+        can_reassign    -> yes; a lead/AM already decides who holds the step, so they may close it
+                           out for somebody on leave without reassigning it first
+        anyone else     -> no
+
+    🔴 Caller must have `can_edit` already — this narrows that permission, it never widens it, and it
+    is deliberately NOT reachable for the read-only seat (which `can_edit` refuses first).
+    """
+    if not step_owner_id:
+        return True
+    if step_owner_id == user.id:
+        return True
+    if task.assigned_to_id == user.id:
+        return True
+    return can_reassign(user, task)
 
 
 def can_prioritize(user: User, task: Task) -> bool:

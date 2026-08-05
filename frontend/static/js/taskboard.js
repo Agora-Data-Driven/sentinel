@@ -873,35 +873,27 @@ window.TaskBoard = {
              It is flagged as shared but no client card exists — a row predating the 2026-08-03 fix.
              Press <em>Share with the client</em> to create it for real.</div>`
         : "";
-    // 🔴 WHAT THE CLIENT ASKED FOR, WHERE YOU ACTUALLY LOOK (2026-08-04).
-    // The reverse channel (D4) delivered correctly from day one, and the card even showed a red
-    // "1 change request" pill — but a pill is a COUNT. The words themselves went into the comment
-    // thread, in the right-hand column, below the work breakdown, styled identically to a
-    // colleague's note. So the board told you a client wanted something changed and never told you
-    // WHAT, which is the one thing the team needs in order to act.
+    // 🔴 CLEARING THE CLIENT-CHANGES FLAG — ONE LINE, ABOVE THE THREAD IT REFERS TO (2026-08-04).
+    // `tasks.client_changes_open` had a red "N change requests" pill and NO way to clear it: the
+    // endpoint (POST /{id}/resolve-client-changes) shipped with no caller, so once a client asked
+    // for something the pill was permanent. This is that missing control.
     //
-    // Two reasons it was invisible rather than merely buried, both worth knowing before touching this:
-    //   * `cmt()` renders a red "Changes requested" pill + a resolve button off `c.kind === "changes"`
-    //     — but `kind` only exists on an ATRIUM-owned card (atrium_tasks.as_task_detail). A Sentinel
-    //     row's comment comes from `serializers.comment_dict`, which has no `kind` to give: the
-    //     receiver bumps `tasks.client_changes_open` and does not persist the kind per comment.
-    //     So the flag is TASK-level, and the honest UI for it is task-level too — this banner.
-    //   * `is_client` was exposed by the serializer, documented there as "what the UI keys off",
-    //     and used by NOTHING. It is used now, both here and in `cmt()`.
-    // The body shown is the newest client comment, which is what the counter refers to in practice.
-    // Resolve posts to /resolve-client-changes (the TASK-level endpoint) — NOT the per-comment
-    // Atrium route `wireResolve` uses, which does not exist for a Sentinel row.
-    const clientSaid = (t.comments || []).filter((c) => c.is_client);
-    const lastClient = clientSaid.length ? clientSaid[clientSaid.length - 1] : null;
+    // It deliberately does NOT restate the client's message. The first attempt was a banner at the
+    // top of the record column quoting the newest client comment — which put chrome ABOVE the card's
+    // own title, and duplicated a comment sitting a few centimetres away now that `cmt()` marks
+    // client comments with a violet CLIENT pill. Reverted the same day. The reason the words felt
+    // missing was never their position; it was that nothing distinguished them from a colleague's
+    // note. `is_client` fixed that, so this only needs to carry the ACTION, next to the
+    // conversation it settles.
+    //
+    // Why it is task-level and not a per-comment button: `cmt()` renders its own resolve control off
+    // `c.kind === "changes"`, but `kind` exists only on an ATRIUM-owned card
+    // (`atrium_tasks.as_task_detail`). A Sentinel row's comment comes from `serializers.comment_dict`,
+    // which has no `kind` to give — the receiver bumps the task counter and never persists the kind
+    // per comment. The flag is task-level, so its control is too.
     const changeNote = (t.open_changes && !isAtrium)
-      ? `<div class="form-hint" style="margin-bottom:14px;border-left:3px solid var(--danger)">
-           <strong>The client asked for changes.</strong>
-           ${lastClient
-             ? `<div style="margin:6px 0 8px;white-space:pre-wrap">${S.esc(String(lastClient.body || "").replace(/\n?\[atrium:[^\]]*\]/g, "").trim())}</div>
-                <div class="meta">${S.esc(lastClient.author ? lastClient.author.name : "The client")} · ${S.timeAgo(lastClient.created_at)}</div>`
-             : `<div class="meta">Their message is in the conversation below.</div>`}
-           <button class="btn sm ghost" id="d-resolve-changes" style="margin-top:8px">Mark as handled</button>
-         </div>`
+      ? ` <span class="muted" style="font-weight:400">· the client asked for changes</span>
+          <button class="btn sm ghost" id="d-resolve-changes" style="margin-left:8px">Mark as handled</button>`
       : "";
     // Park REMEMBERS the column the card left (tasks.resume_to), so say where Resume will put it —
     // otherwise the button is a guess. An Atrium card's hold has no such memory to show.
@@ -921,7 +913,6 @@ window.TaskBoard = {
     ].join("");
     const body = `<div class="tb-cols">
       <div>
-        ${changeNote}
         ${staleNote}
         <div class="labels" style="margin-bottom:8px">${S.labelPills(t.labels)}${chips}</div>
         <h2 style="margin-bottom:6px">${S.esc(t.title)}</h2>
@@ -964,7 +955,7 @@ window.TaskBoard = {
         <div class="progress" style="margin:8px 0 12px"><i id="d-bd-bar" style="width:0%"></i></div>
         <div id="d-breakdown"></div>
         ${readOnly ? "" : `<button class="btn sm ghost" id="d-bd-addmain" style="margin-top:10px">${S.ICON.plus}Add main task</button>`}
-        <div class="section-label" style="margin-top:18px">Comments${(isAtrium && t.atrium_visible) ? ' <span class="muted" style="font-weight:400">· this card is shared, so the client sees these</span>' : ""}</div>
+        <div class="section-label" style="margin-top:18px">Comments${(isAtrium && t.atrium_visible) ? ' <span class="muted" style="font-weight:400">· this card is shared, so the client sees these</span>' : ""}${changeNote}</div>
         <div class="thread" id="d-thread" style="margin:10px 0">${t.comments.map(cmt).join("") || '<div class="muted">No comments yet.</div>'}</div>
         ${readOnly ? "" : `<div class="row" style="gap:8px"><input id="d-comment" placeholder="Write a comment… use @name to mention"><button class="btn primary sm" id="d-send">Send</button></div>`}
         <div class="section-label" style="margin-top:18px">Activity</div>
@@ -1035,8 +1026,30 @@ window.TaskBoard = {
     // anything. An Atrium roster carries no team, so it degrades to one flat list on its own.
     const optionFor = (p, current) =>
       `<option value="${S.esc(p.id)}" ${p.id === current ? "selected" : ""}>${S.esc(p.name)}</option>`;
+    const ownerName = (oid) => {
+      const p = owners.find((x) => x.id === oid);
+      return p ? p.name : "somebody else";
+    };
+    // 🔴 Mirrors the server, which is where it is enforced (routers/tasks.py, the per-slot owner diff
+    // + task_perms.can_tick_step). Without these two, the drawer offered every step to everyone and
+    // answered with a 403 that ALSO threw away the rest of the edit — the breakdown saves whole.
+    // Delegating an owner: AM+ anywhere, a team lead on their own department's card. Self-assignment
+    // (taking an unowned step, dropping your own) stays open to every role, which is why a
+    // non-delegator still gets a picker — it just only lists them.
+    const mayDelegateStep = isAtrium ? canManage : canReassign(t);
+    // Ticking: the step's owner, the card's lead, or a lead/manager. An unowned step is anyone's to
+    // tick (that is how a team queue gets worked through). Atrium cards have no Sentinel owners at
+    // all — their roster is emails — so they keep the old open behaviour.
+    const mayTick = (owner) => isAtrium || !owner || owner === S.user.id
+      || t.assigned_to_id === S.user.id || canReassign(t);
 
     function ownerOptions(current) {
+      // A non-delegator may only ever write their own id, so listing the company is a promise the
+      // server will refuse. They keep sight of who holds it via the disabled select's own value.
+      if (!mayDelegateStep) {
+        const me = owners.filter((p) => p.id === S.user.id || p.id === current);
+        return me.map((p) => optionFor(p, current)).join("");
+      }
       const teamId = t.assigned_team_id;
       const teamName = teamsById[teamId] ? teamsById[teamId].name : null;
       const inTeam = teamId ? owners.filter((p) => p.team_id === teamId) : [];
@@ -1046,11 +1059,18 @@ window.TaskBoard = {
         + (rest.length ? `<optgroup label="Everyone else">${rest.map((p) => optionFor(p, current)).join("")}</optgroup>` : "");
     }
 
-    const assigneeSelect = (act, mid, sid, current, placeholder) =>
-      `<select class="bd-assignee" data-act="${act}" data-mid="${mid}"${sid ? ` data-sid="${sid}"` : ""}>
+    const assigneeSelect = (act, mid, sid, current, placeholder) => {
+      // Somebody else's slot is shown, never editable: taking work off a colleague is the same
+      // power as giving it to them, and the server refuses both.
+      const locked = !mayDelegateStep && !!current && current !== S.user.id;
+      const title = locked ? `${ownerName(current)} owns this — only a team lead or manager can change that`
+        : (mayDelegateStep ? "" : "You can take this on yourself, or hand it back");
+      return `<select class="bd-assignee" data-act="${act}" data-mid="${mid}"${sid ? ` data-sid="${sid}"` : ""}
+        ${locked ? "disabled" : ""} title="${S.esc(title)}">
         <option value="">${placeholder}</option>
         ${ownerOptions(current)}
       </select>`;
+    };
 
     // D12: assignment and routing are CONTROLS, not action buttons. The prototype had hardcoded
     // "Route to Acquisition" / "Delegate to Justine & Zhen" buttons, which only ever fit the one
@@ -1089,7 +1109,8 @@ window.TaskBoard = {
           </div>
           <ul class="mtask-subs">${m.subs.map((s) => `
             <li class="${s.done ? "done" : ""}" data-sid="${s.id}">
-              <input type="checkbox" data-act="sub-toggle" data-mid="${m.id}" data-sid="${s.id}" ${s.done ? "checked" : ""}>
+              <input type="checkbox" data-act="sub-toggle" data-mid="${m.id}" data-sid="${s.id}" ${s.done ? "checked" : ""}
+                ${mayTick(s.assignee_id) ? "" : `disabled title="${S.esc(ownerName(s.assignee_id) + " owns this step — only they or a lead can tick it")}"`}>
               <input class="sub-text" data-act="sub-text" data-mid="${m.id}" data-sid="${s.id}" value="${S.esc(s.text)}" aria-label="Sub-task">
               ${assigneeSelect("sub-assignee", m.id, s.id, s.assignee_id, "Assign…")}
               <button class="bd-x" data-act="sub-del" data-mid="${m.id}" data-sid="${s.id}" title="Delete sub-task">✕</button>
@@ -1520,6 +1541,19 @@ window.TaskBoard = {
     // derived from the template's content type — no flag column, no migration (the alternative
     // the doc floated). Existing rows keep their duplicated value until someone edits them.
     const isCampaignType = (ct) => (ct || "").trim().toLowerCase() === "campaign";
+    // 🔴 WHO MAY NAME A PERSON — mirrors the server, and the server is what enforces it:
+    // an existing card asks `task_perms.can_reassign` (AM+ anywhere, a team lead while the card is
+    // routed to their OWN department); a new one asks `create_task`'s `may_delegate`, which is the
+    // same rule against the department being picked in this form right now.
+    // This field was ungated until 2026-08-05 — the only one in the block that wasn't (Priority two
+    // rows down always was) — so an employee could set it, hit Save, and lose the WHOLE edit to a
+    // 403; on create the person they picked was silently dropped and the card landed on them.
+    const mayNamePerson = (teamId) => (existing
+      ? canReassign(existing)
+      : (canManage || (S.can("team_lead") && teamId != null && teamId === S.user.team_id)));
+    const LEAD_LOCKED = existing
+      ? "Only an account manager — or a team lead on this department's work — can change who leads this."
+      : "Pick a department instead: its leads are notified and triage it. Naming a person is a lead or manager call.";
     // 🔴 "What the client will read" (#t-cnote) sits UP FRONT with the dates, not behind More
     // options: it is the entire content of the client's card. It had no field ANYWHERE in this form
     // until 2026-08-03, so every task published by Send to Atrium reached the client's board with an
@@ -1551,7 +1585,9 @@ window.TaskBoard = {
                 <div class="form-hint">On by default (D6) — the client watches the work cross their board from day one instead of meeting it finished. Untick to keep this one internal; you can share it later from the card.</div>
               </div>` : ""}
               <label class="field"><span>Department</span><select id="t-team"><option value="">—</option>${teams.map((t) => `<option value="${t.id}" ${t.id === e.assigned_team_id ? "selected" : ""}>${S.esc(t.name)}</option>`).join("")}</select></label>
-              <label class="field"><span>Lead (main)</span><select id="t-assignee"><option value="">Unassigned</option>${people.map((p) => `<option value="${p.id}" ${p.id === e.assigned_to_id ? "selected" : ""}>${S.esc(p.name)}</option>`).join("")}</select></label>
+              <label class="field"><span>Lead (main)</span>
+                <select id="t-assignee"${mayNamePerson(e.assigned_team_id) ? "" : " disabled"} title="${mayNamePerson(e.assigned_team_id) ? "" : LEAD_LOCKED}"><option value="">Unassigned</option>${people.map((p) => `<option value="${p.id}" ${p.id === e.assigned_to_id ? "selected" : ""}>${S.esc(p.name)}</option>`).join("")}</select>
+                <div class="form-hint" id="t-assignee-hint"${mayNamePerson(e.assigned_team_id) ? " hidden" : ""}>${LEAD_LOCKED}</div></label>
               ${!existing ? `<label class="field" style="grid-column:1/-1"><span>Service type</span><select id="t-svc"><option value="">Custom (blank)</option></select></label>
               <div class="field" style="grid-column:1/-1"><div class="form-hint">Pick a department, then a service type. The phases, steps, and labels are created for you. Choose Custom (blank) to start empty.</div></div>
               <div class="field" style="grid-column:1/-1" id="t-svc-preview" hidden></div>` : ""}
@@ -1585,6 +1621,24 @@ window.TaskBoard = {
       if (wrap) wrap.hidden = !clientBox.value;
     };
     if (clientBox) clientBox.addEventListener("change", syncShare);
+
+    // A team lead's right to name somebody follows the DEPARTMENT they are filing into, so on a new
+    // card the picker has to follow that select rather than sit there enabled until the save fails.
+    // Only on create: on an existing card the server judges `can_reassign` against the department the
+    // card has NOW, not the one being picked in this form.
+    const assigneeBox = S.qs("#t-assignee");
+    const syncAssignee = () => {
+      const allowed = mayNamePerson(numOrNull("t-team"));
+      assigneeBox.disabled = !allowed;
+      assigneeBox.title = allowed ? "" : LEAD_LOCKED;
+      const hint = S.qs("#t-assignee-hint");
+      if (hint) hint.hidden = allowed;
+      // Never leave a name sitting in a locked picker: the server now REFUSES it rather than
+      // quietly dropping it, and a save that dies on a field they can't even reach is no better
+      // than the silent version.
+      if (!allowed) assigneeBox.value = "";
+    };
+    if (!existing) S.qs("#t-team").addEventListener("change", syncAssignee);
 
     const ctypeBox = S.qs("#t-ctype");
     const syncCampaign = () => {
