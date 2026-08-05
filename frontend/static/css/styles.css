@@ -603,6 +603,16 @@ textarea { resize: vertical; min-height: 78px; }
    real overdue would flatten the difference the two columns exist to draw. */
 .mon-tbl td.num.warn { color: var(--warn); }
 .mon-tbl .mon-sub { display: block; font-size: 10.5px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .3px; margin-top: 2px; }
+/* Manage → Clients (READ-ONLY, mirrored from Atrium). The strip states where clients are really
+   managed; `.mgr-warn` is the one actionable case — a client with no Atrium workspace key, for which
+   publishing and adoption both fail silently. Amber, not red: nothing is broken yet. */
+.mgr-strip { display: flex; justify-content: space-between; align-items: center; gap: 14px; flex-wrap: wrap;
+  padding: 9px 13px; margin-bottom: 12px; border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--input); font-size: 12.5px; color: var(--sub); }
+.mgr-strip a { font-weight: 700; color: var(--green-d); }
+.mgr-warn { display: flex; gap: 10px; padding: 11px 13px; margin-bottom: 12px; font-size: 12.5px;
+  line-height: 1.6; border: 1px solid var(--warn); border-radius: var(--radius); background: #FEF3E6; color: var(--ink); }
+:root[data-theme="dark"] .mgr-warn { background: rgba(255,255,255,.05); }
 .mon-legend { margin: 12px 2px 0; font-size: 12px; line-height: 1.65; color: var(--sub); max-width: 78ch; }
 .mon-legend b { color: var(--ink); font-weight: 700; }
 /* The table gained four columns. `.monitor` is already `overflow-x: auto` above, so a floor here

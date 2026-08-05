@@ -90,18 +90,20 @@ def teams(user: User = Depends(get_current_user), db: Session = Depends(get_db))
 
 @router.get("/clients")
 def clients(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    return [client_dict(c) for c in db.execute(select(Client).order_by(Client.name)).scalars().all()]
+    """The client picker. ACTIVE clients only — a client Atrium no longer lists is deactivated by
+    `client_sync`, and offering it on the New Task form would let somebody file fresh work against a
+    client that has left. Its existing tasks keep their attribution (see `Client.is_active`)."""
+    rows = db.execute(select(Client).where(Client.is_active.is_(True))
+                      .order_by(Client.name)).scalars().all()
+    return [client_dict(c) for c in rows]
 
 
-@router.post("/clients", dependencies=[Depends(require_roles("account_manager", "admin", "super_admin"))])
-def create_client(payload: dict, db: Session = Depends(get_db)):
-    name = (payload or {}).get("name", "").strip()
-    if not name:
-        return {"error": "name required"}
-    c = Client(name=name, contact_email=payload.get("contact_email"), atrium_client_id=payload.get("atrium_client_id"))
-    db.add(c)
-    db.commit()
-    return client_dict(c)
+# 🔴 `POST /api/meta/clients` was REMOVED on 2026-08-05, with the Manage → Clients write routes, by
+# owner decision: **Atrium owns the client list; Sentinel owns staff.** This one was the quieter of
+# the two problems — it let any AM mint a client row with `atrium_client_id` left unset, which is the
+# exact state that makes `task_adoption` refuse to run ("its adopted cards will appear twice on the
+# board") and makes Send to Atrium unable to address a workspace. `services/client_sync` fills the
+# table from Atrium's registry now. A client is created in ATRIUM.
 
 
 @router.get("/vocab")

@@ -44,6 +44,7 @@ from ..services import audit
 from ..services import task_analytics
 from ..services import maintasks as maintasks_svc
 from ..services import notifications as notif
+from ..services import atrium_identity
 from ..services import (task_adoption, task_bridge, task_config, task_perms, task_recurring,
                         task_templates, task_workflow)
 from ..utils.time import today_ph, to_ph, utcnow
@@ -152,14 +153,32 @@ def _atrium_error(err: str) -> HTTPException:
     return HTTPException(status_code=404 if gone else 502, detail=err)
 
 
+def _owner_index(db: Session) -> atrium_identity.Resolver:
+    """The Atrium-roster -> Sentinel-user resolver, over every ACTIVE user.
+
+    Built from the whole active roster, not from the caller's visible subset: whether a client card
+    has a real owner is a fact about the card, not about who is looking at it. Scoping happens
+    afterwards, where it belongs.
+    """
+    users = db.execute(select(User).where(User.is_active.is_(True))).scalars().all()
+    return atrium_identity.build(users)
+
+
+def _atrium_owner(index: atrium_identity.Resolver, task: dict) -> dict | None:
+    """`user_public` of the Sentinel user this card's Atrium lead is, or None if unresolvable."""
+    return user_public(index.resolve(task.get("lead_id"), task.get("lead_name")))
+
+
 def _atrium_detail(db: Session, envelope: dict) -> dict:
     """An Atrium envelope as a Sentinel task_detail, with its client resolved the same way the
-    board card resolves it (Client.atrium_client_id, then an unambiguous name match)."""
+    board card resolves it (Client.atrium_client_id, then an unambiguous name match), and its lead
+    resolved to the Sentinel user who is that person (so the drawer shows the same owner and photo
+    the board card does — two surfaces disagreeing about the owner is the bug this all started as)."""
     clients = db.execute(select(Client)).scalars().all()
     task = envelope.get("task") or {}
     client = atrium_tasks.resolve_client(clients, task.get("client_key", ""),
                                          task.get("client_name", ""))
-    return atrium_tasks.as_task_detail(envelope, client)
+    return atrium_tasks.as_task_detail(envelope, client, _atrium_owner(_owner_index(db), task))
 
 
 def _resolve_task(db: Session, task_id: str) -> Task | None:
@@ -233,22 +252,30 @@ def list_tasks(
         # (3.4) would have widened to every client card at once. The linked row wins because it is
         # the one that can do anything; the ghost is dropped.
         linked = task_adoption.claimed_atrium_ids(db)
+        # One resolver for the whole board — it indexes the user table once, not once per card.
+        owners = _owner_index(db)
         for a in atrium_tasks.fetch_tasks():
             if (a.get("client_key", ""), str(a.get("task_id") or "")) in linked:
                 continue
             card = atrium_tasks.as_board_card(
                 a, atrium_tasks.resolve_client(clients, a.get("client_key", ""),
-                                               a.get("client_name", "")))
+                                               a.get("client_name", "")),
+                _atrium_owner(owners, a))
             if status and card["status"] != status:
                 continue
             if priority and card["priority"] != priority:
                 continue
             if client_id and card["client_id"] != client_id:
                 continue
-            # Atrium tasks carry no Sentinel assignee/team, so those two filters exclude them.
-            # "Unassigned" is the one assignee choice they DO answer -- the card says Unassigned,
-            # so hiding it from that filter would contradict what the board renders.
-            if assignee_id or team_id:
+            # An Atrium card still has no Sentinel TEAM, so that filter excludes it. The ASSIGNEE
+            # filter now agrees with what the card renders (2026-08-05): a card whose Atrium lead
+            # resolved to a Sentinel user claims that assignee, so filtering by that person must
+            # KEEP it — dropping it while the card visibly shows their name and photo is the same
+            # class of contradiction the "Unassigned" bug was. An unresolved card claims nobody and
+            # is still excluded from a by-person filter, exactly as before.
+            if team_id:
+                continue
+            if assignee_id and card["assigned_to_id"] != assignee_id:
                 continue
             cards.append(card)
     return cards
@@ -352,6 +379,39 @@ def employee_summary(days: int = Query(30, ge=7, le=180,
     done_statuses = {s for s in all_statuses if task_config.is_completed(db, s)}
     leave = task_analytics.leave_context(db, [p.id for p in people], today)
 
+    # 🔴 ATRIUM CLIENT WORK COUNTS TOO (2026-08-05). This rollup queried Sentinel's own `tasks` table
+    # only, so every card Atrium owns — the bulk of delivery for some people — counted toward NOBODY's
+    # workload: a person holding fifteen client cards read as idle on the table a manager staffs from.
+    # Joined on the Atrium lead's EMAIL, the only honest key (an Atrium owner is a roster email, not a
+    # Sentinel id); a lead with no Sentinel account matches nothing and is counted for no one.
+    #
+    # FAIL-SOFT, like every other read of this bridge: `fetch_tasks` returns [] on an unset secret, a
+    # timeout, a non-200 or a malformed body. An Atrium outage must cost a manager the client half of
+    # these numbers, never the whole page.
+    client_counts: dict[int, int] = {}
+    if atrium_tasks.enabled():
+        # 🔴 Resolved through `atrium_identity`, NOT by an exact email match. Atrium's roster and
+        # Sentinel's users disagree on the domain for the same human (@agoradatadriven.com vs
+        # @agora.ph vs @100.digital, plus Gmail-based portal accounts), so `email ==` resolved almost
+        # nobody and client work counted toward nobody — which is exactly what "the Monitor says
+        # Unassigned" was. The resolver's ladder and its refuse-when-ambiguous rule live in that
+        # module; `people` bounds it to whom this caller may see.
+        index = atrium_identity.build(people)
+        # Cards already CLAIMED by a Sentinel row are that row now — counting both double-counts the
+        # same work, exactly as it would render twice on the board (WP 4.3).
+        claimed = task_adoption.claimed_atrium_ids(db)
+        fresh = [c for c in atrium_tasks.fetch_tasks()
+                 if (c.get("client_key", ""), str(c.get("task_id") or "")) not in claimed]
+        # Resolve Atrium's STAGE to Sentinel's current label — never trust the label it sends, which
+        # is renameable on both sides (D13). An unresolvable stage keeps whatever Atrium called it and
+        # simply renders no segment on the workload bar.
+        def _status_of(card):
+            return task_config.status_for_stage(db, card.get("stage") or "") or card.get("status")
+
+        for uid, rows in task_analytics.atrium_workload(fresh, index, _status_of).items():
+            by_person.setdefault(uid, []).extend(rows)
+            client_counts[uid] = len(rows)
+
     rows = []
     for p in people:
         mine = by_person.get(p.id, [])
@@ -369,6 +429,10 @@ def employee_summary(days: int = Query(30, ge=7, le=180,
             # `renderMonitor` already consume, and a gratuitous reshape is how a stale
             # cached script starts rendering "undefined" (AGENTS.md §5).
             "stale_days": task_analytics.STALE_DAYS,
+            # How many of this row's cards are Atrium's. Exposed because those cards carry no
+            # `completed_at`, so they are in Open/Overdue/Sitting and NOT in Cycle/On-time/Done —
+            # without saying so, somebody who delivers mostly client work looks like they never ship.
+            "client_cards": client_counts.get(p.id, 0),
         })
     # Relative bands are computed across the rows the CALLER can see, so a team lead is compared
     # against their own team rather than against the whole company — the cohort on screen is the

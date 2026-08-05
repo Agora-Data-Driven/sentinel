@@ -26,7 +26,7 @@ Two rules inherited from the rest of the board and re-stated because they are ea
 """
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -35,11 +35,114 @@ from ..constants import LEAVE_APPROVED
 from ..models import LeaveRequest, Task
 from ..utils.time import to_ph
 
+UTC = timezone.utc
+
 # An open card nobody has touched in this long is "sitting". Two weeks is the shortest span that
 # survives a normal holiday + handover without crying wolf; it is a display threshold, not a rule.
 STALE_DAYS = 14
 # How far ahead capacity looks. A fortnight matches STALE_DAYS and covers the usual planning horizon.
 LEAVE_LOOKAHEAD_DAYS = 14
+
+
+class AtriumWork:
+    """One Atrium client card, wearing just enough of `Task`'s surface for the rollups to read it.
+
+    🔴 Why a shim and not a fake `Task`: the rollup's honest columns must stay honest. Atrium's list
+    payload has **no `completed_at`** (see `_internal_task_view` there), so `completed_at` is `None`
+    here — and because `delivery()` skips any row without a stamp, client cards are automatically
+    **excluded from cycle time, the on-time rate and throughput** rather than being counted off
+    `updated_at`. Counting completion off `updated_at` is precisely the §2.4h bug: it re-dates a task
+    finished in March to whenever somebody last touched it. So a client card contributes to
+    **open / overdue / workload / sitting** — the questions its data can answer — and to nothing else.
+    `client_cards` on the row is what lets the UI say so out loud.
+
+    `assigned_to_id` is set to the RESOLVED Sentinel user, so `_aggregate` does not count the card as
+    "held via a step" — the Atrium lead genuinely is its owner, they are just recorded by email.
+    """
+
+    __slots__ = ("status", "due_date", "start_date", "created_at", "updated_at",
+                 "assigned_to_id", "completed_at", "archived", "maintasks_json", "checklist_json",
+                 "atrium_task_id")
+
+    def __init__(self, status, due_date, start_date, created_at, updated_at, owner_id, atrium_id):
+        self.status = status
+        self.due_date = due_date
+        self.start_date = start_date
+        self.created_at = created_at
+        self.updated_at = updated_at
+        self.assigned_to_id = owner_id
+        self.completed_at = None      # 🔴 Atrium sends none. Never substitute `updated_at`.
+        self.archived = False         # filing is a Sentinel act; Atrium has no archive
+        self.maintasks_json = "[]"    # its breakdown owners are emails, not Sentinel users
+        self.checklist_json = None
+        self.atrium_task_id = atrium_id
+
+
+def _as_date(value):
+    """"YYYY-MM-DD" -> date, tolerantly. Anything unparseable becomes None.
+
+    🔴 Load-bearing: Atrium sends dates as STRINGS and the rollups compare them with `date` objects
+    (`t.due_date < today`). Left as a string that comparison raises TypeError and takes the whole
+    Monitor down with it — for a manager, over one malformed field on one client card.
+    """
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except (TypeError, ValueError):
+        return None
+
+
+def _as_dt(value):
+    """An ISO timestamp -> naive UTC datetime, tolerantly (None when it can't be read).
+
+    `to_ph` needs a datetime; the aging columns simply skip a row whose clock can't be read, which is
+    better than guessing an age.
+    """
+    if isinstance(value, datetime):
+        return value
+    try:
+        txt = str(value).strip().replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(txt)
+    except (TypeError, ValueError):
+        return None
+    return parsed.replace(tzinfo=None) if parsed.tzinfo is None else parsed.astimezone(UTC).replace(tzinfo=None)
+
+
+def atrium_workload(cards: list[dict], index, status_of=None) -> dict[int, list[AtriumWork]]:
+    """Group Atrium client cards onto the Sentinel users who lead them: `{user_id: [AtriumWork]}`.
+
+    This is what makes client work COUNT. Sentinel's rollup queried its own `tasks` table only, so
+    every card Atrium owns — the bulk of delivery for some people — counted toward nobody's workload:
+    a person holding fifteen client cards read as idle on the very table a manager staffs from.
+
+    🔴 `index` is a `services.atrium_identity.Resolver`, **not** a plain email map. An exact-email
+    join was the first attempt and it resolved almost nobody: Atrium's roster and Sentinel's users
+    use different domains for the same human, and some Atrium leads are Gmail-based portal accounts.
+    That module owns the resolution ladder AND the rule that an ambiguous match resolves to nobody —
+    a lead we cannot pin down is counted for no one, because mis-attributing somebody's workload is
+    worse than a visible gap.
+
+    `status_of(card)` resolves Atrium's stage to Sentinel's CURRENT status label; pass it so the
+    workload bar segments correctly. Without it the raw label is used, and a renamed column just
+    renders no segment (never a wrong one) — the D13 rule.
+    """
+    out: dict[int, list[AtriumWork]] = {}
+    for c in cards:
+        found = index.resolve(c.get("lead_id") or c.get("atrium_lead_id"), c.get("lead_name"))
+        if not found:
+            continue
+        owner = found.id
+        out.setdefault(owner, []).append(AtriumWork(
+            status=(status_of(c) if status_of else c.get("status")) or "To Do",
+            due_date=_as_date(c.get("due_date")),
+            start_date=_as_date(c.get("start_date")),
+            created_at=_as_dt(c.get("created_at")),
+            updated_at=_as_dt(c.get("updated_at")) or _as_dt(c.get("created_at")),
+            owner_id=owner,
+            atrium_id=str(c.get("atrium_task_id") or ""),
+        ))
+    return out
 
 
 def _median(values: list[float]) -> float | None:

@@ -132,6 +132,13 @@ def _ensure_columns() -> None:
         # 🔴 Same rule as the growth column above: this list is the path these take to production.
         ("tasks", "atrium_task_id", "VARCHAR(64)"),
         ("tasks", "atrium_sync_error", "TEXT"),
+        # Atrium owns the CLIENT list now (2026-08-05, `services/client_sync`); a client it stops
+        # listing is DEACTIVATED here rather than deleted, because deleting nulls `Task.client_id` on
+        # every past task and blanks that client's history. `BOOLEAN DEFAULT true` — existing rows
+        # must stay visible, and never `DEFAULT 1`: this ALTER also runs against prod POSTGRES, which
+        # rejects an integer default on a boolean.
+        # 🔴 Same rule as the columns above: this list is the path it takes to production.
+        ("clients", "is_active", "BOOLEAN DEFAULT true"),
         # The status key/label split (2026-08-03, decision D13). `name` is a LABEL and may be
         # renamed; `vocab_key` is the stable identity and `stage` is the Atrium stage a status
         # projects onto. Without these, `STAGE_BY_STATUS` was keyed by the display string and a
@@ -313,6 +320,33 @@ def _ensure_default_shift() -> None:
         db.close()
 
 
+def _mirror_clients() -> None:
+    """Pull Atrium's client registry on boot (Atrium owns clients; Sentinel owns staff).
+
+    🔴 **Runs LAST and can never stop the boot.** It reaches over the network to another service, so
+    every failure mode — bridge unconfigured, Atrium cold-starting, a timeout, a shape we don't
+    understand — is logged and swallowed. `client_sync.sync` already refuses to act on an empty or
+    failed answer (deactivation is driven by absence, so "no answer" must never be read as "no
+    clients"); this handler is the second belt: a client list that is one boot stale is a nuisance,
+    a Sentinel that will not start is an outage.
+    """
+    from .database import SessionLocal
+    from .services import client_sync
+
+    db = SessionLocal()
+    try:
+        report = client_sync.sync(db)
+        if report["ok"]:
+            print(f"[sentinel] client mirror: +{report['created']} new, "
+                  f"{report['linked']} linked, {report['deactivated']} deactivated")
+        else:
+            print(f"[sentinel] client mirror skipped: {report['error']}")
+    except Exception as exc:                                   # noqa: BLE001 — see the docstring
+        print(f"[sentinel] client mirror failed: {exc}")
+    finally:
+        db.close()
+
+
 @app.on_event("startup")
 def _startup() -> None:
     # Create tables if missing (SQLite zero-setup). Prod uses Alembic migrations.
@@ -322,6 +356,7 @@ def _startup() -> None:
     _backfill_status_meta()
     _ensure_default_shift()
     _startup_safeguards()
+    _mirror_clients()
 
 
 @app.on_event("startup")
