@@ -582,11 +582,17 @@ window.TaskBoard = {
     wirePickers();
   }
 
+  // Trailing window for the DERIVED columns (cycle time, on-time rate). The column counts stay live.
+  // 30 days is long enough that a quiet fortnight doesn't erase somebody's record and short enough
+  // that it still describes how the team works now. Sent to the server rather than assumed, so the
+  // legend under the table and the numbers in it can never disagree.
+  const MONITOR_WINDOW_DAYS = 30;
+
   async function renderMonitor(board) {
     board.className = "monitor";
     board.innerHTML = `<div class="skeleton-row">Loading team…</div>`;
     let rows;
-    try { rows = await S.api("/api/tasks/summary"); }
+    try { rows = await S.api("/api/tasks/summary?days=" + MONITOR_WINDOW_DAYS); }
     catch (err) { board.innerHTML = `<div class="empty">${S.esc(err.detail || "Couldn't load the team summary.")}</div>`; return; }
     if (!rows.length) { board.innerHTML = `<div class="empty">No teammates to show.</div>`; return; }
     // 🔴 Derived from the live vocabulary and coloured by STAGE, never by the status LABEL. This
@@ -599,20 +605,69 @@ window.TaskBoard = {
     const SEG_CLS = { todo: "s-todo", in_progress: "s-prog", revision: "s-rev", blocked: "s-block" };
     const barSegs = STATUSES.filter((s) => STAGE_OF[s] !== "completed");
     const segCls = Object.fromEntries(barSegs.map((s) => [s, SEG_CLS[STAGE_OF[s]] || "s-todo"]));
+    const staleDays = (rows[0] && rows[0].stale_days) || 14;
+
+    // 🔴 An em dash, not 0 — and the difference is the whole point of these columns. `null` from the
+    // server means "no basis to judge": nobody finished anything datable in the window, or the card
+    // has no start. Rendering that as `0` would put a person who simply shipped nothing measurable in
+    // the same red as one who missed every deadline. `??` is deliberately not used (no optional
+    // chaining/nullish in this codebase's browser floor — see AGENTS.md).
+    const NA = '<span class="muted">—</span>';
+    const num = (v, suffix) => (v === null || v === undefined ? NA : v + (suffix || ""));
+
+    // Load is a RELATIVE band (server-side, vs this cohort's median), never an absolute verdict —
+    // tasks on this board carry no size estimate. The legend below the table says so; do not restate
+    // it as "overloaded" anywhere, because the data cannot support that word.
+    const BAND = { heavy: ["red", "Heavy"], steady: ["grey", "Steady"], light: ["blue", "Light"] };
+    const bandPill = (r) => {
+      const b = BAND[r.load_band];
+      if (!b) return NA;
+      return `<span class="pill ${b[0]}" title="Relative to this team's median open work">${b[1]}</span>`;
+    };
+    // Capacity sits beside the NAME, not in its own column: "is this person even here?" changes how
+    // you read every other number in the row, so it has to be seen at the same moment.
+    const capacity = (r) => (r.on_leave_today
+      ? '<span class="pill amber" title="Approved leave covers today">On leave</span>'
+      : r.leave_days_ahead
+        ? `<span class="pill grey" title="Approved leave in the next fortnight">${r.leave_days_ahead}d off soon</span>`
+        : "");
+
     board.innerHTML = `<table class="mon-tbl">
-      <thead><tr><th>Teammate</th><th>Workload</th><th class="num">Open</th><th class="num">Overdue</th><th class="num">Done · 7d</th></tr></thead>
+      <thead><tr>
+        <th>Teammate</th><th>Load</th><th>Workload</th>
+        <th class="num">Open</th><th class="num">Overdue</th>
+        <th class="num" title="Open cards nobody has touched in ${staleDays}+ days">Sitting</th>
+        <th class="num" title="Median calendar days from start to completion">Cycle</th>
+        <th class="num" title="Share of dated work delivered on or before its due date">On time</th>
+        <th class="num">Done · 7d</th>
+      </tr></thead>
       <tbody>${rows.map((r) => {
         const u = r.user;
         const open = r.open_total || 0;
         const segs = barSegs.map((st) => { const n = r.counts[st] || 0; return n ? `<i class="${segCls[st]}" style="flex:${n}" title="${S.esc(st)}: ${n}"></i>` : ""; }).join("");
+        // "9 (4 as steps)" — a row that is mostly other people's cards is a different working life
+        // from one that is all your own, and before 2026-08-05 those cards weren't counted at all.
+        const stepNote = r.stepped ? `<span class="mon-sub" title="Cards led by somebody else, where they own a phase or step">${r.stepped} as steps</span>` : "";
         return `<tr data-uid="${u.id}" tabindex="0">
-          <td class="who">${S.avatar(u, "sm")}<div><div class="n">${S.esc(u.name)}</div><div class="r">${S.esc(u.role_label || u.role || "")}</div></div></td>
+          <td class="who">${S.avatar(u, "sm")}<div><div class="n">${S.esc(u.name)} ${capacity(r)}</div><div class="r">${S.esc(u.role_label || u.role || "")}</div></div></td>
+          <td>${bandPill(r)}</td>
           <td class="wl"><div class="wl-bar">${segs || '<i class="s-none" style="flex:1" title="No open tasks"></i>'}</div></td>
-          <td class="num">${open}</td>
+          <td class="num">${open}${stepNote}</td>
           <td class="num ${r.overdue ? "bad" : ""}">${r.overdue || 0}</td>
+          <td class="num ${r.stale_open ? "warn" : ""}">${r.stale_open || 0}</td>
+          <td class="num">${num(r.median_cycle_days, "d")}</td>
+          <td class="num ${r.on_time_rate !== null && r.on_time_rate !== undefined && r.on_time_rate < 60 ? "bad" : ""}">${num(r.on_time_rate, "%")}</td>
           <td class="num good">${r.completed_week || 0}</td>
         </tr>`;
-      }).join("")}</tbody></table>`;
+      }).join("")}</tbody></table>
+      <p class="mon-legend">
+        <b>Load</b> compares each person against this team's median open work — tasks carry no size
+        estimate, so it ranks who is carrying more, it does not measure hours.
+        <b>Cycle</b> and <b>On time</b> cover the last ${MONITOR_WINDOW_DAYS} days;
+        <b>Sitting</b> counts open cards untouched for ${staleDays}+ days.
+        A person can appear on a card they don't lead, so these rows do not add up to the board's
+        total — that is shared work, counted on every plate it is really on.
+      </p>`;
     const jump = (uid) => { setMode("employee"); requestAnimationFrame(() => focusLane(uid)); };
     S.qsa(".mon-tbl tbody tr").forEach((tr) => {
       tr.onclick = () => jump(tr.dataset.uid);

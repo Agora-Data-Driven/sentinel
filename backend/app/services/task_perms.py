@@ -86,13 +86,30 @@ def is_assigned(user: User, task: Task) -> bool:
     So: no second copy of this rule, in any language. `serializers.task_card` publishes the answer as
     `mine` and the frontend filters on that.
     """
-    if task.assigned_to_id == user.id:
-        return True
-    # A user assigned to any sub-task of the breakdown can also see/act on the task.
+    return user.id in assigned_user_ids(task)
+
+
+def assigned_user_ids(task: Task) -> set[int]:
+    """Everyone this work sits on: the card's lead **plus** every phase/step owner.
+
+    The set form of `is_assigned`, and `is_assigned` is defined in terms of it so the two can never
+    drift — the whole point of making that rule public was that a second copy of it had already gone
+    wrong once. This direction exists for the rollups (`/api/tasks/summary`), which need "who is this
+    card on?" once per task rather than "is it on X?" once per person per task.
+
+    🔴 A card can be in MORE THAN ONE person's set, so per-person totals built from this **do not sum
+    to the number of cards**. That is the truth about a shared card, not an error to normalise away:
+    a build phase owned by one person and a QA step owned by another really is on both plates. Any
+    surface that adds these up has to say so.
+    """
+    ids: set[int] = set()
+    if task.assigned_to_id:
+        ids.add(task.assigned_to_id)
     for m in MT.normalize(getattr(task, "maintasks_json", "[]"), task.checklist_json):
-        if m.get("assignee_id") == user.id or any(s.get("assignee_id") == user.id for s in m.get("subs", [])):
-            return True
-    return False
+        if m.get("assignee_id"):
+            ids.add(m["assignee_id"])
+        ids.update(s["assignee_id"] for s in m.get("subs", []) if s.get("assignee_id"))
+    return ids
 
 
 def my_slot_count(user: User, task: Task) -> int:

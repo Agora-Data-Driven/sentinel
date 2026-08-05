@@ -429,6 +429,43 @@ Three rules if you touch this:
 
 Pinned by `tests/test_task_mine.py`.
 
+**The Monitor rollup had the same blind spot, and every KPI sits on top of it.**
+`GET /api/tasks/summary` bucketed by `assigned_to_id` alone, so a person whose work arrives as steps
+of colleagues' cards read as **idle** — with capacity to spare, according to the table a manager
+staffs from. It buckets by `assigned_user_ids` now, which has one consequence to state out loud
+wherever these numbers are shown:
+
+> 🔴 **The rows do not sum to the number of tasks.** A card with a build phase on one person and a QA
+> step on another is on two plates and is counted on both. `stepped` says how much of a row arrived
+> that way. Do **not** "fix" the double count by attributing each card to one owner — picking a
+> winner re-hides exactly the work this surfaced.
+
+### 🟡 Monitor's workload metrics are DERIVED — a task on this board has no size
+
+`services/task_analytics.py`, added 2026-08-05. The honest constraint first: **there is no effort,
+estimate or points field on `tasks`**, so a card count cannot answer "who is overworked" — one card
+is a ten-minute copy tweak or a three-week build. An estimate field was considered and rejected for
+now: a half-populated one produces worse numbers than none. So every column is derived from data the
+board already keeps honestly:
+
+| Column | Derived from | The trap it avoids |
+|---|---|---|
+| median cycle days | `start_date`/`created_at` → `completed_at` | **Median, not mean** — one six-month epic makes a mean unreadable |
+| on-time rate | `completed_at` vs `due_date` | **`None`, never `0`, when nothing dated shipped.** Zero means "everything was late"; undated completions are excluded, not counted as on time — a card with no due date made no promise |
+| sitting | `updated_at` of OPEN cards (`STALE_DAYS`) | Two clocks on purpose: `oldest_open_days` is `created_at` (how long owed), `stale_open` is `updated_at` (untouched). Old ≠ stale |
+| capacity | approved `LeaveRequest` | Only **approved** leave — a pending request is a question, not a fact about who is at their desk |
+| `load_band` | open work **vs the cohort's own median** | Never absolute. Suppressed entirely when the median is < 2 (there, "double the median" is one card), and `overdue >= 3` forces `heavy` so a small-but-late pile isn't rendered `light` |
+
+Two rules if you extend this:
+
+- **The band is relative and the UI says so** (`.mon-legend`). Do not restate it anywhere as
+  "overloaded" — the data cannot support that word, and the moment a surface implies hours, someone
+  will staff against it.
+- **A band is computed across the rows the CALLER can see**, so a team lead is compared against their
+  own team. The cohort on screen must be the cohort the comparison claims to be about.
+
+Covered by `tests/test_task_analytics.py`.
+
 ### 🔴 An employee's board = their own work **plus their team's unowned queue**
 
 Changed 2026-08-03 (§2.4c). Read `task_perms._team_queue` before touching `can_view`: the condition
