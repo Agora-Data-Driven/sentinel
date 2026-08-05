@@ -93,6 +93,13 @@ inside any comment that lives in a template literal**, never with a backtick.
   rule. Don't add a third: filter on `mine`, and if a card's lead is somebody else say so (that is
   the "N steps on you" pill). An Atrium-owned card has no `mine` (its owners are roster emails) and
   correctly falls out of both.
+- **Monitor's numbers are comparative signals, not an effort measure.** `renderMonitor` renders
+  Load / Open (+"as steps") / Overdue / Sitting / Cycle / On time / Done·7d from
+  `/api/tasks/summary?days=N`. Three things not to "tidy": a `null` metric renders an **em dash, not
+  0** (`null` means "no basis to judge" — a person who shipped nothing datable must not look like one
+  who missed every deadline); `MONITOR_WINDOW_DAYS` is **sent to the server**, never assumed, so the
+  legend and the numbers can't disagree; and `.mon-legend` states that Load is relative to the team's
+  median — it is load-bearing copy, because tasks carry no size estimate. See AGENTS.md §5.
 - **`?assignee_id=` is a FIELD filter and must stay one** — it matches `Task.assigned_to_id` only,
   which is exactly what a manager asking "what is on Jerome?" needs. "My work" is a separate
   client-side flag (`mineOnly`, tested in `matches`) precisely so widening one never widens the

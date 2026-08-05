@@ -41,6 +41,7 @@ from ..security import get_current_user, is_manager, require_roles
 from ..serializers import atrium_payload, comment_dict, task_card, task_detail, user_public
 from ..services import atrium_tasks
 from ..services import audit
+from ..services import task_analytics
 from ..services import maintasks as maintasks_svc
 from ..services import notifications as notif
 from ..services import (task_adoption, task_bridge, task_config, task_perms, task_recurring,
@@ -253,7 +254,8 @@ def list_tasks(
     return cards
 
 
-def _aggregate(pts: list[Task], today, week_start, all_statuses, done_statuses: set[str]) -> dict:
+def _aggregate(pts: list[Task], today, week_start, all_statuses, done_statuses: set[str],
+               person_id: int | None = None) -> dict:
     """Roll a single person's tasks into the Monitor row's counts.
 
     Two things this gets right that it used to get wrong:
@@ -271,7 +273,7 @@ def _aggregate(pts: list[Task], today, week_start, all_statuses, done_statuses: 
     it shipped, which is what excluding archived rows outright would do.
     """
     counts = dict.fromkeys(all_statuses, 0)
-    overdue = completed_week = live = 0
+    overdue = completed_week = live = stepped = 0
     for t in pts:
         if t.status in done_statuses:
             done_on = getattr(t, "completed_at", None)
@@ -281,20 +283,45 @@ def _aggregate(pts: list[Task], today, week_start, all_statuses, done_statuses: 
             continue
         live += 1
         counts[t.status] = counts.get(t.status, 0) + 1
-        if t.status not in done_statuses and t.due_date and t.due_date < today:
-            overdue += 1
+        if t.status not in done_statuses:
+            # On their plate via the BREAKDOWN rather than as the card's lead. Surfaced because a
+            # row reading "12 open" where 9 are somebody else's cards is a different working life
+            # from 12 of your own, and until 2026-08-05 this rollup couldn't see those at all.
+            if person_id is not None and t.assigned_to_id != person_id:
+                stepped += 1
+            if t.due_date and t.due_date < today:
+                overdue += 1
     open_total = sum(n for st, n in counts.items() if st not in done_statuses)
     return {"counts": counts, "overdue": overdue, "open_total": open_total,
-            "completed_week": completed_week, "total": live}
+            "completed_week": completed_week, "total": live, "stepped": stepped}
 
 
 @router.get("/summary")
-def employee_summary(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def employee_summary(days: int = Query(30, ge=7, le=180,
+                                       description="Trailing window (days) for cycle time and the "
+                                                   "on-time rate. The column counts are always LIVE."),
+                     user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Per-employee task rollup for the Monitor view (managers only).
 
     Scope mirrors the board's `_can_view`: admins / super-admin / account managers see everyone;
     a team lead sees only their own team. Employees / interns get a 403 — monitoring is a
     management surface. Declared BEFORE `/{task_id}` so "summary" isn't parsed as a task id.
+
+    🔴 **Bucketed by `task_perms.assigned_user_ids`, not by `assigned_to_id` (2026-08-05).** This
+    rollup used to key on the card's lead alone, so anyone whose work arrives as phases/steps of
+    colleagues' cards — which is how delegation on this board actually looks — read as **idle** on
+    the Monitor, and any KPI layered on top inherited that. It is the same blind spot the Overview's
+    "my work" strip had; there is one definition of "assigned" now and both surfaces use it.
+
+    🔴 **Consequence: the rows do NOT sum to the number of tasks.** A card with a build phase on one
+    person and a QA step on another is on two plates and is counted on both — which is the truth
+    about shared work. `stepped` says how much of a row arrived that way, and the UI labels the
+    total accordingly. Do not "fix" this by attributing each card to one person: picking a winner
+    would re-hide exactly the work this change surfaced.
+
+    Everything beyond the counts is DERIVED (`services/task_analytics.py`) — no new columns. A task
+    on this board carries no size, so none of these is an effort measure and `load_band` is
+    explicitly relative to this cohort's own median. See that module's docstring before adding to it.
     """
     # A READ, so the read-only seat belongs here — monitoring is the entire point of that seat (D8).
     # `is_manager` alone would have excluded it, which is the shape of mistake §5.3 warns about:
@@ -311,18 +338,42 @@ def employee_summary(user: User = Depends(get_current_user), db: Session = Depen
     # Filed rows are fetched too: they are off people's plates but they are exactly what "Done · 7d"
     # is counting. `_aggregate` draws that line, not this query.
     tasks = db.execute(select(Task)).scalars().all()
-    by_assignee: dict[int, list[Task]] = {}
+    by_person: dict[int, list[Task]] = {}
     for t in tasks:
-        if t.assigned_to_id is not None:
-            by_assignee.setdefault(t.assigned_to_id, []).append(t)
+        # One parse of the breakdown per TASK (not per person per task) — that is what the set form
+        # of the rule exists for. A card lands in every plate it is actually on.
+        for uid in task_perms.assigned_user_ids(t):
+            by_person.setdefault(uid, []).append(t)
 
     today = today_ph()
     week_start = today - timedelta(days=7)
+    window_start = today - timedelta(days=days)
     all_statuses = task_config.statuses(db)
     done_statuses = {s for s in all_statuses if task_config.is_completed(db, s)}
-    rows = [{"user": user_public(p),
-             **_aggregate(by_assignee.get(p.id, []), today, week_start, all_statuses, done_statuses)}
-            for p in people]
+    leave = task_analytics.leave_context(db, [p.id for p in people], today)
+
+    rows = []
+    for p in people:
+        mine = by_person.get(p.id, [])
+        live_open = [t for t in mine
+                     if not getattr(t, "archived", False) and t.status not in done_statuses]
+        rows.append({
+            "user": user_public(p),
+            **_aggregate(mine, today, week_start, all_statuses, done_statuses, person_id=p.id),
+            **task_analytics.delivery(mine, window_start, done_statuses),
+            **task_analytics.aging(live_open, today),
+            **leave.get(p.id, {"on_leave_today": False, "leave_days_ahead": 0}),
+            # The threshold `stale_open` was counted with, so the UI can LABEL the column instead of
+            # hardcoding "14d" beside a number the server might later compute differently. Repeated
+            # per row rather than wrapped in an envelope: the list shape is what four test files and
+            # `renderMonitor` already consume, and a gratuitous reshape is how a stale
+            # cached script starts rendering "undefined" (AGENTS.md §5).
+            "stale_days": task_analytics.STALE_DAYS,
+        })
+    # Relative bands are computed across the rows the CALLER can see, so a team lead is compared
+    # against their own team rather than against the whole company — the cohort on screen is the
+    # cohort the comparison claims to be about.
+    task_analytics.apply_load_bands(rows)
     # Heaviest / most-behind first is what a manager wants to see.
     rows.sort(key=lambda r: (r["overdue"], r["open_total"]), reverse=True)
     return rows

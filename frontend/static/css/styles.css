@@ -586,7 +586,9 @@ textarea { resize: vertical; min-height: 78px; }
 .mon-tbl tbody tr:hover { background: var(--hover); }
 .mon-tbl tbody tr:last-child td { border-bottom: none; }
 .mon-tbl .who { display: flex; align-items: center; gap: 10px; }
-.mon-tbl .who .n { font-weight: 700; color: var(--ink); font-size: 13.5px; }
+/* Flex so the capacity pill ("On leave") sits inline with the name — capacity has to be read at the
+   same glance as the counts, or the counts get read wrong. */
+.mon-tbl .who .n { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; font-weight: 700; color: var(--ink); font-size: 13.5px; }
 .mon-tbl .who .r { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--green-d); }
 .mon-tbl td.num { font-weight: 800; color: var(--ink); font-size: 14px; }
 .mon-tbl td.num.bad { color: var(--danger); } .mon-tbl td.num.good { color: var(--green-d); }
@@ -596,6 +598,16 @@ textarea { resize: vertical; min-height: 78px; }
 .wl-bar .s-todo { background: var(--muted); } .wl-bar .s-prog { background: var(--info); }
 .wl-bar .s-rev { background: var(--warn); } .wl-bar .s-block { background: var(--danger); }
 .wl-bar .s-none { background: transparent; }
+/* Monitor's derived columns (WP: workload analytics). `.warn` is the middle rung between a plain
+   count and `.bad` — "sitting" work is a nudge, not a failure, and colouring it danger-red next to
+   real overdue would flatten the difference the two columns exist to draw. */
+.mon-tbl td.num.warn { color: var(--warn); }
+.mon-tbl .mon-sub { display: block; font-size: 10.5px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .3px; margin-top: 2px; }
+.mon-legend { margin: 12px 2px 0; font-size: 12px; line-height: 1.65; color: var(--sub); max-width: 78ch; }
+.mon-legend b { color: var(--ink); font-weight: 700; }
+/* The table gained four columns. `.monitor` is already `overflow-x: auto` above, so a floor here
+   makes it scroll INSIDE its own box rather than forcing the whole page sideways. */
+.monitor .mon-tbl { min-width: 860px; }
 .skeleton-row { color: var(--muted); padding: 28px 20px; text-align: center; }
 
 /* ---------- Task detail: two-level work breakdown ---------- */
