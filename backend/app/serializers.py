@@ -161,9 +161,15 @@ def maintask_list(t: Task, db: Session) -> list[dict]:
     } for m in mts]
 
 
-def task_card(t: Task, db: Session) -> dict:
-    """Compact shape for the Kanban board."""
+def task_card(t: Task, db: Session, viewer: User | None = None) -> dict:
+    """Compact shape for the Kanban board.
+
+    `viewer` adds the two viewer-relative fields below. They are **absent, never faked**, when no
+    viewer is named (people.py's profile card lists somebody else's work, where "mine" answers
+    nothing) — the same rule the Atrium bridge follows for fields the other side lacks.
+    """
     from .services import maintasks as MT
+    from .services import task_perms
 
     comment_count = len(t.comments)
     attach_count = sum(len(_loads(c.attachments_json, [])) for c in t.comments)
@@ -173,7 +179,18 @@ def task_card(t: Task, db: Session) -> dict:
     # Progress now spans the two-level breakdown (all sub-tasks of all main tasks); a legacy flat
     # checklist is migrated by normalize(), so the count stays correct for old tasks too.
     done, total = MT.sub_stats(MT.normalize(getattr(t, "maintasks_json", "[]"), t.checklist_json))
+    # 🔴 "Is this work on ME?" answered by the SERVER, from the one definition every permission in
+    # task_perms already uses (2026-08-05). The Overview's strip and the board's "My work" button both
+    # re-derived it as `assigned_to_id === me`, which is the narrower rule — so a card led by a
+    # colleague with a step named to you sat on your board while the strip said "nothing on you right
+    # now". `my_slots` is what lets a surface explain that: the card's lead is somebody else, and
+    # these many phases/steps of it are yours.
+    mine: dict = {}
+    if viewer is not None:
+        mine = {"mine": task_perms.is_assigned(viewer, t),
+                "my_slots": task_perms.my_slot_count(viewer, t)}
     return {
+        **mine,
         "id": t.id,
         "title": t.title,
         "status": t.status,

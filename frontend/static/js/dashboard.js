@@ -187,8 +187,16 @@ window.pageInit = async (S) => {
     const STAGE_CLS = { todo: "s-todo", in_progress: "s-prog", revision: "s-rev", blocked: "s-block", completed: "s-done" };
 
     // The list is already scoped by the server (task_perms.can_view), so "mine" is a filter on top
-    // of it, never a second source of truth. Atrium-owned cards have no assignee to be mine.
-    const mine = tasks.filter((t) => t.assigned_to_id === S.user.id && !t.archived);
+    // of it, never a second source of truth. Atrium-owned cards have no assignee to be mine, so they
+    // carry no `mine` flag and fall out here.
+    //
+    // 🔴 `t.mine` is the SERVER's answer (task_perms.is_assigned via task_card), not
+    // `assigned_to_id === S.user.id`. That test was this strip's bug, fixed 2026-08-05: naming
+    // somebody on a sub-task is delegation and puts the card on their board (AGENTS.md §5), so a card
+    // led by a colleague with a step owned by YOU is on your Task Board — while this strip counted it
+    // nowhere and said "0 open tasks · nothing on you right now" with the card one click away. Never
+    // re-derive "assigned" here: there is exactly one definition of it and it lives on the server.
+    const mine = tasks.filter((t) => t.mine && !t.archived);
     const open = mine.filter((t) => !t.completed_at);
     const overdue = open.filter((t) => t.due_date && t.due_date < PH_TODAY);
     // Waiting on ME: only a lead/manager sees these, and only for their own team — the same scope
@@ -250,8 +258,16 @@ window.pageInit = async (S) => {
     };
     // Two states that change what you should DO with the card, so they earn a pill; everything else
     // about a task belongs in the drawer, not in a five-row shortlist.
+    //
+    // The third pill is what keeps the widened "mine" honest. A card whose Assigned-to names a
+    // COLLEAGUE is here because you own part of its breakdown — say so, or the row reads as the strip
+    // listing somebody else's work (which is the bug directly above, wearing the opposite face).
+    const stepPill = (t) => (t.assigned_to_id !== S.user.id && t.my_slots
+      ? `<span class="pill blue" title="${t.assignee ? S.esc(t.assignee.name) + " leads this card" : "Nobody leads this card"}">${plural(t.my_slots, "step")} on you</span>`
+      : "");
     const flags = (t) => (t.on_hold ? '<span class="pill grey">Paused</span>' : "")
-      + (t.review_state === "pending" ? '<span class="pill amber">In review</span>' : "");
+      + (t.review_state === "pending" ? '<span class="pill amber">In review</span>' : "")
+      + stepPill(t);
 
     const row = (t) => `
       <a class="mw-row" href="/tasks?open=${t.id}">

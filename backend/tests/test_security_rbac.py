@@ -82,7 +82,7 @@ def test_inactive_user_cannot_authenticate(client, make_user, auth):
 #
 # This was a LIVE HOLE, not a design gap. `update_task`'s delegation guard covered `assigned_to_id`
 # and `assigned_team_id` only; `maintasks` went through its own branch with no assignee check. And
-# `task_perms._assigned` counts STEP owners for visibility — so an employee who could not reassign a
+# `task_perms.is_assigned` counts STEP owners for visibility — so an employee who could not reassign a
 # task could still put any card on any colleague's board by naming them on a sub-task. Fixed where
 # the field is written, and pinned here.
 

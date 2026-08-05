@@ -11,9 +11,9 @@ kiosk. Operating rules (CSP, cache bumping, `api()`-only fetches) live in
 |---|---|
 | `pages/*.html` | 19 shells (~0.7 kb each; JS renders everything): dashboard, attendance, approvals, gym, growth, reading, academy, philosophical, spiritual, people, leave, north-star, reports, settings, manage, payroll, login, kiosk, scanner. Routes registered in `backend/app/main.py:381` (`_PAGES`; `/login` is its own route) |
 | `static/js/app.js` | The shell every page loads: `NAV` array `:78` (roles/`min`/`hideRoles` gate visibility), `api()` (CSRF echo + FastAPI error flattening), `toast`, `skeleton`, `modal`, `esc`/`qs`/`qsa`, `ICON`, `avatar`, command palette (`initCommandPalette`), Coach FAB, `setTheme`/`engineUrl`/`themeEmbeds` (hands our light/dark to every embedded Mastery Engine) |
-| `static/js/taskboard.js` | Mountable Kanban (`TaskBoard.mount`). Optimistic DnD (native HTML5 — deliberate, see AGENTS.md §9), SSE reload, quick-add, Atrium-card editing, and the lifecycle controls: Park/Resume, Submit/Approve/Request changes, Past work |
+| `static/js/taskboard.js` | Mountable Kanban (`TaskBoard.mount`). Optimistic DnD (native HTML5 — deliberate, see AGENTS.md §9), SSE reload, quick-add, Atrium-card editing, and the lifecycle controls: Park/Resume, Submit/Approve/Request changes, Past work. **"My work" is a client-side toggle over the card's `mine` flag, NOT the `?assignee_id=` filter** — see the gotcha below |
 | `static/js/tasks.js` | **The Task Board page** (`/tasks`) — its own page again since 2026-08-03 (decision D7); a thin shell that mounts `taskboard.js` full-width. It was embedded in the dashboard from 2026-07-26 until then, so `/dashboard?open=<id>` forwards here forever (the notifications minted in that window are permanent rows) |
-| `static/js/dashboard.js` | **The Overview** (`/dashboard`, labelled "Overview" since 2026-08-03): greeting + the day strip (attendance/gym as two buttons), then `GrowthPanel`'s rings, the **"my work"** strip (`renderMyWork` — three `.mw-tile` doors into `/tasks` + the "Up next" shortlist, **soonest deadline first**, undated last; fails silently), `GrowthPanel`'s ledger, and — admins only, last — the org KPIs/chart/late list/handovers |
+| `static/js/dashboard.js` | **The Overview** (`/dashboard`, labelled "Overview" since 2026-08-03): greeting + the day strip (attendance/gym as two buttons), then `GrowthPanel`'s rings, the **"my work"** strip (`renderMyWork` — three `.mw-tile` doors into `/tasks` + the "Up next" shortlist, **soonest deadline first**, undated last; fails silently; "mine" = the card's `mine` flag, see the gotcha below), `GrowthPanel`'s ledger, and — admins only, last — the org KPIs/chart/late list/handovers |
 | `static/js/growth-page.js` | `/growth` = a manager's read-only view of ONE person (`?user=<id>`); without a `?user` it redirects to the Overview |
 | `static/js/attendance.js` · `approvals.js` | Time page · combined attendance+leave approvals inbox (team_lead+) |
 | `static/js/gym.js` | Calendar, no-lock day editor, saved routines (one-tap workout templates), history |
@@ -82,6 +82,22 @@ inside any comment that lives in a template literal**, never with a backtick.
 
 ## Gotchas / DO NOT TOUCH
 
+- 🔴 **"Is this work mine?" is `t.mine`, never `t.assigned_to_id === S.user.id`** (fixed
+  2026-08-05). Naming somebody on a phase/sub-task is delegation and puts the card on their board
+  (AGENTS.md §5) — the server's one definition is `task_perms.is_assigned`, published on every card
+  by `serializers.task_card` as **`mine`** (+ `my_slots`, how many breakdown slots you hold). Both
+  the Overview's strip and the board's "My work" button re-derived it as the narrower
+  `assigned_to_id` test, so a card **led by a colleague with a step named to you** sat on your Task
+  Board while the Overview said *"0 open tasks · nothing on you right now"* — the work was one click
+  away and the page told the delegate their plate was empty. Two surfaces, two definitions of one
+  rule. Don't add a third: filter on `mine`, and if a card's lead is somebody else say so (that is
+  the "N steps on you" pill). An Atrium-owned card has no `mine` (its owners are roster emails) and
+  correctly falls out of both.
+- **`?assignee_id=` is a FIELD filter and must stay one** — it matches `Task.assigned_to_id` only,
+  which is exactly what a manager asking "what is on Jerome?" needs. "My work" is a separate
+  client-side flag (`mineOnly`, tested in `matches`) precisely so widening one never widens the
+  other. It is a **toggle**, and `applyView` reflects it with `.on` on `#f-mine`: a board showing a
+  subset while every control reads "no filter" is indistinguishable from a bug.
 - **`sw.js` must not intercept navigations** — the `/kiosk` exception (`sw.js:46-53`) is the ONLY
   one allowed (offline kiosk boot). Caching other navigations resurrects the 2 s stale-login flash.
 - **No inline `<script>`** — CSP `script-src 'self'`; `who-we-are.js` exists precisely because an

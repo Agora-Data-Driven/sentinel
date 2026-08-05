@@ -152,6 +152,13 @@ window.TaskBoard = {
   let filters = { client_id: "", team_id: "", priority: "", assignee_id: "" };
   let search = "";
   let overdueOnly = false;          // M9 — "what is late?" (see matches)
+  // 🔴 "My work" is NOT the assignee filter (fixed 2026-08-05). `?assignee_id=` is a field filter —
+  // it matches `Task.assigned_to_id` and nothing else, which is exactly what a manager asking "what
+  // is on Jerome?" wants. But "assigned to me" also means owning a phase/step of somebody else's
+  // card (task_perms.is_assigned), so pointing this button at that filter hid the delegated work it
+  // exists to surface. It is a client-side flag over the server's own `mine` now, so the button and
+  // the Overview's strip can never disagree about the count.
+  let mineOnly = false;
   let selection = new Set();        // M7 — ids ticked for a bulk action
   let allTasks = [];          // last fetch, unfiltered by the text search
   // View: "board" (status Kanban) | "employee" (swimlanes per person) | "monitor" (manager rollup).
@@ -212,13 +219,14 @@ window.TaskBoard = {
   const writeViews = (v) => {
     try { localStorage.setItem(VIEWS_KEY, JSON.stringify(v)); } catch (e) { /* private mode */ }
   };
-  const currentView = () => ({ filters: { ...filters }, search, overdueOnly, mode });
+  const currentView = () => ({ filters: { ...filters }, search, overdueOnly, mineOnly, mode });
 
   function applyView(v) {
     if (!v) return;
     filters = { client_id: "", team_id: "", priority: "", assignee_id: "", ...(v.filters || {}) };
     search = v.search || "";
     overdueOnly = !!v.overdueOnly;
+    mineOnly = !!v.mineOnly;
     if (v.mode && (v.mode !== "monitor" || canMonitor)) mode = v.mode;
     // Push the restored state back into the controls, or the board would filter by values the
     // filter bar is not showing — which reads as a bug, not a view.
@@ -228,6 +236,7 @@ window.TaskBoard = {
     if (S.qs("#f-assignee")) S.qs("#f-assignee").value = filters.assignee_id;
     S.qs("#f-search").value = search;
     S.qs("#f-overdue").checked = overdueOnly;
+    S.qs("#f-mine").classList.toggle("on", mineOnly);
     load();
   }
 
@@ -246,9 +255,10 @@ window.TaskBoard = {
   S.qs("#f-overdue").onchange = (e) => { overdueOnly = e.target.checked; render(); };
 
   // "My work" is the default M8 asks for, built in rather than saved: it is the same answer for
-  // everyone and should not need setting up once per person.
-  S.qs("#f-mine").onclick = () => applyView({
-    filters: { assignee_id: String(S.user.id) }, search: "", overdueOnly: false, mode: "board",
+  // everyone and should not need setting up once per person. A TOGGLE, because the one thing you do
+  // after narrowing the board to your own work is widen it back, and there was no way to.
+  S.qs("#f-mine").onclick = () => applyView(mineOnly ? { mode } : {
+    filters: {}, search: "", overdueOnly: false, mineOnly: true, mode: "board",
   });
 
   const viewSel = S.qs("#f-view");
@@ -487,6 +497,10 @@ window.TaskBoard = {
 
   // The text search is applied client-side so typing never re-hits the server.
   function matches(t) {
+    // "My work" — the server's `mine` (task_perms.is_assigned: the card's lead OR any phase/step of
+    // its breakdown), never `t.assigned_to_id === S.user.id`. An Atrium-owned card carries no flag
+    // and correctly drops out: its owners are roster emails, not Sentinel users.
+    if (mineOnly && !t.mine) return false;
     // OVERDUE (M9, WP 5.4). The board only ever TINTED the due chip; there was no way to ask
     // "what is late?" — the one question a morning triage starts with. Client-side because the
     // cards are already here, and compared against PH_TODAY so it agrees with the server's

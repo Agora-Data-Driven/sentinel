@@ -208,7 +208,9 @@ def list_tasks(
     if priority:
         q = q.where(Task.priority == priority)
     tasks = [t for t in db.execute(q).scalars().all() if task_perms.can_view(user, t)]
-    cards = [task_card(t, db) for t in tasks]
+    # `viewer=user` is what puts `mine`/`my_slots` on each card — the server's own "assigned" rule
+    # (task_perms.is_assigned, which is also what filtered this list), so no surface has to guess it.
+    cards = [task_card(t, db, viewer=user) for t in tasks]
     # ATRIUM BRIDGE: Atrium owns the client-facing tasks (one workspace JSON per client), so a card
     # typed into a client's Atrium board must appear here too -- this board is the team's
     # cross-client window onto the same work, not a second system. Best-effort: if the bridge is
@@ -934,7 +936,7 @@ def update_task(task_id: str, payload: TaskUpdateIn, user: User = Depends(get_cu
     # 🔴 STEP-LEVEL ASSIGNMENT IS DELEGATION TOO (§2.4e). Until 2026-08-03 the two guards above
     # covered `assigned_to_id`/`assigned_team_id` only, while `maintasks` went through its own branch
     # below with NO assignee check — so an employee who cannot reassign a task could still put any
-    # card on any colleague's board by naming them on a sub-task, because `task_perms._assigned`
+    # card on any colleague's board by naming them on a sub-task, because `task_perms.is_assigned`
     # counts step owners for visibility. Gated where the field is WRITTEN, not in the UI.
     #
     # Renaming a step, adding one, deleting one all stay open to anyone who can edit — only a change
