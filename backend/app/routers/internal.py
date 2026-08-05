@@ -23,6 +23,7 @@ from ..config import settings
 from ..constants import NOTIF_TASK_ASSIGNED
 from ..database import get_db
 from ..models import Client, Task, TaskComment, TaskRequest, User
+from ..services import board_mirror
 from ..services import development as dev_svc
 from ..services import mentor_search as mentor_svc
 from ..services import notifications as notif
@@ -264,6 +265,29 @@ def internal_task_feedback(
                               link=f"/tasks?open={task.id}", team_id=task.assigned_team_id)
     return {"ok": True, "duplicate": False, "comment_id": comment.id,
             "open_changes": task.client_changes_open or 0}
+
+
+@router.get("/board")
+def internal_board(
+    x_academy_ts: str | None = Header(default=None),
+    x_academy_sig: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    """This board's LIVE tasks in Atrium's task-dict shape — for Atrium's operator console.
+
+    🔴 STAFF-ONLY, and the caller is what makes that true. There is no user session here, so this
+    endpoint cannot check a role: it trusts the HMAC, and the one caller is Atrium's
+    `/admin/atrium` console, which is itself behind `is_superadmin()`. Anything mounted on this
+    payload therefore has to be safe for the delivery team and NOT for a client — which is exactly
+    who reads that console. The CLIENT-facing path is the other direction entirely
+    (`services/task_bridge.py`, six fields, pushed by us), and the two must never be merged.
+
+    Why Atrium needs it: its console used to assemble the board from each client's workspace JSON,
+    i.e. from the client-safe projections, so it could only show work somebody had already shared
+    with a client. See `services/board_mirror.py` for the whole argument and the field mapping.
+    """
+    _verify(x_academy_ts, x_academy_sig, "board")
+    return {"ok": True, "tasks": board_mirror.board(db)}
 
 
 @router.get("/holistic-profile")

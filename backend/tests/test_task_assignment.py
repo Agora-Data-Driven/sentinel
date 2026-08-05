@@ -129,11 +129,27 @@ def test_an_employee_may_route_work_to_another_team(client, auth, db, dev, acq_m
 
 
 def test_an_employee_still_cannot_name_a_person(client, auth, db, dev, acq_member, make_user):
+    """🔴 A 403, not a silent correction (2026-08-05). This used to drop `assigned_to_id` and answer
+    200, so the form let them pick a colleague, said "created", and quietly put the card on their own
+    board instead — the same shape of lie as the old Send to Atrium. The picker is gated in the UI
+    now, so reaching this means the caller really did try."""
     victim = make_user(C.ROLE_EMPLOYEE, team_id=dev.id)
     auth(acq_member)
     r = client.post("/api/tasks", json={"title": "Do this for me", "assigned_team_id": dev.id,
                                         "assigned_to_id": victim.id})
-    assert r.json()["assigned_to_id"] is None      # the picker is ignored for this role
+    assert r.status_code == 403
+    assert "somebody else" in r.json()["detail"]
+    assert db.query(Task).filter(Task.title == "Do this for me").count() == 0   # nothing was filed
+
+
+def test_an_employee_may_still_name_THEMSELVES(client, auth, dev, acq_member):
+    """Naming yourself is not delegation. Filing work into a department that you intend to do
+    yourself is a real thing, and dropping that to None would be the silent correction again."""
+    auth(acq_member)
+    r = client.post("/api/tasks", json={"title": "I'll take this one", "assigned_team_id": dev.id,
+                                        "assigned_to_id": acq_member.id})
+    assert r.status_code == 200
+    assert r.json()["assigned_to_id"] == acq_member.id
 
 
 def test_an_employees_own_quick_task_still_self_assigns(client, auth, acq_member):
@@ -141,6 +157,40 @@ def test_an_employees_own_quick_task_still_self_assigns(client, auth, acq_member
     auth(acq_member)
     r = client.post("/api/tasks", json={"title": "My own note to self"})
     assert r.json()["assigned_to_id"] == acq_member.id
+
+
+# --- 4.2g bis / 2026-08-05: a team lead staffs THEIR OWN department's work ------------------------
+#
+# 🔴 Create was strictly more permissive than edit. `task_perms.can_reassign` lets a lead name
+# somebody only while the card is routed to their own team (`_leads_team`) — but `create_task` tested
+# the ROLE alone, so the same lead could file a card for another department with a name already on
+# it. Same rule, both doors.
+
+def test_a_lead_may_name_someone_on_their_own_departments_card(client, auth, acq, acq_lead, acq_member):
+    auth(acq_lead)
+    r = client.post("/api/tasks", json={"title": "Campaign build", "assigned_team_id": acq.id,
+                                        "assigned_to_id": acq_member.id})
+    assert r.status_code == 200
+    assert r.json()["assigned_to_id"] == acq_member.id
+
+
+def test_a_lead_cannot_name_someone_in_another_department(client, auth, db, dev, acq_lead, make_user):
+    victim = make_user(C.ROLE_EMPLOYEE, team_id=dev.id)
+    auth(acq_lead)
+    r = client.post("/api/tasks", json={"title": "Fix the site", "assigned_team_id": dev.id,
+                                        "assigned_to_id": victim.id})
+    assert r.status_code == 403
+
+
+def test_a_lead_filing_for_another_department_keeps_their_priority(client, auth, dev, acq_lead):
+    """Priority is NOT delegation, so it must not be collateral damage of the rule above — tying it to
+    the same team test would silently downgrade those cards to Medium."""
+    auth(acq_lead)
+    r = client.post("/api/tasks", json={"title": "Urgent site fix", "assigned_team_id": dev.id,
+                                        "priority": C.PRIORITY_URGENT})
+    assert r.status_code == 200
+    assert r.json()["priority"] == C.PRIORITY_URGENT
+    assert r.json()["assigned_to_id"] is None      # routed to Development's queue, owned by nobody
 
 
 def test_filed_by_me_shows_where_the_work_went(client, auth, db, dev, acq_member, make_user):

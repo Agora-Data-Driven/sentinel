@@ -169,11 +169,15 @@ def test_add_custom_priority_then_use_it(client, make_user, auth):
 
 # --- Permission model refinements ----------------------------------------
 def test_employee_create_cannot_assign_to_someone_else(client, db, make_user, auth):
+    """🔴 REFUSED, not "forced back to self" (2026-08-05). Quietly moving the card to the caller was
+    the same silent correction the form has now stopped inviting — see the sibling case in
+    tests/test_task_assignment.py. With no team named, their own quick-add still self-assigns."""
     me = make_user(C.ROLE_EMPLOYEE)
     other = make_user(C.ROLE_EMPLOYEE)
     auth(me)
-    task = client.post("/api/tasks", json={"title": "mine", "assigned_to_id": other.id}).json()
-    assert task["assigned_to_id"] == me.id  # forced back to self
+    assert client.post("/api/tasks",
+                       json={"title": "mine", "assigned_to_id": other.id}).status_code == 403
+    assert client.post("/api/tasks", json={"title": "mine"}).json()["assigned_to_id"] == me.id
 
 
 def test_employee_cannot_reassign_via_patch(client, db, make_user, auth):

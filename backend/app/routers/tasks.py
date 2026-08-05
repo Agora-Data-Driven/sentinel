@@ -774,7 +774,14 @@ def create_task(payload: TaskCreateIn, user: User = Depends(get_current_user), d
     if payload.status not in task_config.statuses(db):
         raise HTTPException(status_code=400, detail="Invalid status")
     is_am = user.role == "account_manager"
-    may_delegate = user.role in task_perms.FULL or user.role == ROLE_TEAM_LEAD
+    # 🔴 A TEAM LEAD MAY ONLY STAFF THEIR OWN DEPARTMENT'S WORK (2026-08-05). This was
+    # `role == ROLE_TEAM_LEAD` with no team test, so create was strictly more permissive than edit:
+    # `task_perms.can_reassign` lets a lead name somebody only while the card is routed to their own
+    # team (`_leads_team`), yet the same lead could CREATE a card for another department with a name
+    # already on it. Same rule, both doors: the card has to belong to their department.
+    may_delegate = user.role in task_perms.FULL or (
+        user.role == ROLE_TEAM_LEAD and payload.assigned_team_id is not None
+        and payload.assigned_team_id == user.team_id)
     # 🔴 A non-delegating role may route to a TEAM, never to a person (decision D10).
     #
     # Naming a colleague is delegation and stays a lead/manager act. But filing into a DEPARTMENT's
@@ -784,13 +791,30 @@ def create_task(payload: TaskCreateIn, user: User = Depends(get_current_user), d
     # them (§2.4d).
     #
     # So: a team named → routed and UNASSIGNED (the team's queue, visible via
-    # task_perms._team_queue). No team → self-assigned, exactly as before. Either way the person
-    # picker is ignored for these roles, so they can never put work on a named colleague.
+    # task_perms._team_queue). No team → self-assigned, exactly as before.
+    #
+    # 🔴 NAMING SOMEBODY YOU MAY NOT DELEGATE TO IS NOW A 403, not a silent correction (2026-08-05).
+    # This used to drop `assigned_to_id` on the floor and answer 200, so the form let an employee pick
+    # a colleague, said "created", and put the card on their own board instead — the same class of
+    # quiet lie as the old Send to Atrium. The UI no longer offers the picker to these roles
+    # (taskboard.js gates it exactly like Priority), so reaching this line means the caller really did
+    # try. Naming YOURSELF is not delegation and goes through untouched, even alongside a department:
+    # filing work into a queue that you intend to do yourself is a real thing.
     assigned_to_id = payload.assigned_to_id
     if not may_delegate:
-        assigned_to_id = None if payload.assigned_team_id else user.id
+        if assigned_to_id is not None and assigned_to_id != user.id:
+            raise HTTPException(
+                status_code=403,
+                detail="Only a team lead or manager can assign a task to somebody else. "
+                       "Pick a department instead — its leads will triage it.")
+        if assigned_to_id is None:
+            assigned_to_id = None if payload.assigned_team_id else user.id
     # Priority is honored from a manager (AM/admin/super) or a team lead; others default to Medium.
-    priority = payload.priority if may_delegate and payload.priority in task_config.priorities(db) else "Medium"
+    # 🔴 Deliberately NOT `may_delegate`: priority is not delegation, and a lead filing work for
+    # another department may still say how urgent it is. Tying it to the team test above would have
+    # silently downgraded those cards to Medium.
+    may_prioritize = user.role in task_perms.FULL or user.role == ROLE_TEAM_LEAD
+    priority = payload.priority if may_prioritize and payload.priority in task_config.priorities(db) else "Medium"
     # Service template: seed the two-level breakdown (+ content type) from the picked recipe unless
     # the caller supplied their own. A seed, not a lock — the breakdown is editable afterwards.
     tpl = task_templates.get(db, payload.service_key) if payload.service_key else None
@@ -800,7 +824,7 @@ def create_task(payload: TaskCreateIn, user: User = Depends(get_current_user), d
     content_type = payload.content_type or (tpl.content_type if tpl else None)
     # Template defaults fill fields the caller left blank (a seed, not a lock). Priority follows the
     # same role gate as a manually chosen one; labels/description only apply when none were supplied.
-    if tpl and may_delegate and priority == "Medium" and tpl.default_priority in task_config.priorities(db):
+    if tpl and may_prioritize and priority == "Medium" and tpl.default_priority in task_config.priorities(db):
         priority = tpl.default_priority
     # 🔴 The label is DERIVED from the department, never supplied (decision D14). Anything the
     # caller sent in `payload.labels` — and the template's `default_labels_json` — is ignored:
@@ -913,17 +937,37 @@ def update_task(task_id: str, payload: TaskUpdateIn, user: User = Depends(get_cu
     # card on any colleague's board by naming them on a sub-task, because `task_perms._assigned`
     # counts step owners for visibility. Gated where the field is WRITTEN, not in the UI.
     #
-    # Ticking a step, renaming it, adding or deleting one all stay open to anyone who can edit — only
-    # a change to WHO OWNS a phase or step is delegation. A change that involves nobody but the actor
-    # (picking up an unowned step, dropping their own) is self-assignment, which every role may do.
-    if "maintasks" in data and not task_perms.can_reassign(user, task):
-        before = maintasks_svc.owner_ids(
+    # Renaming a step, adding one, deleting one all stay open to anyone who can edit — only a change
+    # to WHO OWNS a phase or step is delegation. A change that involves nobody but the actor (picking
+    # up an unowned step, dropping their own) is self-assignment, which every role may do.
+    # (TICKING used to be on that open list too; since 2026-08-05 it is scoped separately below.)
+    #
+    # 🔴 SLOT BY SLOT, NOT AS A SET (2026-08-05). This compared `{owner ids} before` with
+    # `{owner ids} after`, which passed every edit that left the set intact: an employee could move a
+    # colleague's ownership from one step to another, pile them onto five more steps, or swap two
+    # colleagues' steps — all 200, all of it delegation. The six tests that pinned the original fix
+    # each ADD or REMOVE a person, so none of them could see it.
+    if "maintasks" in data:
+        before = maintasks_svc.slots(
             maintasks_svc.normalize(task.maintasks_json, task.checklist_json))
-        after = maintasks_svc.owner_ids(maintasks_svc.normalize(data["maintasks"] or []))
-        if (before ^ after) - {user.id}:
+        after = maintasks_svc.slots(maintasks_svc.normalize(data["maintasks"] or []))
+        if not task_perms.can_reassign(user, task) and \
+                maintasks_svc.foreign_owner_changes(before, after, user.id):
             raise HTTPException(
                 status_code=403,
                 detail="Only a team lead or manager can assign a step to someone else.")
+        # TICKING SOMEBODY ELSE'S STEP is its own decision (2026-08-05) — see
+        # `task_perms.can_tick_step`. Everything else about a step (its text, whether it exists at
+        # all) stays open to whoever can edit the card; only the claim "this is done" is scoped,
+        # because a card with several owners handed that claim to all of them.
+        for change in maintasks_svc.tick_changes(before, after):
+            if task_perms.can_tick_step(user, task, change["owner"]):
+                continue
+            owner = db.get(User, change["owner"])
+            who = (owner.name if owner else None) or "its owner"
+            raise HTTPException(
+                status_code=403,
+                detail=f"“{change['text']}” is {who}'s step — only they or a lead can tick it.")
 
     prev_assignee = task.assigned_to_id
     prev_team = task.assigned_team_id
@@ -1160,7 +1204,16 @@ def bulk_update(payload: TaskBulkIn, user: User = Depends(get_current_user), db:
                 updated.append(tid)
         else:
             # Assigning to anyone but yourself is delegation — the same rule single-task edits use.
-            if not task_perms.can_reassign(user, task) and value != user.id:
+            #
+            # 🔴 "…but yourself" is not the whole test (fixed 2026-08-05). The condition was
+            # `value != user.id`, so an employee could TAKE a card a colleague already owned onto
+            # their own board: picking work up out of a queue and lifting it off the person doing it
+            # are not the same act, and only the first one is self-assignment. Claiming is allowed
+            # only while the card is UNOWNED — which is exactly the state `_team_queue` makes visible
+            # to them. (The bulk bar only offers this control to team_lead+, so this was reachable via
+            # the API rather than the UI. The guard belongs here either way.)
+            may_claim = value == user.id and task.assigned_to_id is None
+            if not task_perms.can_reassign(user, task) and not may_claim:
                 skip(tid, "Only a team lead or manager can assign someone else")
             elif task.assigned_to_id == value:
                 skip(tid, "Already there")

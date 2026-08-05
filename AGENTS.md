@@ -42,6 +42,20 @@ Atrium's team surfaces.
 > change to a client-visible field re-projects. Until this date it set `atrium_visible = True` and
 > **created nothing** — see §5 and [docs/TASKBOARD_REBUILD.md](docs/TASKBOARD_REBUILD.md).
 
+> 🔴 **TWO payloads cross to Atrium, and they are opposites. Never merge them (2026-08-05).**
+>
+> | | Who reads it | What crosses | Built by |
+> |---|---|---|---|
+> | **Client projection** | a CLIENT, in their own workspace tab | six fields (`task_bridge.SAFE`) | `services/task_bridge.py` — we PUSH |
+> | **Staff mirror** | a SUPER-ADMIN, in Atrium's operator console | everything: assignee, priority, service charge, internal notes, hold reason | `services/board_mirror.py` — Atrium PULLS `GET /api/internal/board` |
+>
+> The mirror exists because Atrium's `/admin/atrium` Task Board used to be assembled from each
+> client's workspace JSON — i.e. from the projections — so it could only show work somebody had
+> already **shared with a client**. Every unpublished row was structurally invisible on a board
+> whose subtitle claims "every client deliverable across every workspace", and the two systems
+> disagreed about how much work the agency had. If a change ever makes these two payloads look
+> alike, **the client one is the one that is wrong.** Pinned by `tests/test_board_mirror.py`.
+
 ---
 
 ## 1. Run it / deploy it
@@ -132,7 +146,7 @@ deploy/            deploy.ps1, seed-job.ps1, DEPLOY.md
 | `meta.py` | Enums/constants for the frontend |
 | `cron.py` | Scheduled job endpoints |
 | `stream.py` | SSE push to the browser |
-| `internal.py` | **HMAC-signed** service-to-service (Mastery Engine ↔ Sentinel). Purposes: `user-lookup`, `academy-people`, `holistic-profile`, `growth-detail`, `mentor-search` |
+| `internal.py` | **HMAC-signed** service-to-service (Mastery Engine ↔ Sentinel, Atrium → Sentinel). Purposes: `user-lookup`, `academy-people`, `holistic-profile`, `growth-detail`, `mentor-search`, `task-request`, `task-feedback`, **`board`** |
 
 Adding a router? Register it in the tuple at [main.py:322](backend/app/main.py#L322).
 
@@ -337,16 +351,51 @@ covered `assigned_to_id` / `assigned_team_id` only, and `maintasks` went through
 no assignee check at all — so **an employee who could not reassign a task could still drop any card
 onto any colleague's board by naming them on a sub-task** (docs/TASKBOARD_REBUILD.md §2.4e).
 
-Closed where the field is WRITTEN, not in the UI: `update_task` diffs the breakdown's owner set
-(`maintasks.owner_ids`) and refuses when the change involves anyone but the actor, unless
-`can_reassign`. What stays open on purpose:
+Closed where the field is WRITTEN, not in the UI: `update_task` diffs the breakdown's owners and
+refuses when the change involves anyone but the actor, unless `can_reassign`. What stays open on
+purpose:
 
-- ticking, renaming, adding and deleting steps — that is editing the work, not handing it out;
+- renaming, adding and deleting steps — that is editing the work, not handing it out;
 - **self-assignment** — picking up an unowned step or dropping your own. Every role may do that, or
   the board stops working for the people using it.
 
-Pinned by six cases in `tests/test_security_rbac.py`. If you add another way to write the breakdown,
-it needs the same diff — the guard is on the field, and a second writer would walk straight past it.
+If you add another way to write the breakdown, it needs the same diff — the guard is on the field,
+and a second writer would walk straight past it.
+
+🔴 **The diff is per SLOT, and comparing owner SETS was the same hole a second time (2026-08-05).**
+It compared `{owner ids} before` with `{owner ids} after`, so every edit that left the *set* intact
+answered 200. An employee could therefore still rearrange a colleague's work: **move their step to a
+different one, pile them onto five more, or swap two colleagues over.** Each of the six original
+tests adds or removes a person, which is exactly why none of them saw it. `maintasks.slots` keys
+every phase and step, `foreign_owner_changes` compares them slot by slot, and duplicate ids get
+distinct slots (`_slot_key`) so a resent step cannot hide a handover. Removing a slot counts as an
+ownership change, which is what keeps "delete the step somebody else owns" refused.
+
+🔴 **Ticking a step is scoped too, and it is NOT `can_edit` (2026-08-05, `task_perms.can_tick_step`).**
+"Done" is a claim about work another person performed, and it is what the progress bar and the D5
+review gate read — yet any of a card's several owners could close each other's steps. Now: the
+step's owner, the card's `assigned_to_id`, or `can_reassign`; an **unowned** step stays open to
+anyone who can edit (that is how a team queue is worked through), and an Atrium card keeps the old
+open behaviour because its owners are roster emails, not Sentinel users. The refusal names the owner.
+
+Three more asymmetries closed the same day — all of them "the server was right, the UI lied":
+
+| Was | Now |
+|---|---|
+| `create_task` let a team lead name anyone **company-wide**, while `can_reassign` scopes them to their own team on edit | `may_delegate` requires `payload.assigned_team_id == user.team_id` for a lead. **Priority deliberately keeps the old role-only rule** (`may_prioritize`) — it is not delegation, and tying it to the team test would silently downgrade a lead's cross-department card to Medium |
+| Naming somebody you may not delegate to was **silently dropped** and answered 200 | **403** with the reason. Naming *yourself* still passes, even alongside a department |
+| Bulk allowed any `value == user.id`, so an employee could **take** a card a colleague owned | `may_claim` also requires `assigned_to_id is None` — claiming from a queue, never lifting work off a person |
+
+`frontend/static/js/taskboard.js` mirrors all of it (the `Lead (main)` picker was the only field in
+that form with no gate; step pickers list only the actor for a non-delegator; a step you may not tick
+renders `disabled` with the owner's name). **The mirror is courtesy — every one of these is enforced
+in `routers/tasks.py`.** Pinned by ~20 cases in `tests/test_security_rbac.py`,
+`tests/test_task_assignment.py`, `tests/test_task_bulk.py`.
+
+Still open, deliberately not changed here: **bulk's assignee branch tests no `can_view`**, so an
+employee can claim an unowned card they cannot see by id (the status branch does test it, via
+`can_move`). Narrow it only together with `test_assigning_someone_else_still_needs_delegation_rights`,
+which pins today's shape.
 
 ### 🔴 An employee's board = their own work **plus their team's unowned queue**
 
@@ -837,6 +886,19 @@ nothing like a race: you get `sqlite3.OperationalError: no such table: shift_tem
 ERRORs, and a scatter of 500s in unrelated files — i.e. it reads as "my change broke everything".
 If you see that, check for another run (including a backgrounded one) before debugging your diff.
 The same applies to a CI runner executing two jobs on one machine.
+
+🟡 **A SECOND cause wears the same mask: something on the machine sweeping `%TEMP%`** (seen
+2026-08-05 — `Get-Process python` empty, no second run, and the tables still vanished *between two
+statements of one test*, mid-`_seed_config`). Same symptoms, plus `table X already exists` straight
+after a `drop_all`, and it moves around between runs. The tell is that a file you never touched
+(e.g. `tests/test_gym_routines.py`) fails the same way — **run one of those before you believe your
+diff broke anything.** Fix: relocate the DB by pointing the temp dir somewhere stable for the run,
+which `conftest`'s `tempfile.gettempdir()` obeys:
+
+```powershell
+$env:TMP = "C:\some\stable\dir"; $env:TEMP = $env:TMP
+..\..\.venv\Scripts\python.exe -m pytest      # 548 passed, 2026-08-05
+```
 
 **If you touch auth, RBAC, or headers, run the suite before deploying.** Those tests exist
 because those areas broke in production before.
