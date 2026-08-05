@@ -15,7 +15,8 @@ The rules (higher roles inherit lower ones):
     | bridge/Atrium | no              | no               | AM              | admin/super       |
     | see Atrium    | no              | yes              | yes             | yes               |
 
-"assigned" = task.assigned_to_id == user.id, or assigned to one of the task's sub-tasks. For an
+"assigned" = task.assigned_to_id == user.id, or assigned to one of the task's sub-tasks
+(`is_assigned` — public, because "what is on me" is asked by more than this module). For an
 employee/intern that is the rule for OWNED work: someone else's card is not on their board, nor is
 one they created themselves (2026-07-30; before that the automatic creator tag also granted sight,
 which meant a card an intern raised and a manager then delegated stayed on the intern's board).
@@ -70,7 +71,21 @@ def _leads_team(user: User, task: Task) -> bool:
     return user.role == ROLE_TEAM_LEAD and task.assigned_team_id is not None and task.assigned_team_id == user.team_id
 
 
-def _assigned(user: User, task: Task) -> bool:
+def is_assigned(user: User, task: Task) -> bool:
+    """🔴 The ONE definition of "this work is on me" — the card's lead **or** any slot of its
+    breakdown.
+
+    Public since 2026-08-05, because it was being re-derived. Every SURFACE that answers "what is on
+    me" has to ask this exact question, and the Overview's "my work" strip asked a narrower one
+    (`assigned_to_id === me`, in JS). So a card led by a colleague with a step named to YOU was on
+    your Task Board — `can_view` calls this — and simultaneously absent from the strip that claims to
+    count your open work: "0 open tasks · nothing on you right now", with the card one click away.
+    Naming somebody on a sub-task IS delegation (§5, `maintasks.slots`); a surface that doesn't count
+    it tells the delegate their plate is empty.
+
+    So: no second copy of this rule, in any language. `serializers.task_card` publishes the answer as
+    `mine` and the frontend filters on that.
+    """
     if task.assigned_to_id == user.id:
         return True
     # A user assigned to any sub-task of the breakdown can also see/act on the task.
@@ -78,6 +93,21 @@ def _assigned(user: User, task: Task) -> bool:
         if m.get("assignee_id") == user.id or any(s.get("assignee_id") == user.id for s in m.get("subs", [])):
             return True
     return False
+
+
+def my_slot_count(user: User, task: Task) -> int:
+    """How many phases/steps of the breakdown name `user` — 0 when only `assigned_to_id` does.
+
+    Exists so a surface can SAY WHY a card led by somebody else is on your list. Without it, "my
+    work" silently lists a card whose Assigned-to reads another name, which looks like the bug this
+    replaced rather than the fix for it.
+    """
+    n = 0
+    for m in MT.normalize(getattr(task, "maintasks_json", "[]"), task.checklist_json):
+        if m.get("assignee_id") == user.id:
+            n += 1
+        n += sum(1 for s in m.get("subs", []) if s.get("assignee_id") == user.id)
+    return n
 
 
 def _created(user: User, task: Task) -> bool:
@@ -131,12 +161,12 @@ def can_view(user: User, task: Task) -> bool:
     if user.role in VIEW_ALL_ROLES:
         return True
     if user.role == ROLE_TEAM_LEAD:
-        return (_leads_team(user, task) or _assigned(user, task) or _created(user, task)
+        return (_leads_team(user, task) or is_assigned(user, task) or _created(user, task)
                 or _unowned_client_work(task))
     # Employee / intern: what is handed to them, plus their team's untriaged queue. Their board still
     # answers "what am I working on" -- it just no longer pretends work routed to their team doesn't
     # exist until somebody names them on it.
-    return _assigned(user, task) or _team_queue(user, task)
+    return is_assigned(user, task) or _team_queue(user, task)
 
 
 def can_edit(user: User, task: Task) -> bool:

@@ -100,7 +100,7 @@ def slots(maintasks: list[dict]) -> dict[str, dict]:
     """Every phase and step as an addressable SLOT: `{key: {"kind","owner","done","text"}}`.
 
     🔴 This is a SECURITY input, not a convenience. Naming somebody on a step puts the card on their
-    board — `task_perms._assigned` counts step owners for visibility — so writing this field IS
+    board — `task_perms.is_assigned` counts step owners for visibility — so writing this field IS
     delegation, and `update_task` has to hold it to the same `can_reassign` rule as
     `assigned_to_id`. Before 2026-08-03 it did not: `maintasks` went through its own branch with no
     assignee check at all, so an employee who could not reassign a task could still drop any card

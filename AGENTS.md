@@ -397,6 +397,38 @@ employee can claim an unowned card they cannot see by id (the status branch does
 `can_move`). Narrow it only together with `test_assigning_someone_else_still_needs_delegation_rights`,
 which pins today's shape.
 
+### 🔴 "Is this work on me?" has ONE definition — `task_perms.is_assigned`, shipped as `mine`
+
+Added 2026-08-05, as the other half of the section above. If naming somebody on a sub-task puts the
+card on their board, then **every surface that answers "what is on me" has to count step owners** —
+and one didn't. The Overview's "my work" strip filtered in JS on `assigned_to_id === S.user.id`, the
+narrower rule. So a card **led by a colleague with a step named to you** was on your Task Board
+(`can_view` → `is_assigned`), openable, editable, tickable… and the Overview said **"0 open tasks ·
+nothing on you right now"**. The page told a delegate their plate was empty with the work one click
+away. The board's own "My work" button had the same hole, because it just set `?assignee_id=<me>`.
+
+The fix is that there is no second copy of the rule, in any language:
+
+| | |
+|---|---|
+| the definition | `task_perms.is_assigned(user, task)` — the card's lead **or** any phase/step of its breakdown. Public for this reason; it is what `can_view` already asked |
+| how a surface gets it | `serializers.task_card(t, db, viewer=user)` → **`mine`** (bool) + **`my_slots`** (how many breakdown slots that viewer holds) |
+| who passes a viewer | `list_tasks`. `people.py`'s profile card does not — it lists somebody *else's* work, so the two fields are **absent, never a hardcoded `false`** |
+
+Three rules if you touch this:
+
+- **`?assignee_id=` stays a FIELD filter** (`Task.assigned_to_id`, nothing else). "What is on Jerome?"
+  is a real question a manager needs answered precisely. "My work" is a separate client-side flag
+  over `mine`, so widening one can never silently widen the other.
+- **"I can see it" is not "it is mine."** A team's unowned queue, a card you created, an AM's whole
+  cross-client board — all visible, none of them `mine`. Blur that and the Overview's "Open tasks"
+  tile becomes a company-wide total on one person's morning page.
+- **If a card's lead is somebody else, the surface has to SAY so** — that is the "N steps on you"
+  pill (`my_slots`). Otherwise the fix reads as the strip listing other people's work, i.e. as the
+  July 2026 regression wearing the opposite face.
+
+Pinned by `tests/test_task_mine.py`.
+
 ### 🔴 An employee's board = their own work **plus their team's unowned queue**
 
 Changed 2026-08-03 (§2.4c). Read `task_perms._team_queue` before touching `can_view`: the condition

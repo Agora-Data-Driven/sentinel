@@ -16,7 +16,7 @@ unit map + cookbook.
 | `app/security.py` | `get_current_user`, `require_min_role`, `require_roles` factories; `user_from_sso` `:50` |
 | `app/sso.py` | Portal `ag_sso` cookie parsing (`email_from_cookie`, `COOKIE_NAME`) |
 | `app/middleware.py` | `_csp()` `:37`, `_permissions_policy()` `:61`, `SecurityHeadersMiddleware` `:68` (also sets `Cache-Control: no-cache` on non-API responses `:94`), `RateLimitMiddleware` `:111` (hand-rolled on purpose), `CSRFMiddleware` `:167` |
-| `app/serializers.py` | **The field-exposure boundary.** `user_public`/`user_full`, `task_card`/`task_detail`/`atrium_payload`, `summary_dict`/`attendance_request_dict`, `gym_log_dict`, `leave_*_dict`, `*_goal_dict`, `mentor_transcript_dict`, `notification_dict`, … |
+| `app/serializers.py` | **The field-exposure boundary.** `user_public`/`user_full`, `task_card`/`task_detail`/`atrium_payload`, `summary_dict`/`attendance_request_dict`, `gym_log_dict`, `leave_*_dict`, `*_goal_dict`, `mentor_transcript_dict`, `notification_dict`, … `task_card`'s optional `viewer` adds the two viewer-relative fields (`mine`, `my_slots`) — omitted, never faked, when no viewer is named (AGENTS.md §5) |
 | `app/events.py` | In-process SSE event broker (consumed by `routers/stream.py`) |
 | `app/observability.py` | JSON logs in prod, `ExceptionLoggingMiddleware`, optional Sentry |
 | `app/models/` | 39 tables: `user.py` (shift_templates, teams, users, qr_tokens) · `attendance.py` (3) · `gym.py` (6, incl. gym_routines) · `task.py` (tasks, task_comments, task_history, service_templates, task_vocab, atrium_approvals) · `development.py` (12 incl. physical_goals, development_areas, mentor_transcripts) · `leave.py` (3) · `client.py`, `system.py` (2), `notification.py`, `payroll.py` |
@@ -43,7 +43,7 @@ unit map + cookbook.
 
 | Domain | Router | `serializers.py` | Consumer (`frontend/static/js/`) |
 |---|---|---|---|
-| Tasks | `routers/tasks.py` | `task_card`, `task_detail`, `comment_dict`, `history_dict`, `atrium_payload` | `taskboard.js`, mounted by `tasks.js` on the `/tasks` page; `dashboard.js` renders a my-work strip that links in |
+| Tasks | `routers/tasks.py` | `task_card(t, db, viewer=None)`, `task_detail`, `comment_dict`, `history_dict`, `atrium_payload` | `taskboard.js`, mounted by `tasks.js` on the `/tasks` page; `dashboard.js` renders a my-work strip that links in |
 | Attendance | `routers/attendance.py` | `summary_dict`, `attendance_request_dict` | `attendance.js`, `dashboard.js`, `approvals.js`, `kiosk.js` |
 | Gym | `routers/gym.py` | `gym_log_dict`, `gym_routine_dict`, `body_metric_dict`, `personal_record_dict` | `gym.js` |
 | Leave | `routers/leave.py` | `leave_type_dict`, `leave_balance_dict`, `leave_request_dict` | `leave.js`, `approvals.js` |
