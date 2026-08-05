@@ -59,19 +59,32 @@ window.pageInit = async (S) => {
       ],
       help: "The exercises employees can pick in the Gym Tracker, grouped by day type.",
     },
+    // 🔴 READ-ONLY since 2026-08-05, by owner decision: **Atrium owns the client list; Sentinel owns
+    // staff.** The Add/Edit/Delete affordances are gone and so are the routes behind them — a client
+    // row typed in here had no `atrium_client_id`, which is the exact state that makes adoption
+    // refuse to run and Send to Atrium unable to address a workspace. `services/client_sync` mirrors
+    // Atrium's registry instead. Do not re-add `fields` here: `readOnly` is what suppresses the
+    // buttons, and a form with nowhere to POST would just fail at the click.
     Clients: {
-      api: "/api/manage/clients", singular: "client",
+      // The query string lives on `listUrl`, not `api`: the generic editor builds per-row URLs as
+      // `${cfg.api}/${id}`, and a `?…` baked into `api` would silently corrupt them if this tab ever
+      // stopped being read-only.
+      api: "/api/manage/clients", listUrl: "/api/manage/clients?include_inactive=1",
+      singular: "client",
+      readOnly: true,
       cols: [
         { k: "name", label: "Name" },
         { k: "contact_email", label: "Contact email" },
-        { k: "atrium_client_id", label: "Atrium ID" },
+        { k: "atrium_client_id", label: "Atrium workspace", fmt: (v) => (v
+          ? S.esc(v)
+          : '<span class="pill amber" title="The bridge cannot address this client: publishing to Atrium and adoption both fail for it. Fix it in Atrium so the workspace name matches.">not linked</span>') },
+        { k: "is_active", label: "Status", fmt: (v) => (v
+          ? '<span class="pill green">Active</span>'
+          : '<span class="pill grey" title="Atrium no longer lists this client. Its past tasks keep their attribution; it is only out of the pickers.">Not in Atrium</span>') },
       ],
-      fields: [
-        { k: "name", label: "Name", type: "text", req: true },
-        { k: "contact_email", label: "Contact email", type: "text" },
-        { k: "atrium_client_id", label: "Atrium workspace ID (optional)", type: "text" },
-      ],
-      help: "Clients appear in the Task Board's client filter and the New Task form.",
+      help: "Mirrored from Atrium, which owns the client list — these appear in the Task Board's "
+        + "client filter and the New Task form. Add or rename a client in Atrium; it syncs here.",
+      notice: clientsNotice,
     },
     Departments: {
       api: "/api/manage/teams", singular: "department",
@@ -236,27 +249,62 @@ window.pageInit = async (S) => {
     const subTabs = cfg.kinds
       ? `<div class="tabs sub" id="msub">${cfg.kinds.map((k) => `<button class="${k.kind === vocabKind ? "active" : ""}" data-sub="${k.kind}">${k.tab}</button>`).join("")}</div>`
       : "";
+    // A READ-ONLY tab (Clients — mirrored from Atrium) has no Add button and no per-row Edit/Delete.
+    // The Actions column is dropped entirely rather than rendered empty: a column of blank cells
+    // reads as "the buttons failed to load", which is how somebody ends up hunting a bug.
+    const ro = !!cfg.readOnly;
+    const actionsCol = ro && !(cfg.rowActions || []).length;
     body.innerHTML = `${subTabs}
       <div class="row between" style="margin-bottom:12px">
         <div class="lead">${cfg.help}</div>
-        <button class="btn primary" id="m-add">${S.ICON.plus}Add ${cfg.singular}</button>
+        ${ro ? "" : `<button class="btn primary" id="m-add">${S.ICON.plus}Add ${cfg.singular}</button>`}
       </div>
+      <div id="m-notice"></div>
       <div class="table-wrap"><table>
-        <thead><tr>${cfg.cols.map((c) => `<th>${c.label}</th>`).join("")}<th style="text-align:right">Actions</th></tr></thead>
+        <thead><tr>${cfg.cols.map((c) => `<th>${c.label}</th>`).join("")}${actionsCol ? "" : '<th style="text-align:right">Actions</th>'}</tr></thead>
         <tbody>${rows.length ? rows.map((r) => `<tr>
           ${cfg.cols.map((c) => `<td>${c.fmt ? c.fmt(r[c.k], r) : S.esc(r[c.k] == null || r[c.k] === "" ? "—" : r[c.k])}</td>`).join("")}
-          <td style="text-align:right;white-space:nowrap">
+          ${actionsCol ? "" : `<td style="text-align:right;white-space:nowrap">
             ${(cfg.rowActions || []).map((a, ai) => `<button class="btn sm ghost" data-rowact="${ai}" data-id="${r.id}">${S.esc(a.label)}</button>`).join("")}
-            <button class="btn sm ghost" data-edit="${r.id}">Edit</button>
-            <button class="btn sm danger" data-del="${r.id}">Delete</button></td></tr>`).join("")
-        : `<tr><td colspan="${cfg.cols.length + 1}"><div class="empty">No ${cfg.singular}s yet. Add one.</div></td></tr>`}</tbody></table></div>`;
+            ${ro ? "" : `<button class="btn sm ghost" data-edit="${r.id}">Edit</button>
+            <button class="btn sm danger" data-del="${r.id}">Delete</button>`}</td>`}</tr>`).join("")
+        : `<tr><td colspan="${cfg.cols.length + (actionsCol ? 0 : 1)}"><div class="empty">${ro
+            ? `No ${cfg.singular}s are mirrored yet.`
+            : `No ${cfg.singular}s yet. Add one.`}</div></td></tr>`}</tbody></table></div>`;
 
     S.qsa("#msub button").forEach((b) => b.onclick = () => { vocabKind = b.dataset.sub; render(key); });
     const openEditor = (item) => (cfg.customForm ? openServiceForm(item) : openForm(key, item));
-    S.qs("#m-add").onclick = () => openEditor(null);
+    if (S.qs("#m-add")) S.qs("#m-add").onclick = () => openEditor(null);
     S.qsa("[data-edit]").forEach((b) => b.onclick = () => openEditor(rows.find((r) => r.id == b.dataset.edit)));
     S.qsa("[data-del]").forEach((b) => b.onclick = () => del(key, rows.find((r) => r.id == b.dataset.del)));
     S.qsa("[data-rowact]").forEach((b) => b.onclick = () => cfg.rowActions[+b.dataset.rowact].handler(rows.find((r) => r.id == b.dataset.id)));
+    // Fails silently and AFTER the table: it is context about the mirror, and losing it must never
+    // cost the list itself.
+    if (cfg.notice) cfg.notice(S.qs("#m-notice")).catch(() => {});
+  }
+
+  // The Clients pane's extra strip: where clients are actually managed, whether the mirror is
+  // healthy, and — the actionable part — which clients the bridge cannot address.
+  async function clientsNotice(host) {
+    if (!host) return;
+    const s = await S.api("/api/manage/clients/sync-status");
+    const link = s.atrium_console_url
+      ? `<a href="${S.esc(s.atrium_console_url)}" target="_blank" rel="noopener">Manage clients in Atrium →</a>`
+      : '<span class="muted">Atrium\'s address is not configured here, so the mirror is off.</span>';
+    // An unlinked client is the one thing on this pane somebody must act on: publishing and adoption
+    // both fail for it, silently, until its Atrium workspace name matches.
+    const unlinked = (s.unlinked || []).length
+      ? `<div class="mgr-warn"><div>
+           <b>${s.unlinked.length} client${s.unlinked.length === 1 ? "" : "s"} not linked to an Atrium workspace:</b>
+           ${s.unlinked.map((c) => S.esc(c.name)).join(", ")}.
+           Sending work to Atrium and importing client cards both fail for these. Create or rename the
+           matching workspace in Atrium — the names are matched automatically on the next sync.
+         </div></div>`
+      : "";
+    host.innerHTML = `<div class="mgr-strip">
+        <span>${s.active} active${s.inactive ? ` · ${s.inactive} no longer in Atrium` : ""}</span>
+        <span>${link}</span>
+      </div>${unlinked}`;
   }
 
   // Employee badge: view/print the QR + copy the typeable code, or reissue if lost.

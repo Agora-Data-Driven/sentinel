@@ -1,8 +1,12 @@
 """Manage — Super Admin console for the reference data behind other tabs' dropdowns.
 
-CRUD for: gym exercises (Gym Tracker), clients + departments/teams (Task Board, People),
-and leave types (Leave). Super Admin only; every change is audit-logged. Deletes clean up or
-null out dependent references so nothing breaks.
+CRUD for: gym exercises (Gym Tracker), departments/teams (Task Board, People), and leave types
+(Leave). Super Admin only; every change is audit-logged. Deletes clean up or null out dependent
+references so nothing breaks.
+
+🔴 **CLIENTS ARE READ-ONLY HERE (2026-08-05).** Atrium owns the client list; Sentinel owns staff.
+`services/client_sync` mirrors Atrium's registry into the `clients` table — see the section comment
+above `list_clients` for why re-adding a write route would reintroduce the bug it removed.
 """
 from __future__ import annotations
 
@@ -30,7 +34,10 @@ from ..models import (
 )
 from ..security import get_current_user, require_roles
 from ..serializers import client_dict, leave_type_dict, shift_template_dict, team_dict
+from ..services import atrium_bridge
+from ..services import atrium_tasks
 from ..services import audit
+from ..services import client_sync
 from ..services import task_config
 from ..utils.time import normalize_hhmm
 
@@ -130,53 +137,76 @@ def delete_exercise(item_id: int, actor: User = Depends(get_current_user), db: S
     return {"ok": True}
 
 
-# ---------------- Clients ----------------
+# ---------------- Clients — READ-ONLY, mirrored from Atrium ----------------
+#
+# 🔴 CREATE / PATCH / DELETE were REMOVED on 2026-08-05, by owner decision. Atrium owns the client
+# list (each client is a workspace in its registry, created and renamed there); Sentinel owns STAFF.
+# Maintaining clients here made this a second source of truth for something Atrium already knew, and
+# the two drifted in the one field that matters: `atrium_client_id` is the BRIDGE KEY —
+# `atrium_tasks.resolve_client`, `task_bridge`, `board_mirror` and `task_adoption` all address a
+# workspace through it, and adoption REFUSES TO RUN without it. Every one of those failures started
+# as somebody not typing a workspace key into this form.
+#
+# `services/client_sync` fills the table now. The table itself STAYS: it is the FK target for
+# `Task.client_id` and the local cache the board's client filter reads.
+#
+# 🔴 Do not re-add a write route here. If a client needs to exist, it needs to exist in ATRIUM — and
+# a hand-made row with no `atrium_client_id` is precisely the broken state this removed.
+
+
 @router.get("/clients")
-def list_clients(db: Session = Depends(get_db)):
-    return [client_dict(c) for c in db.execute(select(Client).order_by(Client.name)).scalars()]
+def list_clients(include_inactive: bool = False, db: Session = Depends(get_db)):
+    """The mirrored client list. Inactive clients are hidden unless asked for.
+
+    Deactivated = Atrium no longer lists it. Its tasks and history are intact (deleting would NULL
+    `Task.client_id` and blank that client's reporting), it is simply out of the pickers.
+    """
+    q = select(Client).order_by(Client.name)
+    if not include_inactive:
+        q = q.where(Client.is_active.is_(True))
+    return [client_dict(c) for c in db.execute(q).scalars()]
 
 
-@router.post("/clients")
-def create_client(payload: dict, actor: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    name = (payload.get("name") or "").strip()
-    if not name:
-        raise HTTPException(400, "Name is required")
-    if db.execute(select(Client).where(Client.name == name)).scalar_one_or_none():
-        raise HTTPException(409, "A client with that name already exists")
-    c = Client(name=name, contact_email=payload.get("contact_email"), atrium_client_id=payload.get("atrium_client_id"))
-    db.add(c)
-    db.commit()
-    audit.record(db, actor_id=actor.id, table_name="clients", record_id=c.id, action="create", new={"name": name})
-    return client_dict(c)
+@router.get("/clients/sync-status")
+def clients_sync_status(db: Session = Depends(get_db)):
+    """What the read-only Clients pane shows: the mirror's health, and what it cannot address.
+
+    `unlinked` is the actionable part — a client with no `atrium_client_id` is invisible to the
+    bridge, so publishing and adoption fail for it. The fix is in Atrium (create/rename the
+    workspace so the name matches), never a form here.
+    """
+    total = len(db.execute(select(Client)).scalars().all())
+    active = len(db.execute(select(Client).where(Client.is_active.is_(True))).scalars().all())
+    return {
+        "total": total,
+        "active": active,
+        "inactive": total - active,
+        "unlinked": client_sync.pending_link_report(db),
+        "bridge_configured": atrium_tasks.enabled(),
+        # Where clients are actually managed. Derived from the SAME setting the bridge calls, so the
+        # link can never point somewhere Sentinel isn't talking to — "manage them in Atrium" is a dead
+        # end without an address, and hardcoding one in the frontend is how it goes stale.
+        "atrium_console_url": (atrium_bridge.base_url() + "/admin/atrium"
+                               if atrium_bridge.base_url() else ""),
+    }
 
 
-@router.patch("/clients/{item_id}")
-def update_client(item_id: int, payload: dict, actor: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    c = db.get(Client, item_id)
-    if not c:
-        raise HTTPException(404, "Client not found")
-    if "name" in payload and payload["name"]:
-        c.name = payload["name"].strip()
-    if "contact_email" in payload:
-        c.contact_email = payload["contact_email"]
-    if "atrium_client_id" in payload:
-        c.atrium_client_id = payload["atrium_client_id"]
-    db.commit()
-    audit.record(db, actor_id=actor.id, table_name="clients", record_id=c.id, action="update", new={"name": c.name})
-    return client_dict(c)
+@router.post("/clients/sync")
+def clients_sync(actor: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Pull Atrium's client registry now. Idempotent; safe to run repeatedly.
 
-
-@router.delete("/clients/{item_id}")
-def delete_client(item_id: int, actor: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    c = db.get(Client, item_id)
-    if not c:
-        raise HTTPException(404, "Client not found")
-    name = c.name
-    db.query(Task).filter(Task.client_id == item_id).update({Task.client_id: None}, synchronize_session=False)
-    db.delete(c)
-    db.commit()
-    audit.record(db, actor_id=actor.id, table_name="clients", record_id=item_id, action="delete", old={"name": name})
-    return {"ok": True}
+    Also runs on boot (`main._startup`) — this route exists so somebody who just created a workspace
+    in Atrium does not have to wait, and so a failure has somewhere to report itself out loud instead
+    of only into the logs.
+    """
+    report = client_sync.sync(db)
+    if not report["ok"]:
+        # 409, not 500: nothing is broken here — Atrium didn't give us a list we dare act on, and the
+        # message says which of the two it was. A 500 would read as a Sentinel bug.
+        raise HTTPException(409, report["error"])
+    audit.record(db, actor_id=actor.id, table_name="clients", record_id=0, action="sync",
+                 new={k: v for k, v in report.items() if k != "skipped"})
+    return report
 
 
 # ---------------- Departments (teams) ----------------

@@ -259,6 +259,128 @@ def test_overdue_makes_a_small_pile_heavy():
 
 # --- 6. the metrics agree with the rest of the board ---------------------------------------------
 
+# --- 7. Atrium client work counts toward its LEAD ------------------------------------------------
+#
+# The rollup queried Sentinel's `tasks` table only, so every card Atrium owns counted toward NOBODY:
+# a person holding fifteen client cards read as idle on the table a manager staffs from. Joined on
+# the lead's EMAIL (an Atrium owner is a roster email, not a Sentinel id).
+
+def _atrium_card(**over):
+    c = {"atrium_id": "rooming-house:tk_1", "task_id": "tk_1", "client_key": "rooming-house",
+         "title": "ActiveCampaign fix", "stage": "in_progress", "status": "In Progress",
+         "priority": "Medium", "atrium_lead_id": "ana@agora.ph", "due_date": "", "start_date": "",
+         "created_at": "", "updated_at": ""}
+    c.update(over)
+    return c
+
+
+def _with_atrium(monkeypatch, cards):
+    from app.services import atrium_tasks
+    monkeypatch.setattr(atrium_tasks, "enabled", lambda: True)
+    monkeypatch.setattr(atrium_tasks, "fetch_tasks", lambda *a, **k: cards)
+
+
+def test_a_client_card_counts_toward_the_lead_it_resolves_to(client, db, make_user, auth, monkeypatch):
+    boss = make_user(C.ROLE_ADMIN)
+    ana = make_user(C.ROLE_EMPLOYEE, name="Ana", email="ana@agora.ph")
+    _with_atrium(monkeypatch, [_atrium_card()])
+    auth(boss)
+    row = _row(client, ana.id)
+    assert row["open_total"] == 1
+    assert row["client_cards"] == 1
+    assert row["stepped"] == 0, "the Atrium lead IS the owner, not a step-holder"
+
+
+def test_a_client_card_is_overdue_like_any_other(client, db, make_user, auth, monkeypatch):
+    boss = make_user(C.ROLE_ADMIN)
+    ana = make_user(C.ROLE_EMPLOYEE, email="ana@agora.ph")
+    past = (date.today() - timedelta(days=4)).isoformat()
+    _with_atrium(monkeypatch, [_atrium_card(due_date=past)])
+    auth(boss)
+    assert _row(client, ana.id)["overdue"] == 1
+
+
+def test_a_client_card_never_reaches_cycle_or_on_time(client, db, make_user, auth, monkeypatch):
+    """🔴 Atrium sends NO completion stamp. Counting these off `updated_at` is the §2.4h bug, so they
+    are excluded — and `client_cards` is what lets the UI admit it instead of implying the person
+    never ships."""
+    boss = make_user(C.ROLE_ADMIN)
+    ana = make_user(C.ROLE_EMPLOYEE, email="ana@agora.ph")
+    _with_atrium(monkeypatch, [_atrium_card(stage="completed", status="Completed",
+                                            due_date=date.today().isoformat(),
+                                            updated_at="2026-08-01T10:00:00")])
+    auth(boss)
+    row = _row(client, ana.id)
+    assert row["completed_window"] == 0
+    assert row["median_cycle_days"] is None
+    assert row["on_time_rate"] is None
+    assert row["client_cards"] == 1
+
+
+def test_a_lead_with_no_sentinel_account_is_counted_for_nobody(client, db, make_user, auth, monkeypatch):
+    """Inventing an owner is worse than a gap."""
+    boss = make_user(C.ROLE_ADMIN)
+    ana = make_user(C.ROLE_EMPLOYEE, email="ana@agora.ph")
+    _with_atrium(monkeypatch, [_atrium_card(atrium_lead_id="contractor@elsewhere.com")])
+    auth(boss)
+    assert _row(client, ana.id)["client_cards"] == 0
+    assert _row(client, boss.id)["client_cards"] == 0
+
+
+def test_the_email_match_is_case_insensitive(client, db, make_user, auth, monkeypatch):
+    boss = make_user(C.ROLE_ADMIN)
+    ana = make_user(C.ROLE_EMPLOYEE, email="ana@agora.ph")
+    _with_atrium(monkeypatch, [_atrium_card(atrium_lead_id="  Ana@Agora.PH ")])
+    auth(boss)
+    assert _row(client, ana.id)["client_cards"] == 1
+
+
+def test_a_card_already_claimed_by_a_sentinel_row_is_not_double_counted(client, db, make_user,
+                                                                       auth, monkeypatch):
+    """WP 4.3: a linked row IS that card. Counting both inflates the same work twice."""
+    from app.models import Client as ClientModel
+    boss = make_user(C.ROLE_ADMIN)
+    ana = make_user(C.ROLE_EMPLOYEE, email="ana@agora.ph")
+    cl = ClientModel(name="Rooming House", atrium_client_id="rooming-house")
+    db.add(cl)
+    db.commit()
+    db.add(Task(title="The linked row", assigned_to_id=ana.id, status=C.TASK_IN_PROGRESS,
+                client_id=cl.id, atrium_task_id="tk_1"))
+    db.commit()
+    _with_atrium(monkeypatch, [_atrium_card()])
+    auth(boss)
+    row = _row(client, ana.id)
+    assert row["open_total"] == 1, "the Sentinel row only — not it plus the bridge's copy"
+    assert row["client_cards"] == 0
+
+
+def test_an_atrium_outage_costs_the_client_half_not_the_page(client, db, make_user, auth, monkeypatch):
+    """Fail-soft, like every read of this bridge. `fetch_tasks` answers [] on any failure."""
+    from app.services import atrium_tasks
+    boss = make_user(C.ROLE_ADMIN)
+    ana = make_user(C.ROLE_EMPLOYEE, email="ana@agora.ph")
+    db.add(Task(title="Sentinel's own", assigned_to_id=ana.id, status=C.TASK_TODO))
+    db.commit()
+    monkeypatch.setattr(atrium_tasks, "enabled", lambda: True)
+    monkeypatch.setattr(atrium_tasks, "fetch_tasks", lambda *a, **k: [])
+    auth(boss)
+    row = _row(client, ana.id)
+    assert row["open_total"] == 1
+    assert row["client_cards"] == 0
+
+
+def test_a_malformed_atrium_date_does_not_break_the_monitor(client, db, make_user, auth, monkeypatch):
+    """🔴 Atrium sends dates as STRINGS; the rollups compare them with `date`. Left unparsed, one bad
+    field on one client card takes the whole manager surface down with a TypeError."""
+    boss = make_user(C.ROLE_ADMIN)
+    ana = make_user(C.ROLE_EMPLOYEE, email="ana@agora.ph")
+    _with_atrium(monkeypatch, [_atrium_card(due_date="not-a-date", created_at="???")])
+    auth(boss)
+    row = _row(client, ana.id)
+    assert row["open_total"] == 1
+    assert row["overdue"] == 0
+
+
 def test_filed_work_leaves_the_plate_but_still_counts_as_shipped(client, db, make_user, auth):
     """Same rule `_aggregate` already followed — the new columns must not contradict it."""
     boss = make_user(C.ROLE_ADMIN)

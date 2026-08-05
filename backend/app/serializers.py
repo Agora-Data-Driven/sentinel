@@ -135,7 +135,13 @@ def client_dict(c: Client) -> dict:
         "id": c.id,
         "name": c.name,
         "contact_email": c.contact_email,
+        # 🔴 The BRIDGE KEY, and the field the read-only Clients pane exists to surface: a client with
+        # no workspace key is invisible to `resolve_client` / `task_bridge` / `task_adoption`. Since
+        # 2026-08-05 `client_sync` fills it from Atrium rather than a human typing it.
         "atrium_client_id": c.atrium_client_id,
+        # False = Atrium stopped listing this client. Never deleted (that would NULL `Task.client_id`
+        # on every past task and blank its reporting) — just out of the pickers.
+        "is_active": bool(getattr(c, "is_active", True)),
     }
 
 

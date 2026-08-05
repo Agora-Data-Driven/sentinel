@@ -209,8 +209,84 @@ instead of to Postgres: `GET /{id}`, `PATCH /{id}`, `DELETE /{id}`, `PATCH /{id}
   two derivations is exactly how the card and the drawer disagreed. Atrium's half
   (`lead_name`/`support_names` in the list payload) is pinned by its `_atrium_smoketest.py`; this
   half by `tests/test_atrium_card_owner.py`.
-  > The **By Employee** swimlanes still put these cards in the *Unassigned* lane, on purpose: that
-  > view groups by Sentinel user id, and an Atrium lead has none. The lane means "no Sentinel owner".
+### 🔴 Sentinel owns EMPLOYEES. Atrium owns CLIENTS. Manage → Clients is read-only.
+
+Owner decision, 2026-08-05. Sentinel's `users` table is the source of truth for staff (§3 — SSO only
+authenticates, this table authorizes). **Atrium's registry is the source of truth for clients**, and
+Sentinel now MIRRORS it (`services/client_sync`) instead of keeping its own hand-maintained list.
+
+Why it mattered enough to remove a form: `Client.atrium_client_id` is the **bridge key**.
+`atrium_tasks.resolve_client` matches a client card with it, `task_bridge` needs it to know which
+workspace to publish into, `board_mirror` puts it in the payload Atrium pulls, and `task_adoption`
+**refuses to run** without it ("its adopted cards will appear twice on the board"). Every one of those
+failures began as somebody not typing a workspace key into Manage. Two write paths existed and BOTH
+are gone — `POST/PATCH/DELETE /api/manage/clients` and the quieter `POST /api/clients` (the meta
+router), which let any AM mint an unlinked client straight from the New Task picker.
+
+🔴 **The `clients` TABLE stays.** It is the FK target for `Task.client_id` and the local cache the
+board's client filter reads. Only the hand-maintenance went.
+
+What the mirror does, and the rule behind each step:
+
+| Step | Rule |
+|---|---|
+| Upsert by `atrium_client_id` | A linked client's name follows Atrium's — that is what the console's Rename button edits and what the client sees |
+| Adopt an unlinked client by **unambiguous name** | Writes down the link `resolve_client` was already inferring at read time, so nobody hand-types a key. Ambiguous → left alone |
+| **Deactivate** what Atrium no longer lists | 🔴 NEVER delete: that NULLs `Task.client_id` on every past task and blanks that client's reporting. `Client.is_active` keeps the history and drops it from the pickers |
+| Reactivate anything that returns | — |
+
+🔴 **The sync refuses to act on an empty or failed answer.** Deactivation is driven by *absence*, so
+"Atrium didn't answer" and "Atrium has no clients" must never be confused — that would switch off
+every client in the estate in one pass. This is why `atrium_tasks.fetch_clients` returns an explicit
+error instead of degrading to `[]` like every other read in that module, and why a zero-length list
+with no error is refused too (a real estate is never empty).
+
+It runs on boot (`main._mirror_clients`, last and fully swallowed — a client list one boot stale is a
+nuisance, a Sentinel that won't start is an outage) and on `POST /api/manage/clients/sync`. The
+read-only Manage pane surfaces `GET /api/manage/clients/sync-status`, whose `unlinked` list is the one
+actionable thing there: those clients are invisible to the bridge, and the fix is in **Atrium**.
+Covered by `tests/test_client_sync.py`; the Atrium half is `GET /api/internal/clients` (purpose
+`clients`), pinned in its `_atrium_smoketest.py`.
+
+### 🔴 An Atrium lead is resolved to a SENTINEL user — and an `email ==` join does not work here
+
+`services/atrium_identity.py`, 2026-08-05. Showing the lead's *name* on the card was only half the
+job: **By Employee** groups by `assigned_to_id` and the Monitor rolls up by Sentinel user, so owned
+client work still sat in the *Unassigned* lane, counted toward nobody's workload, and rendered
+initials instead of a photo (there was no Sentinel row to read `profile_pic_url` from).
+
+The trap is that the obvious join is wrong. **Sentinel's `users` table is the source of truth for
+staff, but Atrium keeps its own roster keyed by email, and the two disagree on the domain for the
+same human.** Atrium's canonical `ATRIUM_TEAM` alone spans `@agoradatadriven.com`, `@100.digital`
+and `@bidbrain.com`; `_team_roster()` also merges live portal accounts, whose address may be a
+personal Gmail (which is how a lead displays as "Agustinnico228"); Sentinel's own users are on
+another domain again. An exact email match therefore resolved almost nobody.
+
+So resolution is a ladder, and **every rung refuses to guess when ambiguous**:
+
+| # | Key | Example |
+|---|---|---|
+| 1 | exact email | `justine@agora.ph` = `justine@agora.ph` |
+| 2 | email local part | `justine@agoradatadriven.com` → `justine` |
+| 3 | full display name | `"Justine Roa"` |
+| 4 | first name | `"Justine"` → the one Sentinel user called Justine |
+
+Two Justines, or two locals called `ian`, resolve to **nobody** — a visible gap (`client_cards` on
+the Monitor row, "Unassigned" on the card) beats a silent mis-attribution on the table a manager
+staffs from. Resolution stops at the first *unambiguous* rung; it does not fall through and give up.
+
+What the resolved owner changes, and why each one matters:
+
+- `assigned_to_id` → the card lands in that person's **By Employee** lane instead of *Unassigned*;
+- `assignee` → the full `user_public`, so the **photo** appears;
+- the Monitor counts the card toward them (`task_analytics.atrium_workload` takes the Resolver, not
+  an email map);
+- the board's `?assignee_id=` filter now KEEPS a card whose lead resolved to that person — dropping
+  it while the card visibly shows their name and face is the same contradiction as the original bug.
+
+`atrium_tasks.py` still never touches the DB: the ROUTER resolves (`_owner_index` / `_atrium_owner`,
+one index per request) and passes `owner` into `as_board_card` / `as_task_detail`. Covered by
+`tests/test_atrium_identity.py`.
 - 🔴 **Only Atrium's own 404 may surface as "that card is gone."** The board LIST is fail-soft, but
   every explicit act (open / edit / delete / comment) reports its failure — the router keys its 404
   off `atrium_tasks.GONE`/`GONE_COMMENT` and answers **502** for anything else, so a timeout is
@@ -472,6 +548,25 @@ board already keeps honestly:
 | sitting | `updated_at` of OPEN cards (`STALE_DAYS`) | Two clocks on purpose: `oldest_open_days` is `created_at` (how long owed), `stale_open` is `updated_at` (untouched). Old ≠ stale |
 | capacity | approved `LeaveRequest` | Only **approved** leave — a pending request is a question, not a fact about who is at their desk |
 | `load_band` | open work **vs the cohort's own median** | Never absolute. Suppressed entirely when the median is < 2 (there, "double the median" is one card), and `overdue >= 3` forces `heavy` so a small-but-late pile isn't rendered `light` |
+
+**Atrium's client cards count toward the lead they resolve to (2026-08-05).** The rollup queried
+Sentinel's own `tasks` table only, so every card Atrium owns counted toward **nobody** — a person
+holding fifteen client cards read as idle on the table a manager staffs from. The join is the Atrium
+lead's **email**, matched case-insensitively against `users`, because an Atrium owner is a roster
+email and never a Sentinel id. Four rules hold it together:
+
+| Rule | Why |
+|---|---|
+| A lead with no Sentinel account is counted for **nobody** | Inventing an owner is worse than a gap |
+| Cards already claimed by a Sentinel row are **skipped** (`claimed_atrium_ids`) | WP 4.3 — the linked row *is* that card; counting both inflates the same work twice, exactly as it would render twice on the board |
+| The read is **fail-soft** (`fetch_tasks` → `[]`) | An Atrium outage costs a manager the client half of these numbers, never the whole page |
+| Atrium's dates are **strings**; `task_analytics._as_date`/`_as_dt` parse them | The rollups compare against `date`. Unparsed, one malformed field on one client card takes the entire manager surface down with a `TypeError` |
+
+🔴 **A client card carries no `completed_at`, so it reaches Open / Overdue / Sitting and NOTHING
+else.** `task_analytics.AtriumWork` sets it to `None` and `delivery()` skips any row without a stamp,
+so cycle time, the on-time rate and throughput are **Sentinel rows only** — substituting `updated_at`
+here would be the §2.4h bug wearing a new hat. `client_cards` on the row exists to make the UI *say*
+that; without it, somebody who delivers mostly client work looks like they never ship anything.
 
 Two rules if you extend this:
 

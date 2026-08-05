@@ -647,12 +647,17 @@ window.TaskBoard = {
         const segs = barSegs.map((st) => { const n = r.counts[st] || 0; return n ? `<i class="${segCls[st]}" style="flex:${n}" title="${S.esc(st)}: ${n}"></i>` : ""; }).join("");
         // "9 (4 as steps)" — a row that is mostly other people's cards is a different working life
         // from one that is all your own, and before 2026-08-05 those cards weren't counted at all.
+        // Two sub-lines under the Open count, each answering "why is that number what it is":
+        // work held via somebody else's breakdown, and work Atrium owns. The second one also warns
+        // that those cards can't reach Cycle/On-time — Atrium sends no completion stamp, so counting
+        // them there would mean counting completion off `updated_at` (the §2.4h bug).
         const stepNote = r.stepped ? `<span class="mon-sub" title="Cards led by somebody else, where they own a phase or step">${r.stepped} as steps</span>` : "";
+        const clientNote = r.client_cards ? `<span class="mon-sub" title="Client cards Atrium owns, led by this person. Atrium sends no completion date, so these are NOT in Cycle or On time.">${r.client_cards} client</span>` : "";
         return `<tr data-uid="${u.id}" tabindex="0">
           <td class="who">${S.avatar(u, "sm")}<div><div class="n">${S.esc(u.name)} ${capacity(r)}</div><div class="r">${S.esc(u.role_label || u.role || "")}</div></div></td>
           <td>${bandPill(r)}</td>
           <td class="wl"><div class="wl-bar">${segs || '<i class="s-none" style="flex:1" title="No open tasks"></i>'}</div></td>
-          <td class="num">${open}${stepNote}</td>
+          <td class="num">${open}${stepNote}${clientNote}</td>
           <td class="num ${r.overdue ? "bad" : ""}">${r.overdue || 0}</td>
           <td class="num ${r.stale_open ? "warn" : ""}">${r.stale_open || 0}</td>
           <td class="num">${num(r.median_cycle_days, "d")}</td>
@@ -663,7 +668,9 @@ window.TaskBoard = {
       <p class="mon-legend">
         <b>Load</b> compares each person against this team's median open work — tasks carry no size
         estimate, so it ranks who is carrying more, it does not measure hours.
-        <b>Cycle</b> and <b>On time</b> cover the last ${MONITOR_WINDOW_DAYS} days;
+        <b>Cycle</b> and <b>On time</b> cover the last ${MONITOR_WINDOW_DAYS} days and count
+        Sentinel rows only — Atrium sends no completion date, so a person's <b>client</b> cards
+        show under Open but cannot reach those two columns.
         <b>Sitting</b> counts open cards untouched for ${staleDays}+ days.
         A person can appear on a card they don't lead, so these rows do not add up to the board's
         total — that is shared work, counted on every plate it is really on.

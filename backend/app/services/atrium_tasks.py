@@ -92,6 +92,31 @@ def fetch_tasks(client_key: str = "") -> list[dict]:
     return tasks if isinstance(tasks, list) else []
 
 
+def fetch_clients() -> tuple[list[dict], str]:
+    """Atrium's client registry: `([{key, name, contact_email}], error)`.
+
+    🔴 Returns an ERROR rather than degrading to `[]`, unlike every other read in this module — and
+    that asymmetry is the whole point. The board list is fail-soft because an Atrium outage must not
+    blank it; but the client MIRROR deactivates any Sentinel client missing from this list, so an
+    empty answer is indistinguishable from "Atrium has no clients" and would deactivate **every
+    client in the estate**. The caller must be able to tell "nothing came back" from "nothing exists"
+    and refuse to sync. Exactly one of the two values is ever truthy.
+    """
+    if not enabled():
+        return [], "The Atrium bridge is not configured."
+    code, body = _call("clients", "/api/internal/clients")
+    if code != 200:
+        if code:
+            log.warning("atrium client fetch returned %s", code)
+        return [], (_gone_or_missing_route(body, "Atrium did not return its client list.")
+                    if code == 404 else
+                    "Atrium didn't answer the client list — nothing was changed.")
+    rows = body.get("clients")
+    if not isinstance(rows, list):
+        return [], "Atrium's client list came back in a shape we don't understand."
+    return rows, ""
+
+
 def move_task(client_key: str, task_id: str, stage: str, actor: str = "") -> tuple[bool, str]:
     """Move an Atrium task. Returns (ok, error_message) -- the error is safe to show the user."""
     if not enabled():
@@ -342,7 +367,7 @@ def owner_label(person_id: str) -> str:
     return local.replace(".", " ").replace("_", " ").replace("-", " ").title()
 
 
-def as_task_detail(envelope: dict, client: object = None) -> dict:
+def as_task_detail(envelope: dict, client: object = None, owner: dict | None = None) -> dict:
     """Map Atrium's full task onto the shape the detail drawer already renders (task_detail).
 
     Same contract as `as_board_card`: fields Sentinel has no Atrium equivalent for come back empty
@@ -350,7 +375,7 @@ def as_task_detail(envelope: dict, client: object = None) -> dict:
     an `atrium_` prefix so nothing here is mistaken for a Sentinel column. The pickers' vocabularies
     ride along so the drawer can offer Atrium's OWN roster and departments instead of Sentinel's."""
     t = envelope.get("task") or {}
-    card = as_board_card(t, client)
+    card = as_board_card(t, client, owner)
     card.update({
         # Atrium has no `description`; its client-facing prose is client_note (mapped below) and its
         # internal prose is internal_notes -- both already have a home on the drawer.
@@ -458,7 +483,7 @@ def resolve_client(clients: list, client_key: str, client_name: str = ""):
     return partial[0] if len(partial) == 1 else None
 
 
-def as_board_card(t: dict, client: object = None) -> dict:
+def as_board_card(t: dict, client: object = None, owner: dict | None = None) -> dict:
     """Map an Atrium task onto the shape the Kanban board already renders (serializers.task_card).
 
     `client` is the matching Sentinel Client row (resolved via Client.atrium_client_id) when there
@@ -467,20 +492,36 @@ def as_board_card(t: dict, client: object = None) -> dict:
     tag) come back empty rather than faked, and `source` marks the card so the UI can badge it
     and route edits back to Atrium.
 
-    🔴 **`assigned_to_id` stays None but `assignee` now carries Atrium's LEAD (2026-08-05).** Both
-    were hardcoded `None`, so a client card with a Lead set in Atrium rendered **"Unassigned"** on
-    the board while its own drawer said "Lead: Charles" — the board had nowhere to read a name from,
-    because Atrium's list payload sends `lead_id` (a roster email) and only its DETAIL payload
-    resolves names. "Absent, never faked" was the right instinct applied to the wrong field: not
-    inventing a Sentinel **user id** is correct, and refusing to show the **name** on the card while
-    showing it in the drawer just made the board lie about who is holding client work.
+    🔴 **The owner reaches the card, and is the real Sentinel person whenever we can prove it
+    (2026-08-05).** `assigned_to_id` and `assignee` were both hardcoded `None`, so a client card with
+    a Lead set in Atrium rendered **"Unassigned"** on the board while its own drawer said
+    "Lead: Charles". Two separate causes: Atrium's list payload sends `lead_id` — a roster *email* —
+    and only its DETAIL payload resolved names, so the board had nothing to print; and "absent, never
+    faked" was applied to the wrong field. Not inventing a Sentinel **identity** is right; hiding the
+    **name** just made the board lie about who holds client work.
 
-    So the split is: `assigned_to_id = None` (nothing may join on an Atrium owner, and every filter
-    keyed on it still excludes these cards, which is what keeps them off employees' boards), while
-    `assignee` is an id-less `_person` the avatar can render. `owner_label` supplies a name derived
-    from the email when Atrium sent no resolved one, so this works before Atrium's side ships.
+    Three outcomes, in falling order of confidence. `owner` is a `user_public` dict resolved by the
+    CALLER through `services/atrium_identity` — this module never touches the DB:
+
+    | `owner` | `assigned_to_id` | `assignee` | What the user sees |
+    |---|---|---|---|
+    | resolved | that user's id | the Sentinel user | Their **By Employee** lane, their PHOTO, counted on the Monitor |
+    | unresolved lead | `None` | id-less `{name}` | Named on the card, initials avatar, no lane |
+    | no lead at all | `None` | `None` | Honestly "Unassigned" |
+
+    `owner_label` supplies the middle row's name from the email, which is what made the board stop
+    saying "Unassigned" even before Atrium's side shipped resolved names.
     """
     lead_name = (t.get("lead_name") or "").strip() or owner_label(t.get("lead_id") or "")
+    # 🔴 `owner` is the SENTINEL user this card's Atrium lead resolves to (`services/atrium_identity`),
+    # already serialized by `user_public` — so it carries the real id AND `profile_pic_url`. When it is
+    # present the card is owned by an actual staff member and says so with their photo; when it is not
+    # (a lead with no Sentinel account, or an ambiguous match we refuse to guess at) we fall back to
+    # the id-less name below. That fallback is why the board still names somebody even before this
+    # resolution exists — see `owner_label`.
+    owner_name = (owner or {}).get("name")
+    if owner_name:
+        lead_name = owner_name
     support_names = [n for n in (t.get("support_names") or []) if str(n).strip()]
     if not support_names:
         support_names = [n for n in (owner_label(s) for s in (t.get("support_ids") or [])) if n]
@@ -494,9 +535,14 @@ def as_board_card(t: dict, client: object = None) -> dict:
         "client_id": getattr(client, "id", None),
         "client_name": (getattr(client, "name", None)
                         or t.get("client_name") or t.get("client_key") or ""),
-        # 🔴 None on purpose — an Atrium owner is a roster email, not a Sentinel user (see above).
-        "assigned_to_id": None,
-        "assignee": _person(lead_name),
+        # 🔴 Set ONLY when the lead resolved to a real Sentinel user. That is what puts the card in
+        # that person's **By Employee** lane and stops the board calling owned client work
+        # "Unassigned" — grouping there is keyed on this field. It stays None for an unresolved lead,
+        # so nothing is ever joined to an owner we had to guess at.
+        "assigned_to_id": (owner or {}).get("id"),
+        # The resolved Sentinel user (id + name + `profile_pic_url` — this is what makes the PHOTO
+        # appear) or, failing that, an id-less name the avatar renders as initials.
+        "assignee": owner or _person(lead_name),
         "assigned_team_id": None,
         "created_by_id": None,
         "created_by": None,
