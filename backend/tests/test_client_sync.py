@@ -61,6 +61,23 @@ def test_an_EMPTY_list_is_refused_even_without_an_error(db, monkeypatch):
 
 # --- 2. 🔴 orphans are switched off, not deleted --------------------------------------------------
 
+def test_the_DEFAULT_sync_never_deactivates_anything(db, monkeypatch):
+    """🔴 The boot path. Deactivation is driven by ABSENCE, and absence is a lie whenever Atrium
+    spells a client differently — live, Atrium had "Rooming House Expert" where Sentinel had
+    "…Experts", "Riverdance RV" vs "Riverdance", "The Contract Shop" vs "TCS". A blind first pass
+    would have created a duplicate for each and retired the original. So: report, don't act."""
+    stays = Client(name="Riverdance", atrium_client_id="riverdance-old")
+    db.add(stays)
+    db.commit()
+    _atrium(monkeypatch, [_row("riverdance-rv", "Riverdance RV")])
+    report = client_sync.sync(db)                      # no `deactivate=`
+    assert report["ok"] is True
+    assert report["deactivated"] == 0
+    assert report["would_deactivate"] == ["Riverdance"], "reported, so the gap is visible"
+    db.refresh(stays)
+    assert stays.is_active is True
+
+
 def test_a_client_atrium_dropped_is_deactivated_and_keeps_its_tasks(db, monkeypatch):
     gone = Client(name="Departed Co", atrium_client_id="departed")
     db.add(gone)
@@ -69,7 +86,7 @@ def test_a_client_atrium_dropped_is_deactivated_and_keeps_its_tasks(db, monkeypa
     db.commit()
 
     _atrium(monkeypatch, [_row("rooming-house", "Rooming House Experts")])
-    report = client_sync.sync(db)
+    report = client_sync.sync(db, deactivate=True)     # the deliberate operator act
     assert report["ok"] is True
     assert report["deactivated"] == 1
     db.refresh(gone)
@@ -88,6 +105,38 @@ def test_a_client_that_comes_back_is_reactivated(db, monkeypatch):
     assert report["reactivated"] == 1
     db.refresh(c)
     assert c.is_active is True
+
+
+# --- 2b. preview writes NOTHING --------------------------------------------------------------------
+
+def test_preview_reports_the_plan_and_writes_nothing(db, monkeypatch):
+    """🔴 The check that makes the mirror trustworthy on a live estate — and it must be the SAME code
+    path as the real sync, or the preview describes a plan that isn't the one that runs."""
+    existing = Client(name="Riverdance", atrium_client_id="riverdance-old")
+    db.add(existing)
+    db.commit()
+    before = len(db.execute(select(Client)).scalars().all())
+
+    _atrium(monkeypatch, [_row("riverdance-rv", "Riverdance RV")])
+    plan = client_sync.preview(db)
+    assert plan["ok"] is True
+    assert plan["created"] == 1                       # the duplicate it WOULD make
+    assert plan["would_deactivate"] == ["Riverdance"]  # …and the orphan it would leave
+    assert any("create" in line for line in plan["plan"])
+
+    db.expunge_all()
+    assert len(db.execute(select(Client)).scalars().all()) == before, "preview wrote nothing"
+    assert db.execute(select(Client)).scalars().one().name == "Riverdance"
+
+
+def test_preview_shows_a_CLEAN_plan_once_the_names_agree(db, monkeypatch):
+    """What the operator is aiming for before enabling deactivation."""
+    db.add(Client(name="Riverdance RV", atrium_client_id="riverdance-rv"))
+    db.commit()
+    _atrium(monkeypatch, [_row("riverdance-rv", "Riverdance RV")])
+    plan = client_sync.preview(db)
+    assert plan["created"] == 0 and plan["linked"] == 0
+    assert plan["would_deactivate"] == []
 
 
 # --- 3. upsert + the name-match adoption ---------------------------------------------------------
@@ -148,6 +197,18 @@ def test_the_sync_is_idempotent(db, monkeypatch):
     second = client_sync.sync(db)
     assert first["created"] == 1
     assert second["created"] == 0 and second["updated"] == 0 and second["deactivated"] == 0
+
+
+def test_the_preview_route_is_read_only_for_a_super_admin(client, db, make_user, auth, monkeypatch):
+    db.add(Client(name="Riverdance", atrium_client_id="riverdance-old"))
+    db.commit()
+    _atrium(monkeypatch, [_row("riverdance-rv", "Riverdance RV")])
+    auth(make_user(C.ROLE_SUPER_ADMIN))
+    r = client.get("/api/manage/clients/sync-preview")
+    assert r.status_code == 200
+    assert r.json()["would_deactivate"] == ["Riverdance"]
+    # Still active afterwards — a preview that wrote would be the worst possible bug here.
+    assert client.get("/api/manage/clients").json()[0]["is_active"] is True
 
 
 def test_pending_link_report_names_what_the_bridge_cannot_address(db):

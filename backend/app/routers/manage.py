@@ -191,21 +191,39 @@ def clients_sync_status(db: Session = Depends(get_db)):
     }
 
 
+@router.get("/clients/sync-preview")
+def clients_sync_preview(db: Session = Depends(get_db)):
+    """What a sync WOULD change, writing nothing. Read this before passing `deactivate=1`.
+
+    🔴 Worth running against real data before trusting the mirror: Atrium and Sentinel spell some
+    clients differently ("Rooming House Expert" vs "…Experts", "Riverdance RV" vs "Riverdance",
+    "The Contract Shop" vs "TCS"), and each mismatch shows up here as a CREATE plus a
+    `would_deactivate` entry — i.e. a duplicate and an orphan. Fix the name in Atrium and re-preview
+    until the plan reads the way you want.
+    """
+    return client_sync.preview(db)
+
+
 @router.post("/clients/sync")
-def clients_sync(actor: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def clients_sync(deactivate: bool = False, actor: User = Depends(get_current_user),
+                 db: Session = Depends(get_db)):
     """Pull Atrium's client registry now. Idempotent; safe to run repeatedly.
 
-    Also runs on boot (`main._startup`) — this route exists so somebody who just created a workspace
-    in Atrium does not have to wait, and so a failure has somewhere to report itself out loud instead
-    of only into the logs.
+    Also runs on boot (`main._mirror_clients`) — this route exists so somebody who just created a
+    workspace in Atrium does not have to wait, and so a failure has somewhere to report itself out
+    loud instead of only into the logs.
+
+    🔴 `deactivate` is OPT-IN and off by default, here and on boot. Creating/linking is safe in every
+    direction; switching a client OFF is driven by absence, which any spelling difference fakes. Run
+    `GET …/sync-preview` first and read `would_deactivate` — those are the clients this would retire.
     """
-    report = client_sync.sync(db)
+    report = client_sync.sync(db, deactivate=deactivate)
     if not report["ok"]:
         # 409, not 500: nothing is broken here — Atrium didn't give us a list we dare act on, and the
         # message says which of the two it was. A 500 would read as a Sentinel bug.
         raise HTTPException(409, report["error"])
     audit.record(db, actor_id=actor.id, table_name="clients", record_id=0, action="sync",
-                 new={k: v for k, v in report.items() if k != "skipped"})
+                 new={k: v for k, v in report.items() if k != "plan"})
     return report
 
 
