@@ -36,6 +36,21 @@ class Settings(BaseSettings):
     # It is forced OFF when environment == "production" unless this escape hatch is set true.
     allow_dev_login_in_prod: bool = False
 
+    # --- Live reload (local development only) -------------------------------
+    # `GET /api/dev/reload` — an SSE stream that fires when anything under frontend/ changes, so a
+    # saved CSS/JS edit reaches the browser without a manual refresh (routers/dev.py).
+    #
+    # 🔴 Defaults to True and is nonetheless UNREACHABLE in production, by TWO independent gates —
+    # see `dev_reload_active` below and the localhost test in `frontend/static/js/app.js`. Defaulting
+    # it on is what makes local dev zero-config, which is the whole point; defaulting it off would
+    # mean every dev has to discover a flag before the feature exists for them.
+    #
+    # There is deliberately NO `allow_dev_reload_in_prod` escape hatch (unlike dev-login above). The
+    # endpoint walks the frontend directory on a timer and holds a connection open per browser tab —
+    # on Cloud Run that is pointless work against an immutable container image, and a reload watcher
+    # is never the answer to a production question.
+    dev_reload: bool = True
+
     # Startup safety net: if the DB has no active Super Admin, this account is (re)created so a
     # login is always possible. Change the password after first sign-in.
     bootstrap_admin_email: str = "melo@agora.ph"
@@ -132,6 +147,17 @@ class Settings(BaseSettings):
         if self.is_production and not self.allow_dev_login_in_prod:
             return False
         return self.dev_login_enabled
+
+    @property
+    def dev_reload_active(self) -> bool:
+        """Effective live-reload switch. Hard OFF in production, with no escape hatch.
+
+        Deliberately stricter than `dev_login_active`: that one has `allow_dev_login_in_prod`
+        because there are real (if rare) reasons to impersonate a user on a staging deploy. There is
+        no such reason to watch the filesystem of an immutable container image, so production is not
+        a configuration here — it is the end of the question.
+        """
+        return self.dev_reload and not self.is_production
 
     @property
     def jwt_secret_is_default(self) -> bool:

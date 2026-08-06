@@ -22,7 +22,7 @@ from ..constants import (
 )
 from ..database import get_db
 from ..models import (AtriumApproval, Client, RecurringService, Task, TaskComment, TaskHistory,
-                      TaskRequest, Team, User)
+                      TaskRequest, TaskSupporter, Team, User)
 from ..schemas import (
     CommentIn,
     RecurringServiceIn,
@@ -77,6 +77,50 @@ def _derived_labels(db: Session, team_id: int | None) -> list[str]:
     team = db.get(Team, team_id)
     lbl = label_for_department(team.name if team else None)
     return [lbl] if lbl else []
+
+
+def _support_delegates(task: Task, want: list[int], actor_id: int) -> bool:
+    """Does this support change involve anybody but the actor? (i.e. is it DELEGATION?)
+
+    🔴 The same shape as `maintasks_svc.foreign_owner_changes`, and for the same reason: putting a
+    name on a card puts that card on their board (`task_perms.assigned_user_ids`), so choosing WHO is
+    a delegation decision even when the field looks like a plain list. This board has already shipped
+    that hole twice — once for `maintasks[].assignee_id`, once for comparing owner SETS instead of
+    slots — so the check lives where the field is WRITTEN, never in the UI.
+
+    What stays open to every role is **joining and leaving yourself**: adding your own id, or removing
+    it. That mirrors self-assignment on a step, and without it support would be unusable by the people
+    who actually pick work up.
+    """
+    return bool((set(task.support_ids) ^ set(want)) - {actor_id})
+
+
+def _apply_support(db: Session, task: Task, want: list[int], user: User) -> list[int]:
+    """Reconcile `task_supporters` to `want`. Returns the ids newly ADDED (for notification).
+
+    Only the difference is touched — an unchanged supporter keeps their original row, so
+    `added_by_id`/`created_at` stay true instead of being rewritten by every unrelated PATCH that
+    happens to resend the same list.
+
+    Silently drops ids that are not active users rather than 400ing the whole edit: the list arrives
+    from a multi-select that a stale page may have rendered before somebody was deactivated, and
+    losing an entire edit to one dead id would be worse than staffing one fewer person. Deduplicated
+    because the unique constraint would otherwise turn a double-selected name into an IntegrityError.
+    """
+    valid = {u.id for u in db.execute(
+        select(User).where(User.id.in_(set(want)), User.is_active.is_(True))).scalars().all()} if want else set()
+    have = set(task.support_ids)
+    add, drop = valid - have, have - valid
+    for row in list(task.supporters):
+        if row.user_id in drop:
+            db.delete(row)
+    for uid in sorted(add):
+        db.add(TaskSupporter(task_id=task.id, user_id=uid, added_by_id=user.id))
+    if add or drop:
+        names = lambda ids: ", ".join(  # noqa: E731 — local formatting helper, one use each side
+            sorted((db.get(User, i).name if db.get(User, i) else str(i)) for i in ids)) or None
+        _log(db, task.id, user.id, "support", names(have), names(valid))
+    return sorted(add)
 
 
 def _apply_status(db: Session, task: Task, new_status: str, user: User) -> str:
@@ -302,7 +346,7 @@ def _aggregate(pts: list[Task], today, week_start, all_statuses, done_statuses: 
     it shipped, which is what excluding archived rows outright would do.
     """
     counts = dict.fromkeys(all_statuses, 0)
-    overdue = completed_week = live = stepped = 0
+    overdue = completed_week = live = stepped = supporting = 0
     for t in pts:
         if t.status in done_statuses:
             done_on = getattr(t, "completed_at", None)
@@ -313,16 +357,26 @@ def _aggregate(pts: list[Task], today, week_start, all_statuses, done_statuses: 
         live += 1
         counts[t.status] = counts.get(t.status, 0) + 1
         if t.status not in done_statuses:
-            # On their plate via the BREAKDOWN rather than as the card's lead. Surfaced because a
-            # row reading "12 open" where 9 are somebody else's cards is a different working life
-            # from 12 of your own, and until 2026-08-05 this rollup couldn't see those at all.
+            # WHY a row's number is what it is. A row reading "12 open" where 9 are somebody else's
+            # cards is a different working life from 12 of your own, and until 2026-08-05 this rollup
+            # could not see those at all.
+            #
+            # 🔴 The two are counted SEPARATELY and do not overlap (2026-08-06). Support used to fall
+            # into `stepped`, which the UI renders as "N as steps" — so a person put on a card as
+            # SUPPORT was described as owning steps of it, which may be zero steps. The label has to
+            # match the reason, or the Monitor is confidently wrong about how somebody's day is spent.
+            # Support wins the tie: being named on the card is the bigger fact than holding a step of it.
             if person_id is not None and t.assigned_to_id != person_id:
-                stepped += 1
+                if person_id in {s.user_id for s in (t.supporters or [])}:
+                    supporting += 1
+                else:
+                    stepped += 1
             if t.due_date and t.due_date < today:
                 overdue += 1
     open_total = sum(n for st, n in counts.items() if st not in done_statuses)
     return {"counts": counts, "overdue": overdue, "open_total": open_total,
-            "completed_week": completed_week, "total": live, "stepped": stepped}
+            "completed_week": completed_week, "total": live, "stepped": stepped,
+            "supporting": supporting}
 
 
 @router.get("/summary")
@@ -928,6 +982,15 @@ def create_task(payload: TaskCreateIn, user: User = Depends(get_current_user), d
                        "Pick a department instead — its leads will triage it.")
         if assigned_to_id is None:
             assigned_to_id = None if payload.assigned_team_id else user.id
+    # SUPPORT on create follows the SAME rule as the lead: naming anybody but yourself is delegation
+    # (models.TaskSupporter). Refused rather than silently dropped — dropping it is the quiet lie that
+    # `assigned_to_id` used to tell, where the form let you pick a colleague, said "created", and put
+    # the card somewhere else. Adding yourself as support on work you raise is always allowed.
+    if payload.support_ids and not may_delegate and set(payload.support_ids) - {user.id}:
+        raise HTTPException(
+            status_code=403,
+            detail="Only a team lead or manager can put somebody else on a task. "
+                   "You can add yourself as support.")
     # Priority is honored from a manager (AM/admin/super) or a team lead; others default to Medium.
     # 🔴 Deliberately NOT `may_delegate`: priority is not delegation, and a lead filing work for
     # another department may still say how urgent it is. Tying it to the team test above would have
@@ -973,7 +1036,8 @@ def create_task(payload: TaskCreateIn, user: User = Depends(get_current_user), d
         client_facing_notes=payload.client_facing_notes,
     )
     db.add(task)
-    db.flush()
+    db.flush()          # need the PK before task_supporters rows can point at it
+    support_added = _apply_support(db, task, payload.support_ids, user) if payload.support_ids else []
     _log(db, task.id, user.id, "created", None, task.status)
     # 🔴 CREATING A CARD IN A COLUMN IS A MOVE INTO IT (2026-08-06). The board offers "Add card" at the
     # foot of EVERY column, and this route wrote `status` as a plain field — it never called
@@ -1013,6 +1077,11 @@ def create_task(payload: TaskCreateIn, user: User = Depends(get_current_user), d
             audit.record(db, actor_id=user.id, table_name="tasks", record_id=task.id,
                          action="share-on-create", new=atrium_payload(task, db))
 
+    for uid in support_added:
+        if uid == user.id:
+            continue
+        notif.notify(db, user_id=uid, type=NOTIF_TASK_ASSIGNED,
+                     title=f"You're supporting: {task.title}", link=f"/tasks?open={task.id}")
     if task.assigned_to_id:
         notif.notify(db, user_id=task.assigned_to_id, type=NOTIF_TASK_ASSIGNED,
                      title=f"New task assigned: {task.title}", link=f"/tasks?open={task.id}")
@@ -1063,6 +1132,17 @@ def update_task(task_id: str, payload: TaskUpdateIn, user: User = Depends(get_cu
     for fld in ("assigned_to_id", "assigned_team_id"):
         if fld in data and data[fld] != getattr(task, fld) and not task_perms.can_reassign(user, task):
             raise HTTPException(status_code=403, detail="Only a team lead or manager can reassign a task")
+    # 🔴 SUPPORT IS DELEGATION when it involves anybody but you (models.TaskSupporter). Popped out of
+    # `data` here and applied AFTER the field loop, because `Task.support_ids` is a read-only property
+    # over a relationship — leaving it in would `setattr` onto a property with no setter and 500.
+    # `None` means the field was never sent, which must leave the supporters alone; `[]` means clear.
+    support_want = data.pop("support_ids", None)
+    if support_want is not None and _support_delegates(task, support_want, user.id) \
+            and not task_perms.can_reassign(user, task):
+        raise HTTPException(
+            status_code=403,
+            detail="Only a team lead or manager can put somebody else on a task. "
+                   "You can add or remove yourself.")
     if "priority" in data and not (task_perms.can_prioritize(user, task) and data["priority"] in task_config.priorities(db)):
         data.pop("priority")
     # 🔴 STEP-LEVEL ASSIGNMENT IS DELEGATION TOO (§2.4e). Until 2026-08-03 the two guards above
@@ -1118,6 +1198,8 @@ def update_task(task_id: str, payload: TaskUpdateIn, user: User = Depends(get_cu
             if old != value:
                 _log(db, task.id, user.id, field, old, value)
             setattr(task, field, value)
+    # Support, after the field loop (it writes rows, not a column) and before the commit below.
+    support_added = _apply_support(db, task, support_want, user) if support_want is not None else []
     # The label FOLLOWS the department (D14). Recomputed after the field loop so it reacts to a
     # team change in this very PATCH, and logged like any other field so the history explains why
     # the chip changed. Re-routing a task is the only thing that can relabel it.
@@ -1140,6 +1222,14 @@ def update_task(task_id: str, payload: TaskUpdateIn, user: User = Depends(get_cu
     if task.assigned_to_id and task.assigned_to_id != prev_assignee:
         notif.notify(db, user_id=task.assigned_to_id, type=NOTIF_TASK_ASSIGNED,
                      title=f"Task assigned to you: {task.title}", link=f"/tasks?open={task.id}")
+    # A new supporter is TOLD, for the same reason a new assignee is: the card silently appears on
+    # their board otherwise, and the whole point of the field is that somebody decided they are on
+    # this work. Never for adding YOURSELF — you already know, and self-notification is noise.
+    for uid in support_added:
+        if uid == user.id:
+            continue
+        notif.notify(db, user_id=uid, type=NOTIF_TASK_ASSIGNED,
+                     title=f"You're supporting: {task.title}", link=f"/tasks?open={task.id}")
     # 🔴 ROUTING TO A TEAM USED TO NOTIFY NOBODY (§2.4c-bis, decision D9). Only `assigned_to_id` was
     # ever notified, so the natural flow — AM files it, routes it to Acquisition, the lead delegates —
     # left the card sitting in a queue waiting for somebody to happen to look. `notify_managers` finds

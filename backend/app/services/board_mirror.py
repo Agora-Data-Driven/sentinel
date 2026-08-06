@@ -144,10 +144,14 @@ def board(db: Session) -> list[dict]:
             "department": _dept_key(team.name if team else None),
             "labels": _loads(t.labels_json, []),
             "lead_id": email(t.assigned_to_id),
-            # Sentinel has no support list — one assignee owns a row, and phase/step owners are the
-            # rest of the team on it. Sent empty rather than invented so the console's person filter
-            # never claims somebody is on a task they only own one step of.
-            "support_ids": [],
+            # 🔴 REAL SUPPORT since 2026-08-06 (models.TaskSupporter). This was hardcoded `[]` with a
+            # comment reading "Sentinel has no support list" — true at the time, and the asymmetry the
+            # field was added to close: Atrium's own cards have carried Lead + many Support since the
+            # bridge was built, so its console has always had a place to render this.
+            # Still ONLY the explicit support list. Phase/step owners are deliberately NOT folded in
+            # here: somebody who owns one step of a card is not "on" it in the sense the console's
+            # person filter means, and inventing that was the reason this went out empty before.
+            "support_ids": [e for e in (email(uid) for uid in t.support_ids) if e],
             "account_manager_id": email(t.account_manager_id),
             "maintasks": [
                 {

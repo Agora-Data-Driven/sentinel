@@ -71,6 +71,14 @@ window.TaskBoard = {
       /* One column on a narrow screen (or a phone), where 920px is not available anyway. */
       @media (max-width:820px){.tb-cols{grid-template-columns:1fr;gap:22px}}
 
+      /* SUPPORT avatars on a card, overlapped. A 288px card cannot afford a row of them, and the
+         negative margin is what keeps four people from pushing the status pills off the end. */
+      .tcard .t-support{display:inline-flex;align-items:center;margin-left:7px}
+      .tcard .t-support .avatar{margin-left:-7px;border:1.5px solid var(--card)}
+      .tcard .t-support-more{margin-left:2px;font-size:10.5px;font-weight:800;color:var(--muted)}
+      /* The "supporting" marker on a By Employee lane, and in the drawer's Support field. */
+      .pill.supporting{background:var(--input);color:var(--sub)}
+
       /* An ORPHAN column: work stranded on a status Manage no longer lists (see columnsFor). Marked
          rather than styled loudly -- it is a temporary state somebody is meant to clear, not an
          error, and the cards inside it must still read as ordinary cards. */
@@ -575,7 +583,12 @@ window.TaskBoard = {
     // A finished task is never overdue: its due date stopped mattering when it was completed.
     if (overdueOnly && !(t.due_date && t.due_date < PH_TODAY && !isDoneStatus(t.status))) return false;
     if (!search) return true;
+    // Searching a person's name finds the cards they SUPPORT too, not just the ones they lead —
+    // otherwise typing a colleague's name silently under-reports what they are on, which is the same
+    // class of half-answer the "My work" button used to give.
     return [t.title, t.assignee && t.assignee.name, t.client_name]
+      .concat((t.support || []).map((p) => p.name))
+      .concat(t.atrium_support_names || [])
       .some((s) => (s || "").toLowerCase().includes(search));
   }
 
@@ -635,10 +648,25 @@ window.TaskBoard = {
   // reassignment, which belongs in the detail drawer, not a drag).
   function renderByEmployee(board, tasks) {
     const byUser = new Map();
-    tasks.forEach((t) => {
-      const key = t.assigned_to_id == null ? "none" : t.assigned_to_id;
+    const push = (key, t) => {
       if (!byUser.has(key)) byUser.set(key, []);
       byUser.get(key).push(t);
+    };
+    tasks.forEach((t) => {
+      // 🔴 A SUPPORTED CARD APPEARS IN EVERY PARTICIPANT'S LANE (2026-08-06), the lead's and each
+      // supporter's, marked so it is never mistaken for work they own. This groups by the same
+      // several-people-per-card truth the Monitor already reports — before support existed the two
+      // could not disagree, because a card had exactly one owner. Leaving supporters out would mean
+      // a person's own lane omitted work that their Monitor row counts and their board shows.
+      //
+      // The consequence, stated out loud because it looks like a bug: **the lane counts add up to
+      // more than the number of cards.** That is the same property `assigned_user_ids` documents and
+      // the Monitor's legend already explains — shared work is counted on every plate it is on.
+      // Do NOT "fix" it by picking one lane per card; that re-hides exactly what this surfaced.
+      const support = t.support_ids || [];
+      if (t.assigned_to_id == null && !support.length) return push("none", t);
+      if (t.assigned_to_id != null) push(t.assigned_to_id, t);
+      support.forEach((uid) => { if (uid !== t.assigned_to_id) push(uid, t); });
     });
     // Order: named people (alpha) first, Unassigned last.
     const keys = [...byUser.keys()].filter((k) => k !== "none")
@@ -664,7 +692,7 @@ window.TaskBoard = {
         <div class="lane-board">${cols.map((st) => `
           <div class="col" data-status="${S.esc(st)}">
             <div class="col-head"><span class="t">${S.esc(st)}</span><span class="c">${byStatus[st].length}</span></div>
-            <div class="col-list" data-status="${S.esc(st)}" data-uid="${k}">${byStatus[st].map(card).join("")}</div>
+            <div class="col-list" data-status="${S.esc(st)}" data-uid="${k}">${byStatus[st].map((t) => card(t, k)).join("")}</div>
           </div>`).join("")}</div>
       </section>`;
     }).join("");
@@ -744,12 +772,17 @@ window.TaskBoard = {
         // that those cards can't reach Cycle/On-time — Atrium sends no completion stamp, so counting
         // them there would mean counting completion off `updated_at` (the §2.4h bug).
         const stepNote = r.stepped ? `<span class="mon-sub" title="Cards led by somebody else, where they own a phase or step">${r.stepped} as steps</span>` : "";
+        // 🔴 Counted and labelled SEPARATELY from `stepped` (2026-08-06). Support used to fall into
+        // that bucket, so a person named on a card as support was described as owning "steps" of it —
+        // possibly zero steps. The label has to match the reason or the row is confidently wrong
+        // about how somebody's day is actually spent.
+        const supportNote = r.supporting ? `<span class="mon-sub" title="Cards somebody else leads, where this person is named as support">${r.supporting} supporting</span>` : "";
         const clientNote = r.client_cards ? `<span class="mon-sub" title="Client cards Atrium owns, led by this person. Atrium sends no completion date, so these are NOT in Cycle or On time.">${r.client_cards} client</span>` : "";
         return `<tr data-uid="${u.id}" tabindex="0">
           <td class="who">${S.avatar(u, "sm")}<div><div class="n">${S.esc(u.name)} ${capacity(r)}</div><div class="r">${S.esc(u.role_label || u.role || "")}</div></div></td>
           <td>${bandPill(r)}</td>
           <td class="wl"><div class="wl-bar">${segs || '<i class="s-none" style="flex:1" title="No open tasks"></i>'}</div></td>
-          <td class="num">${open}${stepNote}${clientNote}</td>
+          <td class="num">${open}${stepNote}${supportNote}${clientNote}</td>
           <td class="num ${r.overdue ? "bad" : ""}">${r.overdue || 0}</td>
           <td class="num ${r.stale_open ? "warn" : ""}">${r.stale_open || 0}</td>
           <td class="num">${num(r.median_cycle_days, "d")}</td>
@@ -764,8 +797,9 @@ window.TaskBoard = {
         Sentinel rows only — Atrium sends no completion date, so a person's <b>client</b> cards
         show under Open but cannot reach those two columns.
         <b>Sitting</b> counts open cards untouched for ${staleDays}+ days.
-        A person can appear on a card they don't lead, so these rows do not add up to the board's
-        total — that is shared work, counted on every plate it is really on.
+        A person can appear on a card they don't lead — as <b>support</b>, or holding a phase or step
+        of it — so these rows do not add up to the board's total. That is shared work, counted on
+        every plate it is really on.
       </p>`;
     const jump = (uid) => { setMode("employee"); requestAnimationFrame(() => focusLane(uid)); };
     S.qsa(".mon-tbl tbody tr").forEach((tr) => {
@@ -903,22 +937,52 @@ window.TaskBoard = {
     return `<button class="btn ghost" id="d-atrium">Share with the client</button>`;
   }
 
-  function card(t) {
+  // The support avatars, beside the lead's. Overlapped rather than laid out in a row: a card is 288px
+  // wide and four full avatars with names would push the status pills off the end. Capped at three
+  // with a "+N", which is what makes a card with eight people on it still read as one card.
+  //
+  // 🔴 Works for BOTH kinds of card, from two different fields (§2, "The task board holds TWO kinds of
+  // card"). An Atrium card's support is Atrium's roster — NAMES only, no Sentinel account and no
+  // photo — so it renders from `atrium_support_names`; a Sentinel row has real users in `support`.
+  // Reading only one of them would silently hide the support on half the board.
+  function supportStack(t) {
+    const people_ = (t.support || []).length
+      ? t.support
+      : (t.atrium_support_names || []).map((n) => ({ name: n }));
+    if (!people_.length) return "";
+    const shown = people_.slice(0, 3);
+    const extra = people_.length - shown.length;
+    const all = people_.map((p) => p.name).join(", ");
+    return `<span class="t-support" title="Support: ${S.esc(all)}">`
+      + shown.map((p) => S.avatar(p, "sm")).join("")
+      + (extra ? `<span class="t-support-more">+${extra}</span>` : "")
+      + `</span>`;
+  }
+
+  // `laneUid` is set only in By Employee, where the same card appears in several lanes. It is what
+  // lets the card say WHICH hat this lane's person wears on it — without that, a supporter's lane
+  // silently lists work whose Lead reads another name, which is indistinguishable from the July 2026
+  // regression where a board showed other people's work.
+  function card(t, laneUid) {
     const dueCls = dueClass(t.due_date);
+    const laneSupports = laneUid != null && laneUid !== "none"
+      && Number(laneUid) !== t.assigned_to_id
+      && (t.support_ids || []).indexOf(Number(laneUid)) >= 0;
     // An Atrium-owned card cannot be bulk-edited (it lives in another system and the endpoint
     // refuses composite ids), so it never gets a checkbox — better than offering one that only
     // ever produces a skip.
     const pickable = selecting && !String(t.id).startsWith("atrium:");
     return `<div class="tcard" draggable="true" data-id="${t.id}">
       ${pickable ? `<input type="checkbox" class="t-pick" aria-label="Select ${S.esc(t.title)}">` : ""}
-      ${t.labels.length ? `<div class="labels">${S.labelPills(t.labels)}</div>` : ""}
+      ${(t.labels.length || laneSupports) ? `<div class="labels">${S.labelPills(t.labels)}${laneSupports
+        ? `<span class="pill supporting" title="Supporting — ${S.esc((t.assignee && t.assignee.name) || "somebody else")} leads this card">supporting</span>` : ""}</div>` : ""}
       <div class="t-title">${S.esc(t.title)}</div>
       <div class="t-meta">${S.priorityDot(t.priority)}<span>${S.esc(t.priority)}</span>
         ${t.due_date ? `<span class="due ${dueCls}">· ${S.fmtDate(t.due_date + "T00:00:00+08:00")}</span>` : ""}
         ${t.client_name ? `<span class="muted">· ${S.esc(t.client_name)}</span>` : ""}
         ${t.created_by ? `<span class="muted" title="Created by ${S.esc(t.created_by.name)}">· by ${S.esc(t.created_by.name.split(" ")[0])}</span>` : ""}</div>
       <div class="t-foot">
-        <div class="row"${t.source === "atrium" && t.assignee ? ` title="Lead on the client's Atrium card — Atrium's roster, not a Sentinel account"` : ""}>${t.assignee ? S.avatar(t.assignee, "sm") + `<span class="sub" style="font-size:12px">${S.esc(t.assignee.name.split(" ")[0])}</span>` : '<span class="muted" style="font-size:12px">Unassigned</span>'}</div>
+        <div class="row"${t.source === "atrium" && t.assignee ? ` title="Lead on the client's Atrium card — Atrium's roster, not a Sentinel account"` : ""}>${t.assignee ? S.avatar(t.assignee, "sm") + `<span class="sub" style="font-size:12px">${S.esc(t.assignee.name.split(" ")[0])}</span>` : '<span class="muted" style="font-size:12px">Unassigned</span>'}${supportStack(t)}</div>
         <div class="icons">${t.on_hold ? '<span class="pill amber" style="font-size:9px" title="Parked — see the card for why">⏸ parked</span>' : ""}${REVIEW_PILL[t.review_state] || ""}${t.atrium_sync_error ? '<span class="pill red" style="font-size:9px" title="The client copy of this card is out of date">⚠ stale</span>' : ""}${t.comment_count ? S.ICON.comment + t.comment_count : ""} ${t.attachment_count ? S.ICON.paperclip + t.attachment_count : ""} ${t.checklist_total ? `<span title="checklist">${t.checklist_done}/${t.checklist_total}</span>` : ""}</div>
       </div>
       ${canDelete(t) ? `<button class="t-del" data-del="${t.id}" title="Delete task" aria-label="Delete task">✕</button>` : ""}
@@ -1185,7 +1249,11 @@ window.TaskBoard = {
               ${field("Account Manager", t.account_manager ? t.account_manager.name : "—")}
               ${field("Created by", t.created_by ? t.created_by.name : "—")}
               ${field("Assigned team", t.assigned_team_name)}
-              ${field("Assigned to", t.assignee ? t.assignee.name : "Unassigned")}
+              ${field("Lead", t.assignee ? t.assignee.name : "Unassigned")}
+              ${/* Only when there IS support — an empty "Support: —" row on the great majority of
+                    cards is the same noise the Campaign field was before it learned to hide. */
+                (t.support || []).length
+                  ? field("Support", t.support.map((p) => p.name).join(", ")) : ""}
             `}
             <div><div class="section-label">Priority</div>${prioritySelect}</div>
           </div>
@@ -1834,6 +1902,25 @@ window.TaskBoard = {
     const LEAD_LOCKED = existing
       ? "Only an account manager — or a team lead on this department's work — can change who leads this."
       : "Pick a department instead: its leads are notified and triage it. Naming a person is a lead or manager call.";
+    // The Support multi-select's options. Mirrors the server's rule (routers/tasks.py
+    // `_support_delegates`): a delegator may pick anyone; everyone else may only toggle THEMSELVES.
+    // 🔴 A colleague already on the card renders `selected disabled` rather than being left out. Both
+    // halves matter: omitting them would make a non-delegator's save look like "remove everyone else"
+    // and lose the whole edit to a 403, while a plain `selected` would let them deselect a colleague
+    // and hit the same 403. A disabled option is still submitted as selected, so the list round-trips
+    // unchanged. (Same reasoning as the breakdown's locked step pickers.)
+    function supportOptions(t) {
+      const current = t.support_ids || [];
+      const mayPick = mayNamePerson(t.assigned_team_id);
+      return people
+        .filter((p) => mayPick || p.id === S.user.id || current.indexOf(p.id) >= 0)
+        .map((p) => {
+          const on = current.indexOf(p.id) >= 0;
+          const locked = !mayPick && p.id !== S.user.id;
+          return `<option value="${p.id}"${on ? " selected" : ""}${locked ? " disabled" : ""}>`
+            + `${S.esc(p.name)}${locked ? " — set by a lead" : ""}</option>`;
+        });
+    }
     // 🔴 "What the client will read" (#t-cnote) sits UP FRONT with the dates, not behind More
     // options: it is the entire content of the client's card. It had no field ANYWHERE in this form
     // until 2026-08-03, so every task published by Send to Atrium reached the client's board with an
@@ -1868,6 +1955,19 @@ window.TaskBoard = {
               <label class="field"><span>Lead (main)</span>
                 <select id="t-assignee"${mayNamePerson(e.assigned_team_id) ? "" : " disabled"} title="${mayNamePerson(e.assigned_team_id) ? "" : S.esc(LEAD_LOCKED)}"><option value="">Unassigned</option>${people.map((p) => `<option value="${p.id}" ${p.id === e.assigned_to_id ? "selected" : ""}>${S.esc(p.name)}</option>`).join("")}</select>
                 <div class="form-hint" id="t-assignee-hint"${mayNamePerson(e.assigned_team_id) ? " hidden" : ""}>${LEAD_LOCKED}</div></label>
+              ${/* SUPPORT — many people, none accountable. The same control the Atrium client-card
+                    form has always had; a Sentinel task had no equivalent, so the only way to put a
+                    second name on one was to invent a checklist step for them — which moved the
+                    progress bar, because that bar is done-steps ÷ total-steps. Staffing a card
+                    changed how finished it looked.
+                    A non-delegator still gets the picker (it lists only THEM, exactly like the
+                    breakdown's step owners) because joining and leaving work yourself has to stay
+                    open or the field is unusable by the people who pick work up. */""}
+              <label class="field" style="grid-column:1/-1"><span>Support — anyone helping, as many as you need</span>
+                <select id="t-support" multiple size="4">${supportOptions(e).join("")}</select>
+                <div class="form-hint">${mayNamePerson(e.assigned_team_id)
+                  ? "They see the card on their board and it counts toward their workload. The Lead stays accountable for it."
+                  : "You can add or remove yourself. Naming a colleague is a lead or manager call."}</div></label>
               ${!existing ? `<label class="field" style="grid-column:1/-1"><span>Service type</span><select id="t-svc"><option value="">Custom (blank)</option></select></label>
               <div class="field" style="grid-column:1/-1"><div class="form-hint">Pick a department, then a service type. The phases, steps, and labels are created for you. Choose Custom (blank) to start empty.</div></div>
               <div class="field" style="grid-column:1/-1" id="t-svc-preview" hidden></div>` : ""}
@@ -1976,6 +2076,12 @@ window.TaskBoard = {
         // The client-safe note. Sent as "" rather than null when cleared, so emptying the box
         // actually clears the client's card instead of leaving the old text stranded there.
         client_facing_notes: S.qs("#t-cnote").value,
+        // SUPPORT. Always sent as an array — `[]` means "nobody", which is a real edit (removing the
+        // last supporter). The server treats an ABSENT field as "leave them alone", so sending null
+        // here would make clearing the list impossible; the same distinction `client_facing_notes`
+        // above makes between "" and null.
+        support_ids: Array.from(S.qs("#t-support").options)
+          .filter((o) => o.selected).map((o) => Number(o.value)),
       };
       // `status` is sent on CREATE only (the column a new card lands in). An edit never sends it —
       // moving a card is the board's job, not this form's. See `newStatus`.

@@ -70,6 +70,20 @@ python seed.py                        # builds all tables + realistic sample dat
 uvicorn app.main:app --reload         # http://localhost:8000
 ```
 
+**Live reload is on by default and needs no setup** (added 2026-08-06). `--reload` restarts Python;
+the other half watches `frontend/` and pushes to the browser, because a vanilla-JS frontend with no
+build step has nothing else watching it:
+
+| You save | What happens |
+|---|---|
+| a `.css` file | the stylesheet is **swapped in place** — no reload, so the open task card, the board's filters and your scroll position all survive |
+| a `.js` / `.html` file | the page reloads |
+| a `.py` file | uvicorn restarts, and the browser reloads itself when it reconnects (it compares a per-process boot id) |
+
+`routers/dev.py` + `static/js/devreload.js`. **It cannot run in production** — see §5 for the three
+independent gates and the one page that opts out (`/kiosk`, which must still boot offline from its
+service-worker cache). Switch it off locally with `DEV_RELOAD=false`.
+
 Log in from the **Dev login** dropdown, no password. Seeded users:
 
 | Login | Role | Sees |
@@ -146,6 +160,7 @@ deploy/            deploy.ps1, seed-job.ps1, DEPLOY.md
 | `meta.py` | Enums/constants for the frontend |
 | `cron.py` | Scheduled job endpoints |
 | `stream.py` | SSE push to the browser |
+| `dev.py` | **Local-development live reload** (`GET /api/dev/reload`, SSE). 404s in production — §5 |
 | `internal.py` | **HMAC-signed** service-to-service (Mastery Engine ↔ Sentinel, Atrium → Sentinel). Purposes: `user-lookup`, `academy-people`, `holistic-profile`, `growth-detail`, `mentor-search`, `task-request`, `task-feedback`, **`board`**, **`work-digest`**, **`work-detail`** |
 
 Adding a router? Register it in the tuple at [main.py:322](backend/app/main.py#L322).
@@ -154,6 +169,7 @@ Adding a router? Register it in the tuple at [main.py:322](backend/app/main.py#L
 
 | | Sentinel row | Atrium-owned card |
 |---|---|---|
+| staffing | ONE lead (`assigned_to_id`) + **many supporters** (`task_supporters`, since 2026-08-06) | ONE lead + many support, as roster **emails** |
 | id | an integer PK | the string `atrium:<client_key>:<task_id>` |
 | stored in | Postgres `tasks` | that client's Atrium workspace JSON — **Atrium is the source of truth** |
 | reaches the board via | `task_card` | `atrium_tasks.fetch_tasks()` → `as_board_card` (fail-soft: an Atrium outage just hides them) |
@@ -395,7 +411,7 @@ alembic revision -m "add cardio to gym schedule"   # then hand-write the upgrade
 alembic upgrade head
 ```
 
-Existing migrations are in `backend/alembic/versions/` — **18 revisions** as of 2026-07-31
+Existing migrations are in `backend/alembic/versions/` — **29 revisions** as of 2026-08-06
 (e.g. `a1c7e93f5b60_gym_cardio.py`) — copy their style. If prod's `create_all` safety net
 already built your table, the migration must be **existence-guarded** — copy
 `a9c4e7f2d5b8_service_templates_task_vocab.py` (added 2026-07-29 for exactly that case).
@@ -434,6 +450,99 @@ Two layers can serve stale JS/CSS; both are handled, don't undo either:
    and rendered "undefined" KPIs. Fixed by `Cache-Control: no-cache` on all non-API responses
    ([middleware.py](backend/app/middleware.py), pinned by `test_security_headers.py`) plus
    `cache: "no-cache"` on the SW's fetches. ETag revalidation keeps it a cheap 304.
+
+### 🔴 A task has ONE lead and MANY supporters — support widens "assigned" and nothing else
+
+`models.TaskSupporter`, 2026-08-06. The asymmetry it closes: an **Atrium client card has carried Lead
++ many Support since the bridge was built**, while a Sentinel row had exactly one ownership field
+(`assigned_to_id`). Two kinds of card sit on the same board (§2) and only one of them could say who
+was helping. So the only way to put a second name on a Sentinel task was to **invent a checklist step
+for them** — and the progress bar is `done steps / total steps`, which means *staffing a card changed
+how finished it looked*. Adding a helper made the work read as less complete.
+
+🔴 **`assigned_user_ids` is the ONLY place support joins the model.** That one function already
+answered "who is this work on?" for the board, `mine`, My work, By Employee and the Monitor, so all
+five inherited support at once. Adding it to any of them individually would have been the second copy
+of a rule whose first duplication caused the July 2026 "nothing on you right now" bug — see the
+`is_assigned` section above. If you add a sixth surface, ask that function; do not re-derive.
+
+| Support DOES get | Support does NOT get |
+|---|---|
+| the card on their board (`can_view` → `is_assigned`), and edit/move with it | accountability — `assigned_to_id` stays the one neck |
+| counted in `mine`, "My work", their By Employee lane, their Monitor row | the lead's right to tick **somebody else's** step (`can_tick_step`) |
+| a `supporting` flag on the card so a surface can say which hat they wear | claiming the card out of its team's triage queue |
+| `support_ids` in the staff mirror Atrium's console pulls | anything in the CLIENT projection — `task_bridge.SAFE` is six fields and staffing is not one |
+
+Five rules, each of which is a decision somebody will otherwise re-lit igate:
+
+- 🔴 **Naming somebody is DELEGATION**, guarded where the field is WRITTEN
+  (`tasks._support_delegates`), never in the UI. This board has shipped that exact hole twice —
+  `maintasks[].assignee_id` (2026-08-03) and comparing owner SETS instead of slots (2026-08-05) — both
+  times because a new way to put a name on a card walked past the check. The diff is the **symmetric
+  difference minus the actor**, so "add me and drop a colleague" is still refused.
+- **Adding or removing YOURSELF is always allowed**, mirroring self-assignment on a step — otherwise
+  the field is unusable by the people who pick work up. It is **not a way in**: `update_task` checks
+  `can_edit` before it reads any field, so you can only join a card already on your board. Without
+  that, support would be a hole straight through `can_view`.
+- 🔴 **The team triage queue still tests `assigned_to_id` alone.** A card with supporters and no lead
+  stays in the queue — support is help, not ownership, and the alternative is work with helpers but no
+  owner quietly leaving the one list the team watches. Same reasoning for send-back and bulk-claim.
+- **`?assignee_id=` stays a lead-only FIELD filter.** "What is on Jerome?" is a precise question;
+  "who is on this card" is a different one. Widening one must never silently widen the other.
+- **`support_ids: None` means "not sent"; `[]` means "remove everyone".** A plain list default on the
+  schema would make every unrelated PATCH silently clear the support list.
+
+Two consequences that look like bugs and are not: **By Employee lane counts add up to more than the
+number of cards** (a supported card appears in the lead's lane and each supporter's, marked
+"supporting"), which is the same shared-work property the Monitor legend already explains; and the
+Monitor counts `supporting` **separately from `stepped`**, because support used to fall into that
+bucket and the UI renders it as "N as steps" — describing somebody as owning steps they may not own.
+
+Covered by `tests/test_task_support.py` (22 cases, weighted toward the refusals).
+
+### 🟡 Live reload is local-only, and the localhost test in `app.js` is one of the gates
+
+Added 2026-08-06 (`routers/dev.py`, `frontend/static/js/devreload.js`, §1). It exists because the
+frontend has **no build step** — a deliberate choice (§8) whose cost was that nothing watched
+`frontend/`, so every CSS tweak needed a manual refresh that the service worker could then answer
+from cache. It is not a bundler and does not introduce one: the server polls mtimes, the browser
+listens on SSE, and a `.css` save is hot-swapped in place rather than reloaded.
+
+🔴 **THREE INDEPENDENT GATES keep it out of production. Don't collapse them to one.**
+
+| # | Gate | Where |
+|---|---|---|
+| 1 | `settings.dev_reload_active` is False whenever `environment == "production"`, and there is **no `allow_dev_reload_in_prod`** (deliberately unlike `dev_login_enabled`) | `config.py` |
+| 2 | the client script is only ever loaded when `location.hostname` is localhost — **a Cloud Run host can never satisfy it**, so a misconfigured deploy still serves a page that never asks | `app.js` |
+| 3 | the router is registered **unconditionally** and every handler re-checks gate 1 **per request** | `routers/dev.py` |
+
+Gate 3 is the counter-intuitive one: a conditional `include_router` would make the route's existence
+depend on a setting's value at import time, which is how an endpoint ends up "gone" in one worker and
+live in another. It answers **404, not 403** — a 403 confirms the endpoint exists.
+
+Do **not** widen gate 2 to a LAN IP or a hostname pattern. Its whole value is that it cannot be
+satisfied from anywhere but the machine doing the editing.
+
+Two more things worth knowing before changing it:
+
+- **The service worker is NOT registered on localhost** (`app.js`), and `devreload.js` unregisters any
+  worker left over from an earlier session. This is required, not tidiness: `sw.js` caches CSS/JS and
+  falls back to that cache, so a reload could serve the file you just edited *from before you edited
+  it* — the local face of the "deployed but the browser shows the old version" bug above, with no
+  `CACHE` bump available to clear it because nobody edits `sw.js` on every save.
+- 🔴 **`/kiosk` OPTS OUT and behaves exactly as it does in production**, service worker and all. The
+  kiosk's defining requirement is that it **boots offline from cache**, so it is the one page whose
+  caching has to be exercisable locally — unregistering its worker to make styling faster would mean
+  that path is only ever tested in production, on a tablet, on the day it matters.
+- The stream carries a **per-process boot id**, which is what makes a mixed Python+frontend save work.
+  A reconnecting stream rebuilds its baseline from disk, so a frontend file saved while uvicorn was
+  down is already in the new baseline and compares equal forever — its change event can never arrive.
+  Keying the reload off the restart instead means it fires for a reason that is still observable.
+
+Covered by `tests/test_dev_reload.py` (17 cases, weighted toward the gates). 🔴 Those tests drive the
+SSE generator **directly**, not through `TestClient`: `request.is_disconnected()` never becomes True
+under TestClient's portal, so `client.stream()` on the 200 path hangs the suite forever rather than
+failing. The 404 paths are safe to test over HTTP because they raise before streaming starts.
 
 ### 🔴 `can_edit` is NOT `can_view`, and `can_edit_atrium` is NOT `can_view_atrium`
 
