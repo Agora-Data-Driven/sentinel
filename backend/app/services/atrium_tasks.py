@@ -483,7 +483,8 @@ def resolve_client(clients: list, client_key: str, client_name: str = ""):
     return partial[0] if len(partial) == 1 else None
 
 
-def as_board_card(t: dict, client: object = None, owner: dict | None = None) -> dict:
+def as_board_card(t: dict, client: object = None, owner: dict | None = None,
+                  viewer_id: int | None = None) -> dict:
     """Map an Atrium task onto the shape the Kanban board already renders (serializers.task_card).
 
     `client` is the matching Sentinel Client row (resolved via Client.atrium_client_id) when there
@@ -511,6 +512,25 @@ def as_board_card(t: dict, client: object = None, owner: dict | None = None) -> 
 
     `owner_label` supplies the middle row's name from the email, which is what made the board stop
     saying "Unassigned" even before Atrium's side shipped resolved names.
+
+    🔴 **`mine` and `on_hold` reach the card too (2026-08-06)** — both were simply missing, and a
+    missing key is falsy, so both read on the board as a confident "no":
+
+    * **`mine`** is the ONE definition of "is this work on me" (AGENTS.md §5,
+      `task_perms.is_assigned` shipped as `mine`). Client cards had no such key, so the board's
+      **My work** button dropped every one of them. That was correct while an Atrium owner was only
+      ever a roster email — and wrong from the day `services/atrium_identity` began resolving that
+      email to a Sentinel user, because from then on the SAME resolved owner put the card in that
+      person's **By Employee** lane, counted it toward them on the **Monitor**, and printed their
+      photo on it. Three surfaces said "yours", one said "not yours". It derives from `owner` for
+      exactly that reason: one resolution, four answers. `viewer_id=None` omits the key entirely
+      (absent, never a hardcoded ``False``) — the same contract `serializers.task_card` follows when
+      no viewer is passed.
+      There is deliberately no `my_slots`: an Atrium card's breakdown has no Sentinel step owners to
+      count, and faking a 0 would make the "N steps on you" pill lie.
+    * **`on_hold`** is what the board renders the "⏸ parked" pill from. `as_task_detail` has always
+      mapped it, so a client card paused in Atrium said "On hold" in its own drawer while the card
+      on the board looked perfectly live.
     """
     lead_name = (t.get("lead_name") or "").strip() or owner_label(t.get("lead_id") or "")
     # 🔴 `owner` is the SENTINEL user this card's Atrium lead resolves to (`services/atrium_identity`),
@@ -525,7 +545,13 @@ def as_board_card(t: dict, client: object = None, owner: dict | None = None) -> 
     support_names = [n for n in (t.get("support_names") or []) if str(n).strip()]
     if not support_names:
         support_names = [n for n in (owner_label(s) for s in (t.get("support_ids") or [])) if n]
+    # "Is this work on me?" — from the RESOLVED owner, so this card agrees with its own By Employee
+    # lane and its own Monitor row. Omitted (not False) when the caller passed no viewer.
+    mine: dict = {}
+    if viewer_id is not None:
+        mine = {"mine": bool(owner and owner.get("id") == viewer_id)}
     return {
+        **mine,
         "id": ATRIUM_ID_PREFIX + (t.get("atrium_id") or ""),
         "title": t.get("title") or "",
         "status": t.get("status") or "To Do",
@@ -560,6 +586,9 @@ def as_board_card(t: dict, client: object = None, owner: dict | None = None) -> 
         "checklist_done": t.get("checklist_done") or 0,
         # Atrium's client_facing IS the Atrium-visibility flag from Sentinel's point of view.
         "atrium_visible": bool(t.get("client_facing")),
+        # The board's "⏸ parked" pill reads this. Absent until 2026-08-06, so a client card paused in
+        # Atrium looked live on the board and said "On hold" the moment you opened it.
+        "on_hold": bool(t.get("on_hold")),
         "source": "atrium",
         "atrium_client_key": t.get("client_key") or "",
         "atrium_task_id": t.get("task_id") or "",

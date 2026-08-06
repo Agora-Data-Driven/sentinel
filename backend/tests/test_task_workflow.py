@@ -326,6 +326,80 @@ def test_dragging_a_parked_card_out_of_blocked_ends_the_hold(client, auth, task,
     assert r.json()["hold_reason"] is None
 
 
+# 🔴 …and the same rule INTO the column (task_workflow._sync_hold, 2026-08-06). Only the exit was
+# implemented, so the board carried two kinds of parked card: one that went through `park()` and one
+# that was dragged, whose `on_hold` was still False — no ⏸ pill, no remembered column, and a drawer
+# still offering "Park…" for a card already in the parked column. `push_stage` moved the CLIENT's card
+# to the blocked stage either way, so the client read "Paused" for work this row denied was paused.
+
+def test_dragging_a_card_INTO_blocked_puts_it_on_hold(client, auth, task, lead):
+    auth(lead)
+    r = client.patch(f"/api/tasks/{task.id}/status", json={"status": C.TASK_BLOCKED})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["on_hold"] is True
+    # Where Resume will put it back — the column it actually came from, exactly as park records it.
+    assert body["resume_to"] == C.TASK_IN_PROGRESS
+    # No reason, because nobody was asked for one. Inventing "dragged here" would be worse.
+    assert body["hold_reason"] is None
+
+
+def test_a_dragged_hold_resumes_to_where_it_came_from(client, auth, task, lead):
+    auth(lead)
+    client.patch(f"/api/tasks/{task.id}/status", json={"status": C.TASK_BLOCKED})
+    r = client.post(f"/api/tasks/{task.id}/resume")
+    assert r.status_code == 200
+    assert r.json()["status"] == C.TASK_IN_PROGRESS
+    assert r.json()["on_hold"] is False
+
+
+def test_dragging_into_blocked_does_not_overwrite_a_typed_reason(client, auth, task, lead, db):
+    """Park it with a reason, then move it WITHIN the blocked stage. The reason is somebody's typing;
+    a generic status move must not clear it. (This is what the `not task.on_hold` guard protects.)"""
+    auth(lead)
+    client.post(f"/api/tasks/{task.id}/park", json={"reason": "Waiting on brand assets"})
+    # A second blocked column, so a move can stay inside the stage. `sort_order` puts it AFTER the
+    # seeded blocked column, so `status_for_stage("blocked")` — and therefore Park — is unaffected.
+    db.add(TaskVocabItem(kind="status", name="Snagged", key="snagged", stage="blocked",
+                         sort_order=99))
+    db.commit()
+    r = client.patch(f"/api/tasks/{task.id}/status", json={"status": "Snagged"})
+    assert r.status_code == 200
+    assert r.json()["on_hold"] is True
+    assert r.json()["hold_reason"] == "Waiting on brand assets"
+    assert r.json()["resume_to"] == C.TASK_IN_PROGRESS      # still the column it originally left
+
+
+# --- creating a card straight into a column is a MOVE into it (2026-08-06) -----------------------
+# `create_task` wrote `status` as a plain field and never called `on_status_change`. The board offers
+# "Add card" at the foot of EVERY column, so a task created in a done column got no `completed_at` —
+# and per §2.4h a completed row with no stamp is counted on NO day: it sat in Completed while being
+# invisible to Throughput, the on-time rate and cycle time, and showed "—" in Past work.
+
+def test_creating_a_task_in_a_done_column_stamps_completed_at(client, auth, lead):
+    auth(lead)
+    r = client.post("/api/tasks", json={"title": "Retro-filed deliverable",
+                                        "status": C.TASK_COMPLETED})
+    assert r.status_code == 200
+    assert r.json()["completed_at"] is not None
+
+
+def test_creating_a_task_in_the_blocked_column_puts_it_on_hold(client, auth, lead):
+    auth(lead)
+    r = client.post("/api/tasks", json={"title": "Blocked on legal", "status": C.TASK_BLOCKED})
+    assert r.status_code == 200
+    assert r.json()["on_hold"] is True
+
+
+def test_creating_an_ordinary_task_stamps_nothing(client, auth, lead):
+    """The guard rails only fire for the two loaded stages — a normal create is untouched."""
+    auth(lead)
+    r = client.post("/api/tasks", json={"title": "Write the brief", "status": C.TASK_TODO})
+    assert r.status_code == 200
+    assert r.json()["completed_at"] is None
+    assert r.json()["on_hold"] is False
+
+
 def test_parking_moves_the_clients_card_to_the_blocked_stage(
         client, auth, make_user, task, db, monkeypatch):
     _published(db, task)

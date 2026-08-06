@@ -257,10 +257,12 @@ def list_tasks(
         for a in atrium_tasks.fetch_tasks():
             if (a.get("client_key", ""), str(a.get("task_id") or "")) in linked:
                 continue
+            # `viewer_id` is what puts `mine` on the card — the board's "My work" button dropped every
+            # client card without it, while the same card sat in that person's By Employee lane.
             card = atrium_tasks.as_board_card(
                 a, atrium_tasks.resolve_client(clients, a.get("client_key", ""),
                                                a.get("client_name", "")),
-                _atrium_owner(owners, a))
+                _atrium_owner(owners, a), viewer_id=user.id)
             if status and card["status"] != status:
                 continue
             if priority and card["priority"] != priority:
@@ -973,6 +975,21 @@ def create_task(payload: TaskCreateIn, user: User = Depends(get_current_user), d
     db.add(task)
     db.flush()
     _log(db, task.id, user.id, "created", None, task.status)
+    # 🔴 CREATING A CARD IN A COLUMN IS A MOVE INTO IT (2026-08-06). The board offers "Add card" at the
+    # foot of EVERY column, and this route wrote `status` as a plain field — it never called
+    # `task_workflow.on_status_change`. So a task created straight into a done column got no
+    # `completed_at`, and per §2.4h a completed row with no stamp is counted on NO day: it sat in
+    # Completed while being invisible to Throughput, the on-time rate and cycle time, and showed "—"
+    # in Past work. One created in the blocked column was "parked" with `on_hold` False — the same
+    # split-brain `_sync_hold` fixes for drags.
+    #
+    # `old=""` is the honest previous status: there wasn't one. It resolves to no stage, so nothing in
+    # `on_status_change` takes a "was_done"/"was_blocked" branch — which is right, because a brand-new
+    # card is not leaving anywhere. The review gate is deliberately NOT applied: `review_blocks` is
+    # about a claim that existing work is finished, and refusing to let anyone FILE already-delivered
+    # work (which is what creating in Completed usually is) would only push them to create it in To Do
+    # and drag it across, arriving at the same place with an extra step.
+    task_workflow.on_status_change(db, task, "", task.status, user)
     db.commit()
     audit.record(db, actor_id=user.id, table_name="tasks", record_id=task.id, action="create",
                  new={"title": task.title, "status": task.status})

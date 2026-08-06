@@ -312,23 +312,74 @@
   // ---------------- Modal ----------------
   // modal({ title, body, footer, wide })            -> centered dialog
   // modal({ ..., drawer: true })                     -> right-side slide-in panel (full height)
-  function modal({ title, body, footer, wide, drawer }) {
-    let ov = qs("#modal-ov");
-    if (!ov) { ov = document.createElement("div"); ov.id = "modal-ov"; document.body.appendChild(ov); }
+  // modal({ ..., onClose })                          -> run when it closes, HOWEVER it was closed
+  //
+  // 🔴 MODALS STACK. Until 2026-08-06 this reused ONE `#modal-ov` element and overwrote its
+  // innerHTML, so opening a second dialog DESTROYED the first — and closing the second left
+  // nothing behind, because there was only ever one overlay to hide. The task board nests five
+  // deep (Park / Request changes / Send back / Delete confirm / Past work all open over an open
+  // task), so "Cancel" on any of them threw the user out of the card they were reading. Worse, the
+  // card's own close never ran, which is how `?open=<id>` was left in the URL pointing at a modal
+  // that was no longer on screen — a refresh then reopened a card the user had cancelled out of.
+  //
+  // Each call now owns its own overlay node, appended and removed. Three consequences to keep:
+  //   • `onClose` fires on EVERY path (button, ✕, backdrop, Esc). Callers that must undo something
+  //     on close — the board's `?open=` param — hook it here instead of re-pointing three closers
+  //     and hoping they found them all.
+  //   • Esc closes the TOP modal only, via ONE document listener held for as long as the stack is
+  //     non-empty. The old code added a listener per modal that removed itself only if Escape was
+  //     actually pressed, so every dialog closed by a button leaked one for the page's lifetime.
+  //   • `id="modal-x"` is per-overlay and therefore NO LONGER UNIQUE while a stack is open.
+  //     Scope any lookup of it to the `root` this returns; a bare `qs("#modal-x")` finds the
+  //     BOTTOM one.
+  const modalStack = [];
+  let modalKeyHandler = null;
+
+  function closeTopModal() {
+    const top = modalStack[modalStack.length - 1];
+    if (top) top.close();
+  }
+
+  function modal({ title, body, footer, wide, drawer, onClose }) {
+    const ov = document.createElement("div");
     ov.className = "overlay" + (drawer ? " drawer-ov" : "");
     ov.innerHTML = `<div class="modal ${wide ? "wide" : ""}${drawer ? " as-drawer" : ""}">
       <div class="modal-head"><h3>${esc(title)}</h3><span class="x-close" id="modal-x">${ICON.x}</span></div>
       <div class="modal-body">${body}</div>
       ${footer ? `<div class="modal-foot">${footer}</div>` : ""}</div>`;
+    document.body.appendChild(ov);
+    // `.overlay` is display:none until `.open`, and there is no transition, so this can go on in
+    // the same frame the node is inserted.
     ov.classList.add("open");
-    // Tuck the coach FAB away while a modal/drawer is open so it can't sit over the footer buttons.
+    // Tuck the coach FAB away while anything is open so it can't sit over the footer buttons.
     const coachFab = qs("#coach-fab"); if (coachFab) coachFab.classList.add("hidden");
-    const close = () => { ov.classList.remove("open"); const f = qs("#coach-fab"); if (f) f.classList.remove("hidden"); };
+
+    let closed = false;
+    const entry = { close: () => close() };
+    function close() {
+      // Double-close is ordinary here: a caller's own button handler runs alongside the ✕ and the
+      // backdrop, and `act()` on the board closes a modal that a failed request may already have.
+      if (closed) return;
+      closed = true;
+      const i = modalStack.indexOf(entry);
+      if (i >= 0) modalStack.splice(i, 1);
+      ov.remove();
+      // The FAB comes back only when the LAST layer goes, or cancelling a confirm would pop it
+      // back over the task modal still sitting underneath.
+      if (!modalStack.length) {
+        const f = qs("#coach-fab"); if (f) f.classList.remove("hidden");
+        if (modalKeyHandler) { document.removeEventListener("keydown", modalKeyHandler); modalKeyHandler = null; }
+      }
+      if (onClose) onClose();
+    }
+
     qs("#modal-x", ov).onclick = close;
     ov.onclick = (e) => { if (e.target === ov) close(); };
-    // Esc closes the drawer/modal.
-    const onKey = (e) => { if (e.key === "Escape") { close(); document.removeEventListener("keydown", onKey); } };
-    document.addEventListener("keydown", onKey);
+    modalStack.push(entry);
+    if (!modalKeyHandler) {
+      modalKeyHandler = (e) => { if (e.key === "Escape") closeTopModal(); };
+      document.addEventListener("keydown", modalKeyHandler);
+    }
     return { close, root: ov };
   }
 
