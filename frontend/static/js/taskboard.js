@@ -1159,10 +1159,13 @@ window.TaskBoard = {
   // wide and four full avatars with names would push the status pills off the end. Capped at three
   // with a "+N", which is what makes a card with eight people on it still read as one card.
   //
-  // 🔴 Works for BOTH kinds of card, from two different fields (§2, "The task board holds TWO kinds of
-  // card"). An Atrium card's support is Atrium's roster — NAMES only, no Sentinel account and no
-  // photo — so it renders from `atrium_support_names`; a Sentinel row has real users in `support`.
-  // Reading only one of them would silently hide the support on half the board.
+  // 🔴 Works for BOTH kinds of card, and since 2026-08-06 from the SAME field. `support` is now
+  // published for a client card too: the server resolves each Atrium roster email to the Sentinel
+  // user who is that person (`services/atrium_identity`, the same ladder the lead has used since
+  // 2026-08-05), so a supporter with a photo finally shows it instead of grey initials beside a
+  // lead who had one. Anyone who does NOT resolve arrives as an id-less name and still renders —
+  // named, never faked. `atrium_support_names` stays as the fallback for a payload built without a
+  // resolver, and reading only one of the two would silently hide support on half the board.
   const supportOf = (t) => ((t.support || []).length
     ? t.support
     : (t.atrium_support_names || []).map((n) => ({ id: null, name: n })));
