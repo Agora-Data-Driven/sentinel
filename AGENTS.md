@@ -521,6 +521,16 @@ The fix is that there is no second copy of the rule, in any language:
 | the definition | `task_perms.is_assigned(user, task)` — the card's lead **or** any phase/step of its breakdown. Public for this reason; it is what `can_view` already asked |
 | how a surface gets it | `serializers.task_card(t, db, viewer=user)` → **`mine`** (bool) + **`my_slots`** (how many breakdown slots that viewer holds) |
 | who passes a viewer | `list_tasks`. `people.py`'s profile card does not — it lists somebody *else's* work, so the two fields are **absent, never a hardcoded `false`** |
+| an **Atrium** card | `atrium_tasks.as_board_card(..., viewer_id=user.id)` → `mine` from the **resolved owner** (`services/atrium_identity`). No `my_slots`: an Atrium breakdown has no Sentinel step owners, so a `0` would make the "N steps on you" pill lie |
+
+🔴 **The Atrium half was missing until 2026-08-06, and a missing key is falsy.** Client cards carried
+no `mine`, so the board's **My work** button dropped every one of them. That was correct while an
+Atrium owner was only ever a roster email — and wrong from the day `atrium_identity` began resolving
+that email to a Sentinel user, because from then on the SAME resolved owner put the card in that
+person's **By Employee** lane, counted it toward them on the **Monitor**, and printed their photo on
+it. Three surfaces said "yours" and one button said "not yours". Whenever a new surface answers this
+question, it has to answer it for **both kinds of card** (§2, "The task board holds TWO kinds of
+card") or it will disagree with the three that already do. Pinned by `tests/test_atrium_identity.py`.
 
 Three rules if you touch this:
 
@@ -800,9 +810,22 @@ not: each is written by a RULE, and setting one directly reproduces the bug it w
 |---|---|---|
 | `completed_at` | `on_status_change` | Stamped by the TRANSITION into a done column, cleared on the way out. **Never typed, never backfilled.** |
 | `archived` | `archive` / `unarchive` | Only COMPLETED work may be filed. Reopening a filed task un-files it. |
-| `on_hold` + `hold_reason` + `resume_to` | `park` / `resume` | Three coupled fields, one writer — which is why `on_hold`/`hold_reason` stay in `atrium_tasks.ONLY_ATRIUM` even though Sentinel has the columns. A PATCH could otherwise park a card with no memory of where it came from. |
+| `on_hold` + `hold_reason` + `resume_to` | `park` / `resume` / **`_sync_hold`** | Three coupled fields, and only ever written TOGETHER — which is why `on_hold`/`hold_reason` stay in `atrium_tasks.ONLY_ATRIUM` even though Sentinel has the columns. A PATCH could otherwise park a card with no memory of where it came from. `_sync_hold` (2026-08-06) is the second writer and obeys the same rule: it derives all three from the stage the card just moved into. |
 | `review_state` + `reviewer_id` | `submit_review` / `approve` / `request_changes` | Approval gates entry into a done column and is **spent** by that completion. |
 | `start_date` | ordinary field | The one plain one — and it had to be REMOVED from `ONLY_ATRIUM`, which was silently dropping it from every Sentinel PATCH. |
+
+🔴 **A STAGE'S RULE HAS TO FIRE FROM EVERY DOOR INTO IT — two were missing (2026-08-06).**
+The rules above were only ever run by `_apply_status`, so two ways of putting a card in a column
+skipped them entirely and produced rows the rest of the board then read as facts:
+
+| Door | What it produced | Fix |
+|---|---|---|
+| **Dragging INTO the blocked column** | a card in the parked column with `on_hold` **False** — no ⏸ pill, no remembered column, a drawer still offering "Park…". `push_stage` moved the CLIENT's card to the blocked stage anyway, so the client read "Paused" for work this row denied was paused | `task_workflow._sync_hold` — the entry half of a rule that only had an exit half |
+| **"Add card" at the foot of a column** (`create_task`) | a task created in a done column with **no `completed_at`** → per §2.4h it is counted on NO day, so it sat in Completed while being invisible to Throughput, the on-time rate, cycle time, and showing "—" in Past work. Created in the blocked column: "parked" with `on_hold` False | `create_task` calls `on_status_change(db, task, "", status, user)`. `old=""` resolves to no stage, so no "was_done"/"was_blocked" branch fires — a new card is not leaving anywhere |
+
+The review gate is deliberately NOT applied on create: `review_blocks` is about a claim that existing
+work is finished, and refusing to let anyone file already-delivered work would just push them to
+create it in To Do and drag it across, arriving at the same place with an extra step.
 
 Four consequences worth knowing before changing anything here:
 

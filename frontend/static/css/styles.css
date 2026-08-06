@@ -6,6 +6,23 @@
    the badge is amber-orange (Atrium's is a green→violet gradient).
    ===================================================================== */
 
+/* 🔴 `hidden` MEANS HIDDEN — one rule, because this trap has now bitten three times (2026-08-06).
+   `[hidden]{display:none}` lives in the UA stylesheet, and ANY author rule that sets `display`
+   beats it regardless of specificity. So every class in here that sets a display value silently
+   disarms the attribute on every element carrying it, and the JS that toggles `el.hidden` becomes
+   a no-op with no error anywhere. Found in the wild on:
+     • `#tb-bulkbar` (.row)        — an empty white strip under the board's filters
+     • `#t-campaign-wrap` (label.field) — the Campaign field showed on EVERY task, which defeated
+       the whole 2026-08-04 "only offer Campaign when the service is campaign-shaped" change
+     • `#tb-req-n` (.pill)         — the Requests badge rendered a violet "0" (and an empty violet
+       blob before the count loaded) on a queue the code intended to show no badge for at all
+   The three targeted guards below (`#tb-bulkbar[hidden]`, `.ctxbar[hidden]`, `.badge-sentinel[hidden]`)
+   predate this and are now redundant; they are kept because they cost nothing and they document
+   where the bug was found. `!important` is deliberate and is the only one in this file: it has to
+   outrank any future `display` rule, which is the entire point. Nothing may "simplify" it away —
+   put a class on the element instead if you need an element that is hidden but still laid out. */
+[hidden] { display: none !important; }
+
 :root {
   /* Core brand — Agora website green (bright, premium) */
   --green: #54B948; --green-d: #3A9A2F; --green-2: #6BCB4E; --green-bg: #E9F7E6;

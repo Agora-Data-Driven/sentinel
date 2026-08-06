@@ -70,6 +70,12 @@ window.TaskBoard = {
       .tb-cols > *{min-width:0}
       /* One column on a narrow screen (or a phone), where 920px is not available anyway. */
       @media (max-width:820px){.tb-cols{grid-template-columns:1fr;gap:22px}}
+
+      /* An ORPHAN column: work stranded on a status Manage no longer lists (see columnsFor). Marked
+         rather than styled loudly -- it is a temporary state somebody is meant to clear, not an
+         error, and the cards inside it must still read as ordinary cards. */
+      .col.col-orphan > .col-head .t{color:var(--warn)}
+
       .tcard{position:relative}
       .tcard .t-del{position:absolute;top:7px;right:7px;width:24px;height:24px;border:none;border-radius:7px;
         background:transparent;color:var(--muted);font-size:13px;line-height:1;cursor:pointer;
@@ -257,40 +263,88 @@ window.TaskBoard = {
   // "My work" is the default M8 asks for, built in rather than saved: it is the same answer for
   // everyone and should not need setting up once per person. A TOGGLE, because the one thing you do
   // after narrowing the board to your own work is widen it back, and there was no way to.
-  S.qs("#f-mine").onclick = () => applyView(mineOnly ? { mode } : {
-    filters: {}, search: "", overdueOnly: false, mineOnly: true, mode: "board",
-  });
+  //
+  // 🔴 It is ONLY that toggle now (2026-08-06). It used to route through `applyView`, which resets
+  // every filter — so turning My work ON silently threw away the client and department you had
+  // picked, and turning it OFF threw them away a second time instead of restoring the board you
+  // came from. "Show me only mine" is one predicate over the cards already on screen (`t.mine`,
+  // client-side), so it composes with the other filters rather than replacing them: My work +
+  // Overdue + one client is a real question, and it was unaskable.
+  S.qs("#f-mine").onclick = () => {
+    mineOnly = !mineOnly;
+    S.qs("#f-mine").classList.toggle("on", mineOnly);
+    render();
+  };
 
+  // --- Saved views: pick / save / manage ---------------------------------------------------------
+  // 🔴 NO `prompt()` (2026-08-06). Saving used a native prompt, and DELETING one made you TYPE the
+  // name of the view you wanted gone — from a list rendered inside the prompt's own text. It is the
+  // only place in the app that asks anybody to retype an identifier, native dialogs are styled by
+  // the browser and not by us, and some embedded contexts suppress them entirely (leaving a control
+  // that looks live and does nothing). Both go through S.modal, like Park and Request changes.
   const viewSel = S.qs("#f-view");
   function refreshViewList() {
     const names = Object.keys(readViews()).sort((a, b) => a.localeCompare(b));
     viewSel.innerHTML = `<option value="">Saved views…</option>`
       + names.map((n) => `<option value="${S.esc(n)}">${S.esc(n)}</option>`).join("")
-      + (names.length ? `<option value="__del">Delete a view…</option>` : "");
+      + (names.length ? `<option value="__manage">Manage views…</option>` : "");
   }
   refreshViewList();
   viewSel.onchange = () => {
     const pick = viewSel.value;
     viewSel.value = "";
     if (!pick) return;
-    if (pick === "__del") {
-      const name = prompt("Delete which view?\n\n" + Object.keys(readViews()).join("\n"));
-      if (!name) return;
-      const all = readViews();
-      if (!(name in all)) { S.toast("No view called " + name, "err"); return; }
-      delete all[name];
-      writeViews(all); refreshViewList(); S.toast("View deleted", "ok");
-      return;
-    }
+    if (pick === "__manage") return manageViews();
     applyView(readViews()[pick]);
   };
+
+  function manageViews() {
+    const names = Object.keys(readViews()).sort((a, b) => a.localeCompare(b));
+    const mv = S.modal({
+      title: "Saved views",
+      body: names.length
+        ? `<div class="card">${names.map((n) => `<div class="row between" style="padding:10px 12px;border-bottom:1px solid var(--line-soft);gap:12px">
+             <strong style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${S.esc(n)}</strong>
+             <button class="btn sm danger" data-vdel="${S.esc(n)}">Delete</button></div>`).join("")}</div>`
+        : `<div class="empty">No saved views yet.</div>`,
+      footer: `<button class="btn primary" id="mv-close">Done</button>`,
+    });
+    S.qs("#mv-close").onclick = mv.close;
+    S.qsa("[data-vdel]", mv.root).forEach((b) => b.onclick = () => {
+      const all = readViews();
+      delete all[b.dataset.vdel];
+      writeViews(all);
+      refreshViewList();
+      S.toast("View deleted", "ok");
+      mv.close();
+      if (Object.keys(all).length) manageViews();   // stay in the list while there is more to prune
+    });
+  }
+
   S.qs("#f-save-view").onclick = () => {
-    const name = (prompt("Save the current filters as:") || "").trim();
-    if (!name || name === "__del") return;
-    const all = readViews();
-    all[name] = currentView();
-    writeViews(all); refreshViewList();
-    S.toast(`Saved "${name}"`, "ok");
+    const existing = Object.keys(readViews()).sort((a, b) => a.localeCompare(b));
+    const sv = S.modal({
+      title: "Save this view",
+      body: `<div class="stack" style="gap:12px">
+        <div class="form-hint">Saves the filters, the search box and the current tab — on this browser only, because these are your working habits, not org configuration.</div>
+        <label class="field"><span>Name</span><input id="sv-name" placeholder="e.g. Overdue · Acquisition"></label>
+        ${existing.length ? `<div class="sub" style="font-size:12px">Reusing a name overwrites it: ${existing.map((n) => S.esc(n)).join(" · ")}</div>` : ""}
+      </div>`,
+      footer: `<button class="btn ghost" id="sv-cancel">Cancel</button><button class="btn primary" id="sv-ok">Save view</button>`,
+    });
+    S.qs("#sv-cancel").onclick = sv.close;
+    const box = S.qs("#sv-name", sv.root);
+    box.focus();
+    const save = () => {
+      const name = box.value.trim();
+      if (!name) { S.toast("Give the view a name", "err"); return; }
+      const all = readViews();
+      all[name] = currentView();
+      writeViews(all); refreshViewList(); sv.close();
+      S.toast(`Saved "${name}"`, "ok");
+    };
+    S.qs("#sv-ok").onclick = save;
+    box.onkeydown = (ev) => { if (ev.key === "Enter") save(); };
   };
 
   // --- M7 bulk actions ---------------------------------------------------------------------
@@ -459,16 +513,24 @@ window.TaskBoard = {
         await after("Accepted — it is on the board now");
       } catch (err) { b.disabled = false; S.toast(err.detail || "Couldn't accept that", "err"); }
     });
-    S.qsa("[data-rq-decline]").forEach((b) => b.onclick = async () => {
-      const reason = (prompt("Why are we not doing this? The client is owed a reason.") || "").trim();
-      if (!reason) return;
-      b.disabled = true;
-      try {
-        await S.api(`/api/tasks/requests/${b.dataset.rqDecline}/decline`,
-                    { method: "POST", body: { reason } });
-        await after("Declined, with the reason on record");
-      } catch (err) { b.disabled = false; S.toast(err.detail || "Couldn't decline that", "err"); }
-    });
+    // Declining asks the same way Park and Request changes ask — `askReason`, not a native prompt.
+    // This is prose a CLIENT is owed, so a single-line browser dialog was the wrong box for it in
+    // more than one sense: it can't be styled, and it invites one terse line.
+    S.qsa("[data-rq-decline]").forEach((b) => b.onclick = () => askReason({
+      title: "Decline this request",
+      hint: "The client sees this reason on their own board. \"We are not doing this, because…\" is an answer they are owed.",
+      label: "Why are we not doing this?",
+      confirm: "Decline it",
+      require: true,
+      onSubmit: async (reason) => {
+        b.disabled = true;
+        try {
+          await S.api(`/api/tasks/requests/${b.dataset.rqDecline}/decline`,
+                      { method: "POST", body: { reason } });
+          await after("Declined, with the reason on record");
+        } catch (err) { b.disabled = false; S.toast(err.detail || "Couldn't decline that", "err"); }
+      },
+    }));
   }
 
   if (S.qs("#tb-requests")) {
@@ -498,8 +560,13 @@ window.TaskBoard = {
   // The text search is applied client-side so typing never re-hits the server.
   function matches(t) {
     // "My work" — the server's `mine` (task_perms.is_assigned: the card's lead OR any phase/step of
-    // its breakdown), never `t.assigned_to_id === S.user.id`. An Atrium-owned card carries no flag
-    // and correctly drops out: its owners are roster emails, not Sentinel users.
+    // its breakdown), never `t.assigned_to_id === S.user.id`.
+    // 🔴 An Atrium-owned card carries the flag too, since 2026-08-06. It used to be omitted, with the
+    // reasoning that its owners are roster emails rather than Sentinel users — true when that was
+    // written, and obsolete the day `services/atrium_identity` started resolving an Atrium lead to a
+    // real Sentinel person. From then on a client card you lead showed YOUR face on the board, sat in
+    // YOUR By Employee lane and counted toward YOU on the Monitor, while this one button insisted it
+    // wasn't yours. `as_board_card` sets `mine` from the same resolved owner all three of those read.
     if (mineOnly && !t.mine) return false;
     // OVERDUE (M9, WP 5.4). The board only ever TINTED the due chip; there was no way to ask
     // "what is late?" — the one question a morning triage starts with. Client-side because the
@@ -524,16 +591,38 @@ window.TaskBoard = {
     return renderBoard(board, tasks);
   }
 
+  // 🔴 A status with no column USED TO SWALLOW ITS CARDS. `byStatus` grew a bucket for any status
+  // the board didn't know, and then only `STATUSES` was rendered — so the cards in it vanished with
+  // no error and no empty state (AGENTS.md §5, "Removing a board column is TWO moves"). That is the
+  // documented failure mode of deleting a task_vocab row while work still holds it, and the board
+  // was the surface that hid it. Any leftover status now gets its own column at the end, labelled,
+  // so the work is visible and can be dragged somewhere real. Never silently.
+  function columnsFor(tasks) {
+    const extra = [];
+    tasks.forEach((t) => {
+      if (STATUSES.indexOf(t.status) < 0 && extra.indexOf(t.status) < 0) extra.push(t.status);
+    });
+    return STATUSES.concat(extra);
+  }
+
   function renderBoard(board, tasks) {
-    const byStatus = Object.fromEntries(STATUSES.map((s) => [s, []]));
+    const cols = columnsFor(tasks);
+    const byStatus = Object.fromEntries(cols.map((s) => [s, []]));
     tasks.forEach((t) => (byStatus[t.status] || (byStatus[t.status] = [])).push(t));
     board.className = "board";
-    board.innerHTML = STATUSES.map((st) => `
-      <div class="col" data-status="${S.esc(st)}">
+    board.innerHTML = cols.map((st) => {
+      // An orphan column is work stranded on a retired status. It renders so nobody loses it, but it
+      // takes no NEW cards: `create_task` 400s a status that isn't in `task_config.statuses`, so an
+      // Add card here could only ever fail. Drag the cards out and the column disappears by itself.
+      const orphan = STATUSES.indexOf(st) < 0;
+      return `
+      <div class="col${orphan ? " col-orphan" : ""}" data-status="${S.esc(st)}">
         <div class="col-head"><span class="t">${S.esc(st)}</span><span class="c">${byStatus[st].length}</span></div>
+        ${orphan ? `<div class="form-hint" style="margin:0 0 8px;border-left:3px solid var(--warn)">This column no longer exists in Manage → Task Fields. Move this work somewhere real and it will disappear.</div>` : ""}
         <div class="col-list" data-status="${S.esc(st)}">${byStatus[st].map(card).join("")}</div>
-        ${canCreate ? `<button class="col-add" data-status="${S.esc(st)}">${S.ICON.plus}<span>Add card</span></button>` : ""}
-      </div>`).join("");
+        ${(canCreate && !orphan) ? `<button class="col-add" data-status="${S.esc(st)}">${S.ICON.plus}<span>Add card</span></button>` : ""}
+      </div>`;
+    }).join("");
     wireDnD();
     wireAddButtons();
     wireCardClicks();
@@ -559,17 +648,20 @@ window.TaskBoard = {
     if (!keys.length) { board.innerHTML = `<div class="empty">No tasks match.</div>`; return; }
 
     board.className = "swimlanes";
+    // Same columns in every lane (they have to line up), derived from the WHOLE filtered set so an
+    // orphan status doesn't swallow one person's cards the way it used to swallow the board's.
+    const cols = columnsFor(tasks);
     board.innerHTML = keys.map((k) => {
       const person = k === "none" ? null : peopleById[k];
       const list = byUser.get(k);
-      const byStatus = Object.fromEntries(STATUSES.map((s) => [s, []]));
+      const byStatus = Object.fromEntries(cols.map((s) => [s, []]));
       list.forEach((t) => (byStatus[t.status] || (byStatus[t.status] = [])).push(t));
       const head = person
         ? `${S.avatar(person, "sm")}<div class="ln"><div class="n">${S.esc(person.name)}</div><div class="r">${S.esc(person.role_label || person.role || "")}</div></div>`
         : `<div class="avatar sm">–</div><div class="ln"><div class="n">Unassigned</div></div>`;
       return `<section class="lane" data-uid="${k}">
         <div class="lane-head">${head}<span class="lane-count">${list.length}</span></div>
-        <div class="lane-board">${STATUSES.map((st) => `
+        <div class="lane-board">${cols.map((st) => `
           <div class="col" data-status="${S.esc(st)}">
             <div class="col-head"><span class="t">${S.esc(st)}</span><span class="c">${byStatus[st].length}</span></div>
             <div class="col-list" data-status="${S.esc(st)}" data-uid="${k}">${byStatus[st].map(card).join("")}</div>
@@ -775,6 +867,42 @@ window.TaskBoard = {
     return done ? `<button class="btn ghost" id="d-archive">File to Past work</button>` : "";
   }
 
+  // The bridge control. The two kinds of card mean OPPOSITE things here, which is why one shape
+  // could never serve both:
+  //
+  //   an Atrium card  — already in Atrium. The control is a real TOGGLE: it flips whether the client
+  //                     sees the card on their Progress tab, and flipping it back is meaningful.
+  //   a Sentinel row  — pushed one way, client-safe fields only. Once published there is no un-share
+  //                     (nothing deletes a card the client has already seen), so a shared row has no
+  //                     action left to offer.
+  //
+  // 🔴 So a shared Sentinel row renders a CHIP, not a button (2026-08-06). "✓ Shared with the
+  // client" was a `btn` and stayed clickable: it read as a state, and clicking it silently
+  // re-published and wrote another AtriumApproval row. (`task_bridge.publish` is idempotent, so it
+  // never created a second card — it was misleading, not destructive.) Re-pushing already happens
+  // automatically on every edit that touches a client-visible field, and a push that FAILED is
+  // covered by its own Retry button, so there is nothing for a human to press here.
+  //
+  // 🔴 And an unshared row with NO CLIENT gets a disabled button, not a live one. `publish()` returns
+  // "That task has no Atrium client linked" for it every time, so the button could only ever 502 —
+  // the one thing this file says a control must never do ("so the bar never promises a 403").
+  // Disabled-with-a-reason rather than hidden: a manager looking for the share control deserves to
+  // find out WHY it can't be used, not to wonder where it went.
+  function atriumControl(t, isAtrium) {
+    if (isAtrium) {
+      return `<button class="btn ghost" id="d-atrium">${t.atrium_visible
+        ? "✓ Client can see this" : "Share with client"}</button>`;
+    }
+    if (t.atrium_shared) {
+      return `<span class="pill blue" title="Client-safe fields are re-sent automatically whenever you edit them">✓ Shared with the client</span>`;
+    }
+    if (!t.client_id) {
+      return `<button class="btn ghost" id="d-atrium" disabled
+        title="This task has no client, so there is no workspace to share it into. Set a client under Edit → More options first.">Share with the client</button>`;
+    }
+    return `<button class="btn ghost" id="d-atrium">Share with the client</button>`;
+  }
+
   function card(t) {
     const dueCls = dueClass(t.due_date);
     // An Atrium-owned card cannot be bulk-edited (it lives in another system and the endpoint
@@ -794,7 +922,16 @@ window.TaskBoard = {
         <div class="icons">${t.on_hold ? '<span class="pill amber" style="font-size:9px" title="Parked — see the card for why">⏸ parked</span>' : ""}${REVIEW_PILL[t.review_state] || ""}${t.atrium_sync_error ? '<span class="pill red" style="font-size:9px" title="The client copy of this card is out of date">⚠ stale</span>' : ""}${t.comment_count ? S.ICON.comment + t.comment_count : ""} ${t.attachment_count ? S.ICON.paperclip + t.attachment_count : ""} ${t.checklist_total ? `<span title="checklist">${t.checklist_done}/${t.checklist_total}</span>` : ""}</div>
       </div>
       ${canDelete(t) ? `<button class="t-del" data-del="${t.id}" title="Delete task" aria-label="Delete task">✕</button>` : ""}
-      ${!readOnly ? `<select class="t-move" data-move="${t.id}" aria-label="Move ${S.esc(t.title)} to another column">${STATUSES.map((s) => `<option ${s === t.status ? "selected" : ""}>${S.esc(s)}</option>`).join("")}</select>` : ""}</div>`;
+      ${!readOnly ? `<select class="t-move" data-move="${t.id}" aria-label="Move ${S.esc(t.title)} to another column">${moveOptions(t.status)}</select>` : ""}</div>`;
+  }
+
+  // The move control has to be able to show where the card IS, even when that is a status the board
+  // no longer offers (see columnsFor). Without its own status in the list a stranded card's select
+  // silently displayed the FIRST column instead — so it read as "To Do" while sitting somewhere
+  // else, and the equality guard in wireMoveSelects would swallow the first attempt to move it.
+  function moveOptions(current) {
+    const list = STATUSES.indexOf(current) < 0 ? [current].concat(STATUSES) : STATUSES;
+    return list.map((s) => `<option ${s === current ? "selected" : ""}>${S.esc(s)}</option>`).join("");
   }
 
   // The mobile/keyboard twin of drag-and-drop (WP 5.5). It routes through the SAME `moveCard`, so
@@ -873,15 +1010,39 @@ window.TaskBoard = {
     try {
       await S.api(`/api/tasks/${id}/status`, { method: "PATCH", body: { status: toStatus } });
       if (!opts.silent) {
-        S.toast("Moved to " + toStatus, "ok", {
-          action: { label: "Undo", onClick: () => moveCard(cardEl, fromList, fromStatus, toList, toStatus, { silent: true }) },
-        });
+        // 🔴 UNDO RE-RESOLVES THE DOM. It used to close over `cardEl`/`fromList`, which are only
+        // valid until the next render — and this board re-renders on its own, from the SSE `task`
+        // event, 400ms after anyone else touches anything. Clicking Undo then moved a DETACHED node:
+        // the PATCH landed, so the card really did go back, but the board on screen still showed it
+        // in the new column until the next load. Looking the id up at CLICK time means Undo either
+        // finds the live card or does the move without a stale animation, never against a ghost.
+        S.toast("Moved to " + toStatus, "ok", { action: { label: "Undo", onClick: () => undoMove(id, fromStatus) } });
       }
     } catch (err) {
       fromList.appendChild(cardEl);   // roll back the optimistic move
       updateCounts();
       S.toast(err.detail || "Couldn't move task", "err");
     }
+  }
+
+  // Undo, resolved against the board as it is NOW rather than as it was when the toast appeared.
+  // Falls back to a plain PATCH + reload when the card is no longer rendered (a filter changed, or
+  // the move took it out of view) — the move must still happen; only the animation is optional.
+  async function undoMove(id, toStatus) {
+    const cardEl = S.qs(`.tcard[data-id="${id}"]`);
+    const toList = cardEl
+      ? [...(cardEl.closest(".lane") || document).querySelectorAll(".col-list")]
+        .find((l) => l.dataset.status === toStatus)
+      : null;
+    if (cardEl && toList) {
+      const fromList = cardEl.closest(".col-list");
+      moveCard(cardEl, toList, toStatus, fromList, fromList.dataset.status, { silent: true });
+      return;
+    }
+    try {
+      await S.api(`/api/tasks/${id}/status`, { method: "PATCH", body: { status: toStatus } });
+      load();
+    } catch (err) { S.toast(err.detail || "Couldn't undo that move", "err"); }
   }
 
   // "Add card" at the foot of each column opens the SAME full form as Edit (not an inline
@@ -903,20 +1064,17 @@ window.TaskBoard = {
     history.replaceState(null, "", location.pathname + (u.toString() ? "?" + u : ""));
   }
 
-  // S.modal's ✕ / overlay-click / Esc all call ITS internal close directly, so wrapping the returned
-  // `close` is not enough — the param would survive those three paths. Re-point them here instead.
+  // 🔴 `onClose` — ONE hook, instead of re-pointing three closers (2026-08-06).
+  // This used to re-point S.modal's ✕ and backdrop by hand and register its own Escape listener,
+  // because S.modal called its internal close directly and wrapping the returned `close` missed
+  // those paths. It missed some anyway: the Escape listener was only removed if Escape was pressed
+  // (so it leaked one per card opened), and nothing covered the case that actually bit — a NESTED
+  // modal (Park, Request changes, Delete) closing the card underneath it. `?open=<id>` then stayed
+  // in the URL with no card on screen, and a refresh reopened a card the user had cancelled out of.
+  // S.modal now fires `onClose` on every path, and a nested modal no longer closes this one at all.
   function openTaskModal(title, body, footer, id) {
-    const m0 = S.modal({ title, body, footer, wide: true });
-    const close = () => { setOpenParam(null); m0.close(); };
-    if (S.qs("#modal-x")) S.qs("#modal-x").onclick = close;
-    m0.root.onclick = (e) => { if (e.target === m0.root) close(); };
-    document.addEventListener("keydown", function esc(e) {
-      if (e.key !== "Escape") return;
-      document.removeEventListener("keydown", esc);
-      setOpenParam(null);          // S.modal's own Esc handler does the closing
-    });
     setOpenParam(id);
-    return { close };
+    return S.modal({ title, body, footer, wide: true, onClose: () => setOpenParam(null) });
   }
 
   async function openDetail(id) {
@@ -1055,11 +1213,22 @@ window.TaskBoard = {
     // hold a hold, a review or a filing, and faking one would split ownership of the record again.
     // Only the buttons that CAN act appear — the server enforces the same rules either way.
     const done = isDoneStatus(t.status);
+    // 🔴 FINISHED WORK IS NOT PENDING WORK (2026-08-06). Park and Submit for review were offered on
+    // EVERY unarchived card, including one sitting in a done column — so a delivered task showed
+    // seven footer buttons, two of which mean nothing: parking work that is finished, and asking for
+    // approval of a completion that already happened (the approval a review authorises is SPENT by
+    // that completion — task_workflow.on_status_change). Neither is refused by the server, which is
+    // precisely why they had to come out of the UI: they would both have "worked".
+    // A card that comes back OUT of a done column gets both buttons again, because it is live work
+    // again — the test is where the card is now, not what it once was.
     const lifecycle = (isAtrium || readOnly) ? "" : [
+      // Nothing to park about finished work. Resume always shows while a hold is on, whatever column
+      // the card is in, or a card parked and then dragged straight to done could never be un-parked.
       t.on_hold ? `<button class="btn ghost" id="d-resume">Resume</button>`
-                : `<button class="btn ghost" id="d-park">Park…</button>`,
-      // Nothing to submit once it is approved, and nothing to submit about filed work.
-      (!t.archived && t.review_state !== "approved" && t.review_state !== "pending")
+                : (done ? "" : `<button class="btn ghost" id="d-park">Park…</button>`),
+      // Nothing to submit once it is approved, nothing to submit about filed work, and nothing to
+      // submit about work that is already done.
+      (!done && !t.archived && t.review_state !== "approved" && t.review_state !== "pending")
         ? `<button class="btn ghost" id="d-submit">Submit for review</button>` : "",
       (canReview(t) && t.review_state === "pending")
         ? `<button class="btn ghost" id="d-approve">Approve</button>
@@ -1070,12 +1239,10 @@ window.TaskBoard = {
       // I am the one who could triage it. Once anyone owns it, reassigning is the honest move.
       (canReview(t) && !t.assigned_to_id && t.assigned_team_id && t.created_by_id
         && t.created_by_id !== S.user.id)
-        ? `<button class="btn ghost" id="d-sendback">Not ours…</button>` : "",
+        ? `<button class="btn ghost" id="d-sendback" title="Send this back to whoever filed it — it leaves your team's queue">Not ours…</button>` : "",
     ].join("");
     const footer = `${readOnly ? "" : `<button class="btn ghost" id="d-edit">Edit</button>`}${lifecycle}
-      ${canManage ? `<button class="btn ghost" id="d-atrium">${isAtrium
-          ? (t.atrium_visible ? "✓ Client can see this" : "Share with client")
-          : (t.atrium_shared ? "✓ Shared with the client" : "Share with the client")}</button>` : ""}
+      ${canManage ? atriumControl(t, isAtrium) : ""}
       ${(canManage && !isAtrium && t.atrium_sync_error) ? `<button class="btn danger" id="d-atrium-retry">Retry the client push</button>` : ""}
       ${canDelete(t) ? `<button class="btn danger" id="d-delete">Delete</button>` : ""}
       <button class="btn primary" id="d-close">Close</button>`;
@@ -1172,8 +1339,11 @@ window.TaskBoard = {
       const unowned = t.maintasks.reduce(
         (n, m) => n + m.subs.filter((s) => !s.assignee_id).length, 0);
       const teamName = teamsById[t.assigned_team_id] ? teamsById[t.assigned_team_id].name : null;
+      // "Department", not "Routed to": this select and the Edit form's Department field write the
+      // SAME column (`assigned_team_id`), and calling it two different things in two places one
+      // click apart made them read as two different settings that might disagree. One name.
       return `<div class="row bd-route" style="gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 10px">
-        <span class="sub" style="font-size:12px">Routed to</span>
+        <span class="sub" style="font-size:12px">Department</span>
         <select id="bd-team" ${canReassign(t) ? "" : "disabled"} title="${canReassign(t) ? "Send this task to a department" : "Only a team lead or manager can re-route work"}">
           <option value="">Nobody yet</option>
           ${teams.map((tm) => `<option value="${tm.id}" ${tm.id === t.assigned_team_id ? "selected" : ""}>${S.esc(tm.name)}</option>`).join("")}
@@ -1395,9 +1565,15 @@ window.TaskBoard = {
   const pausedColumn = () =>
     Object.keys(STAGE_OF).find((n) => STAGE_OF[n] === "blocked") || "the blocked";
 
-  // A small "why?" prompt, shared by Park and Request changes. Both write prose that has to be
-  // recorded, and both are refusals of a sort, so they ask the same way.
-  function askReason({ title, hint, label, confirm, onSubmit }) {
+  // A small "why?" prompt, shared by Park, Request changes, Send back and Decline. All four write
+  // prose that has to be recorded, and all four are refusals of a sort, so they ask the same way.
+  // `require: true` for the one whose text a CLIENT reads — an empty decline reason is the thing the
+  // reverse channel exists to prevent. The other three allow a blank: parking work you will explain
+  // in person is real, and forcing a sentence there only teaches people to type ".".
+  //
+  // Since 2026-08-06 this opens ON TOP of the card rather than replacing it (S.modal stacks), so
+  // Cancel returns you to the task you were reading instead of closing it.
+  function askReason({ title, hint, label, confirm, require: needsText, onSubmit }) {
     const rm = S.modal({
       title,
       body: `<div class="stack" style="gap:12px">
@@ -1407,9 +1583,11 @@ window.TaskBoard = {
       footer: `<button class="btn ghost" id="rz-cancel">Cancel</button><button class="btn primary" id="rz-ok">${S.esc(confirm)}</button>`,
     });
     S.qs("#rz-cancel").onclick = rm.close;
-    S.qs("#rz-text").focus();
-    S.qs("#rz-ok").onclick = () => {
-      const text = S.qs("#rz-text").value.trim();
+    const box = S.qs("#rz-text", rm.root);
+    box.focus();
+    S.qs("#rz-ok", rm.root).onclick = () => {
+      const text = box.value.trim();
+      if (needsText && !text) { S.toast("A reason is required here", "err"); return; }
       rm.close();
       onSubmit(text);
     };
@@ -1425,9 +1603,11 @@ window.TaskBoard = {
       footer: `<button class="btn primary" id="pw-close">Close</button>`,
     });
     S.qs("#pw-close").onclick = pm.close;
-    // app.js:298 — the modal's body container. The LAST one: a task drawer may already be open
-    // behind this, and qs() would hand back its body instead of ours.
-    const box = S.qsa(".overlay.drawer-ov .modal-body").pop();
+    // Scoped to OUR overlay. This used to take the last `.overlay.drawer-ov .modal-body` in the
+    // document, on the theory that a task drawer might be open behind it — which was guesswork about
+    // DOM order back when every modal shared one element. `S.modal` returns its own root now, so ask
+    // it directly and the answer can't be another dialog's body.
+    const box = pm.root.querySelector(".modal-body");
     let rows;
     try { rows = await S.api("/api/tasks?archived=1"); }
     catch (err) { box.innerHTML = `<div class="empty">${S.esc(err.detail || "Couldn't load past work.")}</div>`; return; }
@@ -1468,7 +1648,7 @@ window.TaskBoard = {
       footer: `<button class="btn primary" id="fm-close">Close</button>`,
     });
     S.qs("#fm-close").onclick = fm.close;
-    const box = S.qsa(".overlay.drawer-ov .modal-body").pop();
+    const box = fm.root.querySelector(".modal-body");     // scoped, as in showPastWork
     let rows;
     try { rows = await S.api("/api/tasks/filed-by-me"); }
     catch (err) { box.innerHTML = `<div class="empty">${S.esc(err.detail || "Couldn't load that list.")}</div>`; return; }
@@ -1536,9 +1716,20 @@ window.TaskBoard = {
 
   // The Edit form for an Atrium-owned card. A SEPARATE form from taskForm on purpose: it edits
   // Atrium's own fields (its department vocabulary, roster owners as emails, launch + start dates,
-  // the hold switch, client visibility) and Sentinel's field names would either be ignored or mean
-  // something subtly different. Both forms save through the same PATCH /api/tasks/{id}; the router
-  // routes by id, and the bridge translates (services/atrium_tasks.FIELD_MAP).
+  // the hold switch) and Sentinel's field names would either be ignored or mean something subtly
+  // different. Both forms save through the same PATCH /api/tasks/{id}; the router routes by id, and
+  // the bridge translates (services/atrium_tasks.FIELD_MAP).
+  //
+  // 🔴 TWO FIELDS WERE REMOVED FROM THIS FORM ON 2026-08-06, both because they were second copies
+  // of a control that already exists one click away — and two controls over one value can display
+  // opposite states in the same session:
+  //   • Status — the board moves cards. Drag, the card's own move select and the bulk bar all go
+  //     through `moveCard`/`/status`. This form had to send it as a SECOND request (in Atrium a
+  //     status change is a stage MOVE with its own endpoint and its own history entry), so a failure
+  //     there left every other field already saved and the card in its old column: a half-save with
+  //     an error toast over it. There is now one way to move a card, and it cannot half-fail.
+  //   • Client visibility — the footer's own "✓ Client can see this" toggle owns it (atriumControl).
+  //     A checkbox here duplicated the one decision on this card that a client can actually see.
   function atriumTaskForm(t) {
     const depts = t.atrium_departments || [];
     const roster = t.atrium_roster || [];
@@ -1557,19 +1748,16 @@ window.TaskBoard = {
         <label class="field"><span>Start date</span><input type="date" id="a-start" value="${t.start_date || ""}"></label>
         <div class="field" style="grid-column:1/-1">
           <details class="tk-extra"${extrasOpen ? " open" : ""}>
-            <summary>More options${extrasOpen ? "" : " — department, lead, priority, visibility…"}</summary>
+            <summary>More options${extrasOpen ? "" : " — department, lead, priority, hold…"}</summary>
             <div class="grid" style="grid-template-columns:1fr 1fr;gap:16px;margin-top:12px">
               <label class="field"><span>Department</span><select id="a-dept"><option value="">—</option>${depts.map((d) => `<option value="${S.esc(d.key)}" ${d.key === t.atrium_department ? "selected" : ""}>${S.esc(d.label)}</option>`).join("")}</select></label>
               <label class="field"><span>Lead</span><select id="a-lead"><option value="">Unassigned</option>${roster.map((p) => `<option value="${S.esc(p.id)}" ${p.id === t.atrium_lead_id ? "selected" : ""}>${S.esc(p.name)}</option>`).join("")}</select></label>
               <label class="field" style="grid-column:1/-1"><span>Support — pick as many as you need</span><select id="a-support" multiple size="4">${roster.map((p) => `<option value="${S.esc(p.id)}" ${support.indexOf(p.id) >= 0 ? "selected" : ""}>${S.esc(p.name)}</option>`).join("")}</select></label>
               ${isAM ? `<label class="field"><span>Priority</span><select id="a-priority">${vocab.priorities.map((p) => `<option ${p === (t.priority || "Medium") ? "selected" : ""}>${p}</option>`).join("")}</select></label>` : ""}
-              <label class="field"><span>Status</span><select id="a-status">${STATUSES.map((s) => `<option ${s === t.status ? "selected" : ""}>${s}</option>`).join("")}</select></label>
               <label class="field"><span>Content type</span><input id="a-ctype" value="${S.esc(t.content_type || "")}"></label>
               <label class="field"><span>Service charge ($)</span><input id="a-charge" inputmode="decimal" value="${S.esc(t.service_charge || "")}" placeholder="0" pattern="[0-9]*[.]?[0-9]*" title="Optional — numbers only (e.g. 4200 or 4200.50)"></label>
               <label class="field" style="grid-column:1/-1"><span>Deliverable URL (client-safe)</span><input id="a-deliv" value="${S.esc(t.deliverable_url || "")}"></label>
               <label class="field" style="grid-column:1/-1"><span>${S.ICON.lock}Internal notes</span><textarea id="a-inotes">${S.esc(t.internal_notes || "")}</textarea></label>
-              ${canManage ? `<div class="field" style="grid-column:1/-1"><span>Client visibility</span>
-                <label class="row" style="gap:8px;margin-top:6px"><input type="checkbox" id="a-visible" ${t.atrium_visible ? "checked" : ""}><span class="sub">Show this card on the client's Progress tab</span></label></div>` : ""}
               <div class="field" style="grid-column:1/-1"><span>On hold</span>
                 <label class="row" style="gap:8px;margin-top:6px"><input type="checkbox" id="a-hold" ${t.on_hold ? "checked" : ""}><span class="sub">Paused — the client only ever sees "Paused", never the reason</span></label></div>
               <label class="field" style="grid-column:1/-1"><span>${S.ICON.lock}Hold reason</span><input id="a-holdwhy" value="${S.esc(t.hold_reason || "")}" placeholder="Internal — why it's paused"></label>
@@ -1598,17 +1786,12 @@ window.TaskBoard = {
         hold_reason: S.qs("#a-holdwhy").value,
       };
       if (isAM) body.priority = S.qs("#a-priority").value;
-      // Only send client visibility when this user may set it — the server 403s anyone else, and a
-      // form that can't change it shouldn't be able to fail because of it.
-      if (canManage && S.qs("#a-visible")) body.atrium_visible = S.qs("#a-visible").checked;
-      const status = S.qs("#a-status").value;
+      // ONE request. `atrium_visible` and `status` both used to be sent from here — see the note on
+      // this function for why neither belongs in a form.
       const btn = S.qs("#a-save");
       btn.disabled = true;
       try {
         await S.api("/api/tasks/" + t.id, { method: "PATCH", body });
-        // Status is not one of those fields: in Atrium it is a stage MOVE, with its own history
-        // entry and its own endpoint. Send it separately, and only when the form changed it.
-        if (status !== t.status) await S.api(`/api/tasks/${t.id}/status`, { method: "PATCH", body: { status } });
         S.toast("Card updated", "ok"); m.close(); load();
       } catch (err) { btn.disabled = false; S.toast(err.detail || "Couldn't save that card", "err"); }
     };
@@ -1617,10 +1800,17 @@ window.TaskBoard = {
   function taskForm(existing, presetStatus) {
     if (existing && existing.source === "atrium") return atriumTaskForm(existing);
     const e = existing || {};
-    if (presetStatus && !e.status) e.status = presetStatus;  // column "Add card" pre-picks the status
+    // 🔴 STATUS IS NOT A FORM FIELD (2026-08-06). The board MOVES cards — drag, the card's own move
+    // select, the bulk bar's "Move to…" — and all three go through `moveCard`, which is optimistic,
+    // undoable and rolls back on failure. A fourth way to set the same column, buried under More
+    // options and saved with a batch of unrelated edits, had none of that and gave the field two
+    // different save semantics one click apart. Where a NEW card lands is still a real choice, and
+    // it is still made: the column's own "Add card" passes `presetStatus`, and the New Task button
+    // means the first column. Editing a card no longer sends `status` at all.
+    const newStatus = presetStatus || (STATUSES.length ? STATUSES[0] : "To Do");
     // Only spring the advanced block open when an EXISTING task already carries one of those
     // values -- otherwise editing would silently hide something the user themselves set. A new
-    // task always starts collapsed. (Status is excluded: the column's Add card presets it.)
+    // task always starts collapsed.
     const extrasOpen = !!existing && !!(e.client_id || e.assigned_team_id || e.assigned_to_id
       || e.service_charge || e.content_type || e.deliverable_url || e.internal_notes || e.campaign
       || (e.priority && e.priority !== "Medium"));
@@ -1682,7 +1872,6 @@ window.TaskBoard = {
               <div class="field" style="grid-column:1/-1"><div class="form-hint">Pick a department, then a service type. The phases, steps, and labels are created for you. Choose Custom (blank) to start empty.</div></div>
               <div class="field" style="grid-column:1/-1" id="t-svc-preview" hidden></div>` : ""}
               ${canPrioritizeOnForm ? `<label class="field"><span>Priority</span><select id="t-priority">${vocab.priorities.map((p) => `<option ${p === (e.priority || "Medium") ? "selected" : ""}>${p}</option>`).join("")}</select></label>` : ""}
-              <label class="field"><span>Status</span><select id="t-status">${STATUSES.map((s) => `<option ${s === (e.status || "To Do") ? "selected" : ""}>${s}</option>`).join("")}</select></label>
               <label class="field"><span>Content type</span><input id="t-ctype" value="${S.esc(e.content_type || "")}"></label>
               <label class="field" id="t-campaign-wrap"${isCampaignType(e.content_type) || e.campaign ? "" : " hidden"}><span>Campaign</span>
                 <input id="t-campaign" value="${S.esc(e.campaign || "")}" placeholder="Optional — the campaign this belongs to"></label>
@@ -1781,13 +1970,16 @@ window.TaskBoard = {
         title: name, campaign: val("t-campaign"), client_id: numOrNull("t-client"),
         assigned_team_id: numOrNull("t-team"), assigned_to_id: numOrNull("t-assignee"),
         content_type: val("t-ctype"), due_date: val("t-due") || null,
-        start_date: val("t-start") || null, status: S.qs("#t-status").value,
+        start_date: val("t-start") || null,
         service_charge: val("t-charge") || null,
         description: val("t-desc"), deliverable_url: val("t-deliv"), internal_notes: val("t-inotes"),
         // The client-safe note. Sent as "" rather than null when cleared, so emptying the box
         // actually clears the client's card instead of leaving the old text stranded there.
         client_facing_notes: S.qs("#t-cnote").value,
       };
+      // `status` is sent on CREATE only (the column a new card lands in). An edit never sends it —
+      // moving a card is the board's job, not this form's. See `newStatus`.
+      if (!existing) payload.status = newStatus;
       if (!existing && svcSel) payload.service_key = svcSel.value || null;
       if (canPrioritizeOnForm) payload.priority = S.qs("#t-priority").value;
       // Share-on-create (D6). Sent ONLY on create, and only when the control exists — the server

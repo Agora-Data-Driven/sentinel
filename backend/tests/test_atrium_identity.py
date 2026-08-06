@@ -92,13 +92,18 @@ def test_a_lead_who_is_nobody_here_resolves_to_nobody(make_user):
 
 # --- what the resolved owner does to the CARD ----------------------------------------------------
 
-def _card(owner=None, **over):
+def _card(owner=None, viewer_id=None, **over):
     payload = {"atrium_id": "rooming-house:tk_4", "task_id": "tk_4",
                "client_key": "rooming-house", "title": "ActiveCampaign manual list fix",
                "status": "In Progress", "lead_id": "justine@agoradatadriven.com",
                "lead_name": "Justine"}
     payload.update(over)
-    return atrium_tasks.as_board_card(payload, None, owner)
+    return atrium_tasks.as_board_card(payload, None, owner, viewer_id=viewer_id)
+
+
+_JUSTINE = {"id": 12, "name": "Justine Roa", "email": "justine@agora.ph",
+            "profile_pic_url": "https://x/justine.jpg", "initials": "JR",
+            "role": "employee", "role_label": "Employee", "team_id": 3}
 
 
 def test_a_resolved_owner_gives_the_card_a_LANE_and_a_PHOTO():
@@ -126,3 +131,42 @@ def test_a_card_with_no_lead_at_all_is_honestly_unassigned():
     card = _card(None, lead_id="", lead_name="")
     assert card["assigned_to_id"] is None
     assert card["assignee"] is None
+
+
+# --- "My work" has to agree with the lane and the Monitor (2026-08-06) ---------------------------
+# 🔴 `mine` was simply absent from this payload, and a missing key is falsy — so the board's My work
+# button dropped every client card. That was right while an Atrium owner was only ever a roster
+# email, and wrong from the moment this module started resolving that email to a Sentinel user:
+# the SAME resolved owner put the card in that person's By Employee lane, counted it toward them on
+# the Monitor and printed their photo on it, while one button insisted the work was not theirs.
+
+def test_the_resolved_owner_is_the_one_the_card_says_is_MINE():
+    card = _card(_JUSTINE, viewer_id=12)
+    assert card["mine"] is True
+    assert card["assigned_to_id"] == 12, "and it is the same owner the lane groups on"
+
+
+def test_a_colleagues_client_card_is_not_mine():
+    assert _card(_JUSTINE, viewer_id=99)["mine"] is False
+
+
+def test_an_unresolved_lead_makes_the_card_nobodys():
+    """No proven Sentinel identity, so it is not on anyone's My work — the same refusal to guess
+    that leaves it out of every lane."""
+    assert _card(None, viewer_id=12)["mine"] is False
+
+
+def test_mine_is_ABSENT_when_no_viewer_was_passed():
+    """`serializers.task_card`'s contract: a payload built without a viewer omits the field rather
+    than hardcoding False, because False is a claim and absence is not. `people.py`'s profile card
+    relies on exactly this for Sentinel rows."""
+    assert "mine" not in _card(_JUSTINE)
+    assert "my_slots" not in _card(_JUSTINE, viewer_id=12), \
+        "an Atrium breakdown has no Sentinel step owners to count, so a 0 would be a lie"
+
+
+def test_the_board_pill_can_see_an_atrium_hold():
+    """`on_hold` was missing too, so a client card paused in Atrium looked live on the board and
+    said "On hold" the moment you opened it (as_task_detail always mapped it)."""
+    assert _card(None, on_hold=True)["on_hold"] is True
+    assert _card(None)["on_hold"] is False

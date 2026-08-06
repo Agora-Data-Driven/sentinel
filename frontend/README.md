@@ -104,15 +104,60 @@ inside any comment that lives in a template literal**, never with a backtick.
   which is exactly what a manager asking "what is on Jerome?" needs. "My work" is a separate
   client-side flag (`mineOnly`, tested in `matches`) precisely so widening one never widens the
   other. It is a **toggle**, and `applyView` reflects it with `.on` on `#f-mine`: a board showing a
-  subset while every control reads "no filter" is indistinguishable from a bug.
+  subset while every control reads "no filter" is indistinguishable from a bug. Since 2026-08-06 the
+  toggle **composes with the other filters** instead of routing through `applyView`, which reset
+  them — so turning it on silently discarded the client and department you had picked, and turning it
+  off discarded them again rather than restoring the board you came from.
+- 🔴 **One field, ONE control (the board's rule since 2026-08-06).** A field settable from two places
+  can display two different answers, and every instance of it here was already doing so:
+  | Field | The one control | What was removed, and why |
+  |---|---|---|
+  | status | drag · the card's `.t-move` select · the bulk bar — all through `moveCard` (optimistic, undoable, rolls back) | **Status is no longer in either Edit form.** On a Sentinel row it was worse than redundant: `TaskUpdateIn` has no `status`, and Pydantic ignores extra fields, so picking a column and pressing Save changes **did nothing at all** and still toasted "Task updated". On an Atrium card it had to go as a SECOND request (a stage move has its own endpoint), so a failure there left every other field saved and the card in its old column. A new card's column still comes from the column's own "Add card" (`presetStatus`) |
+  | client visibility | the footer toggle (`atriumControl`) | the `#a-visible` checkbox in "Edit client card" |
+  | department | one label, "Department", in both the drawer and the form | the drawer said "Routed to" for the same `assigned_team_id` |
+- **A control must never be able to only fail** — the rule the bulk bar already followed ("so the bar
+  never promises a 403"), applied to the footer. `atriumControl` renders a **chip** for an
+  already-shared Sentinel row (there is no un-share; re-pushing happens automatically on every edit,
+  and a failed push has its own Retry), and a **disabled** button with the reason in its `title` when
+  the task has no client (`publish()` can only answer "no Atrium client linked"). Park and Submit for
+  review are hidden on a card in a done column for the same reason — nothing to pause, and the
+  approval a review authorises is spent by the completion that already happened.
+- **A card on a retired status gets its own column, marked, and takes no new cards.** `columnsFor`
+  appends any status the vocabulary no longer lists. Before this, `renderBoard` bucketed by
+  `t.status` and then rendered only `STATUSES`, so those cards **vanished** — no error, no empty
+  state. That is the read-side of the failure AGENTS.md §5 documents for deleting a `task_vocab` row,
+  and the board was the surface hiding it. `moveOptions` puts the orphan status in the card's own move
+  select too, or it would read as the first column while sitting somewhere else.
 - **`sw.js` must not intercept navigations** — the `/kiosk` exception (`sw.js:46-53`) is the ONLY
   one allowed (offline kiosk boot). Caching other navigations resurrects the 2 s stale-login flash.
 - **No inline `<script>`** — CSP `script-src 'self'`; `who-we-are.js` exists precisely because an
   inline block was silently blocked and blanked the page.
 - **`element.onclick = handler` passes the Event as arg 1** — always `() => handler()`.
-- **`modal()` reuses ONE `#modal-ov` node, so modals cannot stack** — opening a second one replaces
-  the first. Anything that needs a picker *inside* an editor must render the editor inline (that is
-  why `gym.js`'s routine editor lives in `#tabc`, not a dialog) and keep the modal for the picker.
+- **`modal()` STACKS, since 2026-08-06** — each call creates and removes its own overlay. It used to
+  reuse one `#modal-ov` node and overwrite its `innerHTML`, so opening a second dialog destroyed the
+  first and closing the second left nothing behind. The task board nests five deep (Park / Request
+  changes / Send back / Delete confirm / Past work over an open task), so **Cancel threw the user out
+  of the card they were reading** — and the card's own close never ran, which is how `?open=<id>` was
+  left in the URL pointing at a modal that wasn't on screen. Three things follow:
+  - **`onClose` runs on every path** (button, ✕, backdrop, Esc). Anything that must be undone on
+    close hooks there — `taskboard.js`'s `openTaskModal` clears `?open=` that way — rather than
+    re-pointing the three closers by hand and hoping it found them all.
+  - **Esc closes the TOP modal**, via one document listener held while the stack is non-empty. The
+    old code added one per modal and removed it only if Escape was actually pressed, so every dialog
+    closed by a button leaked a listener for the page's lifetime.
+  - **`id="modal-x"` is no longer unique while a stack is open.** Scope lookups to the `root` the
+    call returns; a bare `qs("#modal-x")` finds the BOTTOM one. Same for `.modal-body` — take it from
+    `m.root`, not from a document-wide query (which is what `showPastWork` used to guess at).
+  Rendering an editor inline instead of in a dialog (`gym.js`'s routine editor in `#tabc`) is still
+  fine — it just is no longer forced.
+- 🔴 **`hidden` is honoured by ONE rule, `[hidden]{display:none !important}` at the top of
+  styles.css** — and it is load-bearing. `[hidden]` normally lives only in the UA stylesheet, so ANY
+  author rule that sets `display` silently disarms the attribute and every `el.hidden = …` becomes a
+  no-op with no error. It bit three times before the global rule went in (2026-08-06): `#tb-bulkbar`
+  (`.row`) showed an empty white strip under the board filters; `#t-campaign-wrap` (`label.field`)
+  put the Campaign field on **every** task, defeating the whole "only offer it for campaign-shaped
+  services" change; `#tb-req-n` (`.pill`) rendered a violet **0** on an empty Requests queue. Do not
+  remove it, and do not use `hidden` for something that should stay laid out — use a class.
 - **A KPI class only styles inside `.kpi`** — `.k-val`, `.k-label`, `.k-ic` and `.k-sub` are all
   written as `.kpi .k-val` descendants, so a `<div class="k-val">` in a plain `.card` is styled by
   **nothing** and looks "unfinished" for no visible reason. The Overview's "my work" strip did this

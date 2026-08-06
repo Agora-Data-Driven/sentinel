@@ -6,8 +6,10 @@ have to hold no matter which route moved the card:
 
 * **`completed_at` is stamped by the transition, never typed.** Throughput used to be counted off
   `updated_at`, so editing a finished task re-dated its completion (§2.4h).
-* **A hold only exists in the blocked stage.** Drag a parked card back onto the board and it is no
-  longer on hold — otherwise "On hold" quietly outlives the pause and lies on the card forever.
+* **A hold only exists in the blocked stage — and that runs BOTH ways.** Drag a parked card back onto
+  the board and it is no longer on hold, or "On hold" quietly outlives the pause and lies on the card
+  forever. Drag a card INTO that column and it is on hold, or the board shows two kinds of parked card
+  that behave differently (`_sync_hold`, fixed 2026-08-06).
 * **Approval is consumed by completion.** A task that leaves a done column loses its approval and
   must be re-approved, so `approved` always refers to the work as it stands.
 
@@ -104,13 +106,47 @@ def on_status_change(db: Session, task: Task, old: str, new: str, actor: User) -
             task.reviewer_id = None
             _log(db, task, actor.id, "review_state", REVIEW_APPROVED, None)
 
-    # A hold is a property of the blocked stage. Moving anywhere else ends it — including a drag,
-    # which is how most people will resume work in practice.
+    _sync_hold(db, task, old, stage, actor)
+
+
+def _sync_hold(db: Session, task: Task, old: str, stage: str, actor: User) -> None:
+    """Keep the three hold fields in step with the stage the card is now in.
+
+    A hold is a property of the blocked stage, so BEING in that stage is the hold and leaving it ends
+    the hold — whichever route moved the card.
+
+    🔴 Only the EXIT half existed until 2026-08-06, and the board consequently grew two kinds of
+    parked card: one that went through `park()` (on hold, with a reason and a remembered column) and
+    one that was simply DRAGGED into the same column — `on_hold` still False, no ⏸ pill, no reason,
+    and a drawer still offering "Park…" for a card already sitting in the parked column. The
+    asymmetry leaked out of Sentinel too: `push_stage` moves the client's card to the blocked stage
+    either way, so the client read "Paused" for work this row insisted was not paused.
+
+    🔴 This is the SECOND writer of `on_hold`/`hold_reason`/`resume_to`, which AGENTS.md §5 warns
+    against — and it is safe for the reason the warning gives. The objection is to a PATCH setting
+    `on_hold` in ISOLATION, which leaves a card paused with nothing remembering where it came from.
+    This writes all three together, derived from the move that caused it. `park()` calls
+    `on_status_change` having already set them, so the `not task.on_hold` guard below is what stops a
+    generic move overwriting a reason somebody typed.
+    """
     if task.on_hold and stage != "blocked":
         task.on_hold = False
         task.hold_reason = None
         task.resume_to = None
         _log(db, task, actor.id, "on_hold", "on hold", "resumed")
+        return
+    if task.on_hold or stage != "blocked":
+        return
+    task.on_hold = True
+    # No reason: nobody was asked for one. Honest — the drawer shows the hold with no explanation
+    # rather than inventing "dragged here", and Park… then edits the hold rather than creating it.
+    task.hold_reason = None
+    # Where Resume puts it back. `old` is where it came FROM, which is what `park()` records too; a
+    # card already in a blocked column (a rename, a second blocked status) resumes at the front of the
+    # queue instead, matching park's own fallback rather than resuming into the pause it never left.
+    task.resume_to = (task_config.status_for_stage(db, "todo") or None
+                      if task_config.stage_for(db, old) == "blocked" else old)
+    _log(db, task, actor.id, "on_hold", None, "parked")
 
 
 # --- park / resume (M3) -------------------------------------------------------------------------
