@@ -318,7 +318,14 @@ window.TaskBoard = {
          showed as a stray white strip under the filters on every load. Same trap as .ctxbar.
          (No backticks in this comment -- it lives inside a template literal.) */
       #tb-bulkbar[hidden]{display:none}
-      #tb-bulkbar select{height:30px;font-size:12px;width:auto;min-width:130px}
+      /* 🔴 A HEIGHT ON A FORM CONTROL MUST RESET ITS PADDING. The base rule (styles.css) gives every
+         select 'padding:10px 12px'; forcing 'height:30px' on top of that leaves a TEN-pixel content
+         box, and a select clips its label to that box — so these three read as "Move to" with the
+         bottom half sliced off. Nothing overflows and nothing errors, which is why it survived: the
+         element is exactly the height it was told to be. Every other shrunken control in this file
+         (the facts strip's priority, the record's Move to, the card's move select) already zeroes
+         the vertical padding for the same reason. */
+      #tb-bulkbar select{height:30px;padding:0 10px;font-size:12px;width:auto;min-width:130px}
 
       /* ======================================================================
          THE TOOLBAR (2026-08-06). Three stacked rows of chrome became two, and
