@@ -194,9 +194,23 @@ def task_card(t: Task, db: Session, viewer: User | None = None) -> dict:
     mine: dict = {}
     if viewer is not None:
         mine = {"mine": task_perms.is_assigned(viewer, t),
-                "my_slots": task_perms.my_slot_count(viewer, t)}
+                "my_slots": task_perms.my_slot_count(viewer, t),
+                # WHICH HAT the viewer wears on this card. `mine` alone cannot say: it is true whether
+                # you lead the work, support it, or hold one step of it, and a list that renders all
+                # three identically is indistinguishable from the July 2026 bug where a board showed
+                # other people's work. The support half of what `my_slots` does for the breakdown.
+                "supporting": task_perms.is_supporting(viewer, t)}
+    # SUPPORT — many people, none accountable (models.TaskSupporter). On the CARD, not just the
+    # drawer: the board has to show who is on a piece of work, and the whole reason this field exists
+    # is that people were inventing checklist steps to get a second name onto a card.
+    supporters = [user_public(u) for u in
+                  (db.get(User, sid) for sid in t.support_ids) if u is not None]
     return {
         **mine,
+        # 🔴 Internal-only, like every other ownership field here — staffing never crosses to a
+        # client. `task_bridge.SAFE` is the six client-safe fields and support is not one of them.
+        "support_ids": t.support_ids,
+        "support": supporters,
         "id": t.id,
         "title": t.title,
         "status": t.status,

@@ -23,6 +23,7 @@ from .routers import (
     auth,
     cron,
     development,
+    dev,
     gym,
     internal,
     leave,
@@ -472,7 +473,10 @@ def _startup_safeguards() -> None:
 
 
 # --- API routers -----------------------------------------------------------
-for r in (auth, attendance, gym, tasks, people, leave, notifications, reports, admin, meta, manage, payroll, cron, stream, internal, development):
+# `dev` is registered UNCONDITIONALLY and gates itself per request (routers/dev.py): making the
+# route's existence depend on a setting's value at import time is how an endpoint ends up "gone"
+# in one worker and live in another.
+for r in (auth, attendance, gym, tasks, people, leave, notifications, reports, admin, meta, manage, payroll, cron, stream, internal, development, dev):
     app.include_router(r.router)
 
 

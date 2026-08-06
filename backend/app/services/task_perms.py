@@ -15,8 +15,15 @@ The rules (higher roles inherit lower ones):
     | bridge/Atrium | no              | no               | AM              | admin/super       |
     | see Atrium    | no              | yes              | yes             | yes               |
 
-"assigned" = task.assigned_to_id == user.id, or assigned to one of the task's sub-tasks
-(`is_assigned` — public, because "what is on me" is asked by more than this module). For an
+"assigned" = task.assigned_to_id == user.id, **a supporter of the task**, or assigned to one of the
+task's sub-tasks (`is_assigned` — public, because "what is on me" is asked by more than this module).
+
+🔴 SUPPORT (2026-08-06) widens "assigned" and NOTHING else. A supporter can see, edit and move the
+card exactly as a step owner already could; they do not become accountable for it. Every rule below
+that says `assigned_to_id` still means the ONE lead — the triage queue, send-back, bulk-claim, and
+the lead's right to tick another person's step. See `assigned_user_ids` and `models.TaskSupporter`.
+
+For an
 employee/intern that is the rule for OWNED work: someone else's card is not on their board, nor is
 one they created themselves (2026-07-30; before that the automatic creator tag also granted sight,
 which meant a card an intern raised and a manager then delegated stayed on the intern's board).
@@ -90,7 +97,7 @@ def is_assigned(user: User, task: Task) -> bool:
 
 
 def assigned_user_ids(task: Task) -> set[int]:
-    """Everyone this work sits on: the card's lead **plus** every phase/step owner.
+    """Everyone this work sits on: the card's lead, its **supporters**, and every phase/step owner.
 
     The set form of `is_assigned`, and `is_assigned` is defined in terms of it so the two can never
     drift — the whole point of making that rule public was that a second copy of it had already gone
@@ -101,15 +108,36 @@ def assigned_user_ids(task: Task) -> set[int]:
     to the number of cards**. That is the truth about a shared card, not an error to normalise away:
     a build phase owned by one person and a QA step owned by another really is on both plates. Any
     surface that adds these up has to say so.
+
+    🔴 **SUPPORT JOINS HERE, AND ONLY HERE (2026-08-06).** This one line is what gives supporters the
+    card on their board, in "My work", in their By Employee lane and in their Monitor row — because
+    every one of those surfaces already asks this function and nothing else. Adding support to any of
+    them individually would have been the second copy of the rule that this function exists to
+    prevent. What support deliberately does NOT reach is anything keyed on `assigned_to_id` itself:
+    accountability (`can_tick_step`'s lead clause), the team triage queue (`_team_queue`), send-back,
+    bulk-claim, and the `?assignee_id=` field filter. Support is who is ON the work; the lead is who
+    ANSWERS for it, and those are different questions.
     """
     ids: set[int] = set()
     if task.assigned_to_id:
         ids.add(task.assigned_to_id)
+    ids.update(s.user_id for s in (getattr(task, "supporters", None) or []))
     for m in MT.normalize(getattr(task, "maintasks_json", "[]"), task.checklist_json):
         if m.get("assignee_id"):
             ids.add(m["assignee_id"])
         ids.update(s["assignee_id"] for s in m.get("subs", []) if s.get("assignee_id"))
     return ids
+
+
+def is_supporting(user: User, task: Task) -> bool:
+    """`user` is on this card as SUPPORT — helping, not accountable.
+
+    Public so a surface can SAY which hat somebody is wearing. `mine` alone cannot: a card is "mine"
+    whether I lead it, support it, or own one step of it, and a list that renders all three
+    identically reads as the July 2026 regression where a board showed other people's work. This is
+    the support half of what `my_slot_count` does for the breakdown.
+    """
+    return any(s.user_id == user.id for s in (getattr(task, "supporters", None) or []))
 
 
 def my_slot_count(user: User, task: Task) -> int:

@@ -389,6 +389,9 @@ class TaskCreateIn(BaseModel):
     service_key: str | None = None  # a task_templates recipe — seeds the checklist + content_type
     assigned_team_id: int | None = None
     assigned_to_id: int | None = None
+    # SUPPORT — many, none accountable (models.TaskSupporter). Naming anyone but yourself here is
+    # DELEGATION and is refused for a role that may not delegate, exactly like `assigned_to_id`.
+    support_ids: list[int] = Field(default_factory=list)
     priority: str = "Medium"
     status: str = "To Do"
     due_date: date | None = None
@@ -468,6 +471,11 @@ class TaskUpdateIn(BaseModel):
     content_type: str | None = None
     assigned_team_id: int | None = None
     assigned_to_id: int | None = None
+    # SUPPORT (models.TaskSupporter). 🔴 `None` means "not sent — leave the supporters alone"; `[]`
+    # means "remove everyone". A plain `Field(default_factory=list)` here would make every PATCH that
+    # omits the field silently CLEAR the support list, which is the kind of quiet data loss the
+    # breakdown's owner-diff guard exists to prevent.
+    support_ids: list[int] | None = None
     priority: str | None = None   # honored only for roles that can_prioritize; ignored otherwise
     due_date: date | None = None
     start_date: date | None = None   # a real Sentinel column since 2026-08-03 (was Atrium-only)

@@ -42,7 +42,7 @@ from .notification import Notification
 from .payroll import PayrollEntry
 from .system import AuditLog, SystemSetting
 from .task import (AtriumApproval, RecurringService, ServiceTemplate, Task, TaskComment,
-                   TaskHistory, TaskRequest, TaskVocabItem)
+                   TaskHistory, TaskRequest, TaskSupporter, TaskVocabItem)
 from .user import QRToken, ShiftTemplate, Team, User
 
 __all__ = [
@@ -54,6 +54,7 @@ __all__ = [
     "Task",
     "TaskComment",
     "TaskHistory",
+    "TaskSupporter",
     "AtriumApproval",
     "TaskRequest",
     "RecurringService",

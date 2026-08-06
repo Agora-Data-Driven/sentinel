@@ -1,9 +1,9 @@
-"""tasks, task_comments, task_history, atrium_approvals."""
+"""tasks, task_supporters, task_comments, task_history, atrium_approvals."""
 from __future__ import annotations
 
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..constants import PRIORITY_MEDIUM, TASK_TODO
@@ -109,6 +109,65 @@ class Task(Base):
     history: Mapped[list["TaskHistory"]] = relationship(
         back_populates="task", cascade="all, delete-orphan"
     )
+    # SUPPORT — the people helping, who are not accountable. See TaskSupporter.
+    # `lazy="selectin"` because every board read needs it: the card renders their avatars and
+    # `task_perms.assigned_user_ids` counts them, so a default lazy load would be one extra query
+    # per card on a list of eighty.
+    supporters: Mapped[list["TaskSupporter"]] = relationship(
+        back_populates="task", cascade="all, delete-orphan", lazy="selectin"
+    )
+
+    @property
+    def support_ids(self) -> list[int]:
+        """Supporter user ids, ordered so the UI and the API never disagree about sequence."""
+        return sorted(s.user_id for s in (self.supporters or []))
+
+
+class TaskSupporter(Base):
+    """One person supporting one task — MANY per task, none of them accountable for it.
+
+    Why this exists (2026-08-06). A Sentinel task had exactly ONE ownership field,
+    `assigned_to_id`, while the Atrium client cards it sits beside on the same board have carried
+    Lead + many Support since the bridge was built. So the only way to put a second name on a
+    Sentinel card was to **invent a checklist step for them** — and because the progress bar is
+    `done steps / total steps`, that made STAFFING a card change its completion percentage. Adding a
+    helper made the work look less finished.
+
+    🔴 SUPPORT IS VISIBILITY, NOT AUTHORITY, and that split is the whole design:
+
+    | Support DOES get | Support does NOT get |
+    |---|---|
+    | the card on their board (`can_view` → `is_assigned`) | accountability — `assigned_to_id` stays the one neck |
+    | it counted in "My work" and on the Monitor | the lead's right to tick somebody ELSE's step (`can_tick_step`) |
+    | a lane in By Employee, marked "supporting" | claiming the card out of its team's triage queue (`_team_queue` still tests `assigned_to_id`) |
+    | `?assignee_id=` is unaffected — that stays a precise field filter on the LEAD |
+
+    A TABLE rather than a `support_ids_json` column, for a reason specific to this repo: prod does
+    not reliably run Alembic, and `create_all` lands a new **table** by itself while a new **column**
+    on an existing table only arrives via `main._ensure_columns` (see AGENTS.md §4 and the gym-routines
+    note in §5). It also keeps the FK honest — a JSON blob of ids rots silently when a user is
+    deactivated, and it makes "every card X supports" a real query for whatever needs it next.
+
+    🔴 Naming somebody here is DELEGATION and is guarded where the field is WRITTEN (`routers/tasks.py`,
+    `_support_change_needs_delegation`), exactly like the breakdown's owner diff. That guard has been
+    missed twice on this board — once for `maintasks[].assignee_id` and once for owner SETS vs slots —
+    so a second writer to this table needs the same check or it walks straight past it.
+    """
+
+    __tablename__ = "task_supporters"
+    # One row per (task, person): re-sending the same supporter must not stack duplicates, which would
+    # double-count them on the Monitor and render their avatar twice on the card.
+    __table_args__ = (UniqueConstraint("task_id", "user_id", name="uq_task_supporter"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id"), nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    # Who added them, and when — support is a delegation decision, so it leaves a trace like every
+    # other one. (The human-readable record is a TaskHistory row; this is the durable attribution.)
+    added_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    task: Mapped[Task] = relationship(back_populates="supporters")
 
 
 class TaskComment(Base):

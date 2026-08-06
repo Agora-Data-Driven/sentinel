@@ -972,8 +972,40 @@
   };
   window.Sentinel = Sentinel;
 
+  // ---------------- Local development ----------------
+  // 🔴 THE LOCALHOST TEST IS A PRODUCTION GATE, not a convenience. It is gate 2 of the three that
+  // keep live reload out of prod (see backend/app/routers/dev.py) and the only one that lives in the
+  // browser: a deploy can be misconfigured, but a Cloud Run host can never be "localhost", so a
+  // production page structurally never asks for the script. Do not widen this to a LAN IP or a
+  // hostname pattern — the value of the check is that it cannot be satisfied off this machine.
+  //
+  // It sits HERE rather than inside boot() so it also covers the standalone pages (login, kiosk,
+  // scanner), which return from boot() early on `data-shell="off"` and would otherwise be the ones
+  // you cannot live-edit — the login page being a fairly likely thing to be styling.
+  const IS_LOCAL = ["localhost", "127.0.0.1", "[::1]", "::1"].includes(location.hostname);
+  // 🔴 /kiosk OPTS OUT and keeps behaving exactly as it does in production, service worker and all.
+  // The kiosk's defining requirement is that it BOOTS OFFLINE from cache (AGENTS.md §5), so it is the
+  // one page whose caching you have to be able to exercise locally — and unregistering its worker to
+  // make styling faster would mean the offline path is only ever tested in production, on a tablet,
+  // in a room, on the day it matters. Live-reload the kiosk by editing and refreshing, as before.
+  const DEV_RELOAD = IS_LOCAL && location.pathname !== "/kiosk";
+
+  if (DEV_RELOAD) {
+    // A file, not inline code: CSP is `script-src 'self'` with no inline scripts anywhere
+    // (AGENTS.md §5), and that holds locally too because the same middleware sends the same header.
+    const s = document.createElement("script");
+    s.src = "/static/js/devreload.js";
+    document.head.appendChild(s);
+  }
+
   // Register the PWA service worker (offline kiosk + installable app).
-  if ("serviceWorker" in navigator) {
+  // 🔴 SKIPPED ON LOCALHOST. The worker's whole job is serving assets from cache, which locally means
+  // serving the file you just edited from before you edited it — the local face of the §5 "deployed
+  // but the browser shows the old version" bug, with no CACHE bump available to clear it because
+  // nobody edits sw.js on every save. devreload.js also unregisters any worker left behind from an
+  // earlier session; this stops a new one replacing it on the next load. `/kiosk` is exempt (above),
+  // so its offline boot is still testable locally.
+  if ("serviceWorker" in navigator && !DEV_RELOAD) {
     window.addEventListener("load", () => navigator.serviceWorker.register("/sw.js").catch(() => {}));
   }
 
