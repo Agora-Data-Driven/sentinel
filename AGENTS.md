@@ -788,6 +788,22 @@ So: **`.modal.wide` + a two-column body** (`.tb-cols` — the record left, work 
 which is also what makes it shorter than the panel ever was. Do the arithmetic above before
 re-proposing a docked panel.
 
+**Its contents were redesigned on 2026-08-06** (with the card — see
+[frontend/README.md](frontend/README.md), "the quiet card"): kicker + name → **ONE notice**, the
+worst true thing, on the same ladder the card's flag uses → **who is on it** → **four facts** →
+record left, **Work / Comments / Activity tabs** right. Three things not to undo: the panes are
+toggled with `[hidden]` and **never re-rendered** (the breakdown re-wires itself after every save,
+and the comment box may hold half a sentence); **nothing is printed twice** — the field list carries
+only what the facts strip does not; and the footer's **Mark complete** resolves its target column by
+STAGE (`isDoneStatus`), never by the renameable label.
+
+🔴 **The footer is ONE row, and Park is no longer a button in it.** Parking a card IS putting it in
+the parked column, and the record's `Move to` select already does that — choosing that stage asks
+for the reason and calls the same `park` endpoint, so `task_workflow` still writes all three hold
+columns (§ "A task's lifecycle is `services/task_workflow.py`"). Everything rare or destructive sits
+behind **More**. Keep it one row: it wrapped once, and the primary action ended up stranded under a
+red Delete.
+
 What survived from the panel attempt, and is worth keeping:
 
 - **The URL carries the open card** (`?open=<id>`, via `replaceState` — not `pushState`, or opening six
