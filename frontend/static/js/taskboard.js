@@ -320,6 +320,60 @@ window.TaskBoard = {
       #tb-bulkbar[hidden]{display:none}
       #tb-bulkbar select{height:30px;font-size:12px;width:auto;min-width:130px}
 
+      /* ======================================================================
+         THE TOOLBAR (2026-08-06). Three stacked rows of chrome became two, and
+         the second one answers questions people actually ask.
+
+         What was there: a title row with FIVE buttons, then five filter controls
+         plus an Overdue checkbox, a My work button and two saved-view controls,
+         then a third row with Save view + Select. Fourteen controls above a board
+         whose whole job is to be scanned — and the three that matter most on a
+         Monday morning (what is late, what is waiting on me, what did the client
+         ask for) were not among them, because they were not askable at all.
+
+         The rule applied: a control earns its place by answering a question
+         somebody actually asks. Everything else is a destination and belongs
+         behind More -- reachable, not resident. Nothing was deleted. */
+      .tb-head{display:flex;flex-wrap:wrap;gap:14px 20px;align-items:flex-start;
+        justify-content:space-between;margin:28px 0 16px}
+      .tb-head h3{font-size:20px;letter-spacing:-.4px;line-height:1.2}
+      .tb-head .lead{margin-top:4px;font-size:12.5px;color:var(--muted);max-width:78ch;line-height:1.5}
+      .tb-head-ctl{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+      /* The More menu is the footer's component reused; in a header it opens DOWNWARD and hangs
+         off the right edge, because it is the last control on the line. */
+      .tb-more.down .tb-menu{top:calc(100% + 7px);bottom:auto;left:auto;right:0}
+      /* A quiet dot when something behind the menu wants attention (the client request queue). A
+         menu that hides a queue with no outward sign is a queue nobody empties. */
+      .tb-more .tb-dot{width:6px;height:6px;border-radius:50%;background:var(--violet-d);flex:none}
+      .tb-menu .pill{margin-left:auto}
+
+      .tb-bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:16px}
+      /* 🔴 An explicit basis, because the app's base rule is 'input{width:100%}' -- left to itself
+         the search box eats the whole line and pushes every other control onto a second row, which
+         is the layout this change exists to remove. (No backticks: template literal.) */
+      .tb-bar input[type="search"]{flex:0 1 300px;width:300px;min-width:180px}
+      .tb-bar select{width:auto;min-width:132px}
+      .tb-sep{width:1px;height:22px;background:var(--line);margin:0 4px}
+      /* ATTENTION PILLS. Each is a live COUNT of the cards in scope, and pressing one filters to
+         them. They replace the Overdue checkbox, the My work button and the Priority select, and
+         they add the two questions the board could not answer at all. A count is why they beat a
+         select: "3 overdue" is information whether or not you press it, and a dropdown reading
+         "All Priority" is not. */
+      .tb-att{display:flex;gap:2px;flex-wrap:wrap}
+      .att{border:0;background:transparent;padding:6px 10px;border-radius:9px;color:var(--muted);
+        font:inherit;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap}
+      .att b{font-weight:800;color:var(--text);font-variant-numeric:tabular-nums;margin-right:4px}
+      .att:hover{background:var(--hover)}
+      .att[aria-pressed="true"]{background:var(--input);color:var(--ink);
+        box-shadow:inset 0 0 0 1px var(--line-strong)}
+      .att.bad b{color:var(--danger)}
+      .att.warn b{color:var(--warn)}
+      /* Zero is still shown, dimmed: "0 overdue" is an answer, and a pill that vanishes takes the
+         question with it. It just must not compete with a count that is not zero. */
+      .att.zero{opacity:.45}
+      .tb-shown{margin-left:auto;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;
+        white-space:nowrap}
+
       /* THROUGHPUT (WP 6.2). A plain flex bar chart -- no charting library on this page, and one
          would be absurd for eight numbers. */
       .tp-chart{display:flex;align-items:flex-end;gap:8px;height:120px;padding:0 2px;
@@ -355,16 +409,38 @@ window.TaskBoard = {
     const name = teamsById[teamId] ? teamsById[teamId].name : null;
     return name ? templates.filter((t) => t.dept === name) : [];
   };
+  // `priority` stays in this object for saved views written before 2026-08-06, which may carry one.
+  // Nothing sets it any more: the Priority select became the `urgent` attention pill (see ATT).
   let filters = { client_id: "", team_id: "", priority: "", assignee_id: "" };
   let search = "";
-  let overdueOnly = false;          // M9 — "what is late?" (see matches)
-  // 🔴 "My work" is NOT the assignee filter (fixed 2026-08-05). `?assignee_id=` is a field filter —
-  // it matches `Task.assigned_to_id` and nothing else, which is exactly what a manager asking "what
-  // is on Jerome?" wants. But "assigned to me" also means owning a phase/step of somebody else's
-  // card (task_perms.is_assigned), so pointing this button at that filter hid the delegated work it
-  // exists to surface. It is a client-side flag over the server's own `mine` now, so the button and
-  // the Overview's strip can never disagree about the count.
-  let mineOnly = false;
+  // 🔴 THE ATTENTION PILLS — one live count each, independently toggleable (2026-08-06).
+  //
+  // They replace the Overdue checkbox, the My work button and the "All Priority" select, and they
+  // add the two questions this board could not answer at all: what has a client asked for, and what
+  // is waiting on an approval. Three properties are load-bearing:
+  //
+  //   * INDEPENDENT, not one-of. A single-choice pill row would undo the 2026-08-06 fix that made
+  //     My work COMPOSE with the other filters — "mine + overdue, on this client" is a real
+  //     question and it was unaskable for months. They AND together.
+  //   * CLIENT-SIDE, over the cards already fetched, so the counts are consistent with each other
+  //     and toggling one never changes another's number. `list_tasks` returns everything the viewer
+  //     may see (no cap), so this narrows nothing the server would have shown.
+  //   * `mine` is the SERVER's flag (task_perms.is_assigned: the card's lead, a supporter, or any
+  //     phase/step owner) — never `t.assigned_to_id === S.user.id`, which is the narrower rule that
+  //     told delegates their plate was empty in July 2026.
+  //
+  // 🔴 `urgent` reads the priority the CARD carries, not a server filter. The old select sent
+  // `?priority=`, which re-fetched the board; as a pill it has to be counted from the same set as
+  // its neighbours or the five numbers would describe five different boards.
+  const ATT = [
+    { key: "overdue", label: "overdue", tone: "bad",
+      test: (t) => !!t.due_date && t.due_date < PH_TODAY && !isDoneStatus(t.status) },
+    { key: "changes", label: "client asked", tone: "bad", test: (t) => !!t.open_changes },
+    { key: "review", label: "to approve", tone: "warn", test: (t) => t.review_state === "pending" },
+    { key: "urgent", label: "urgent", tone: "", test: (t) => t.priority === "Urgent" },
+    { key: "mine", label: "on you", tone: "", test: (t) => !!t.mine },
+  ];
+  let att = {};                     // key -> true while that pill is pressed
   let selection = new Set();        // M7 — ids ticked for a bulk action
   let allTasks = [];          // last fetch, unfiltered by the text search
   // View: "board" (status Kanban) | "employee" (swimlanes per person) | "monitor" (manager rollup).
@@ -378,30 +454,43 @@ window.TaskBoard = {
   if (!canMonitor) mode = "board";
 
   // Section-style header (h3) so the board reads as a dashboard section, not a second page title.
-  root.innerHTML = `<div class="pagehead" style="margin:30px 0 14px"><div><h3 style="font-size:18px;letter-spacing:-.01em">Task Board</h3>
-      <div class="lead" id="tb-lead"></div></div>
-      <div class="row" style="gap:10px;align-items:center">
+  root.innerHTML = `<div class="tb-head">
+      <div><h3>Task Board</h3><div class="lead" id="tb-lead"></div></div>
+      <div class="tb-head-ctl">
         ${canMonitor ? `<div class="seg" id="view-seg" role="tablist">
           <button type="button" data-view="board" role="tab">Board</button>
           <button type="button" data-view="employee" role="tab">By Employee</button>
           <button type="button" data-view="monitor" role="tab">Monitor</button>
         </div>` : ""}
-        ${canManage ? `<button class="btn ghost" id="tb-requests" title="What clients have asked for, awaiting triage">Requests<span id="tb-req-n" class="pill violet" style="margin-left:6px" hidden></span></button>` : ""}
-        <button class="btn ghost" id="filed-by-me" title="Work you raised for another team, and where it went">Filed by me</button>
-        <button class="btn ghost" id="past-work" title="Completed work that has been filed">Past work</button>
         ${canCreate ? `<button class="btn primary" id="new-task">${S.ICON.plus}New Task</button>` : ""}
+        ${/* Everything that is a DESTINATION rather than a filter. Each of these was a permanent
+              button in the header, and each is opened a few times a week at most. The dot on the
+              summary is the exception that keeps the request queue visible. */""}
+        <details class="tb-more down"><summary>More<span class="tb-dot" id="tb-more-dot" hidden></span></summary>
+          <div class="tb-menu">
+            ${canManage ? `<button class="btn ghost" id="tb-requests" title="What clients have asked for, awaiting triage">Requests<span id="tb-req-n" class="pill violet" hidden></span></button>` : ""}
+            <button class="btn ghost" id="filed-by-me" title="Work you raised for another team, and where it went">Filed by me</button>
+            <button class="btn ghost" id="past-work" title="Completed work that has been filed">Past work</button>
+            ${!readOnly ? `<hr><button class="btn ghost" id="tb-select-toggle" title="Pick several cards and change them together">Select several…</button>` : ""}
+            <hr><button class="btn ghost" id="f-save-view">Save this view…</button>
+            <button class="btn ghost" id="f-manage-views">Manage saved views…</button>
+          </div>
+        </details>
       </div></div>
-    <div class="filters">
-      <input id="f-search" class="tb-search" type="search" placeholder="Search tasks…" autocomplete="off">
-      <select id="f-client"><option value="">All Clients</option>${clients.map((c) => `<option value="${c.id}">${S.esc(c.name)}</option>`).join("")}</select>
-      <select id="f-team"><option value="">All Departments</option>${teams.map((t) => `<option value="${t.id}">${S.esc(t.name)}</option>`).join("")}</select>
-      <select id="f-priority"><option value="">All Priority</option>${vocab.priorities.map((p) => `<option>${p}</option>`).join("")}</select>
-      ${canMonitor ? `<select id="f-assignee"><option value="">All Assignees</option><option value="none">Unassigned</option>${people.map((p) => `<option value="${p.id}">${S.esc(p.name)}</option>`).join("")}</select>` : ""}
-      <label class="chip" style="cursor:pointer" title="Only tasks past their due date (Manila), excluding finished work"><input type="checkbox" id="f-overdue"> Overdue</label>
-      <button type="button" class="btn sm ghost" id="f-mine" title="Just the work assigned to me">My work</button>
-      <select id="f-view" title="Saved views"><option value="">Saved views…</option></select>
-      <button type="button" class="btn sm ghost" id="f-save-view">Save view</button>
-      ${!readOnly ? `<button type="button" class="btn sm ghost" id="tb-select-toggle" title="Pick several cards and change them together">Select</button>` : ""}
+    <div class="tb-bar">
+      <input id="f-search" class="tb-search" type="search" placeholder="Search tasks, clients, people…" autocomplete="off">
+      <select id="f-client"><option value="">All clients</option>${clients.map((c) => `<option value="${c.id}">${S.esc(c.name)}</option>`).join("")}</select>
+      <select id="f-team"><option value="">All departments</option>${teams.map((t) => `<option value="${t.id}">${S.esc(t.name)}</option>`).join("")}</select>
+      ${canMonitor ? `<select id="f-assignee"><option value="">Anyone</option><option value="none">Unassigned</option>${people.map((p) => `<option value="${p.id}">${S.esc(p.name)}</option>`).join("")}</select>` : ""}
+      <span class="tb-sep"></span>
+      <span class="tb-att" id="tb-att"></span>
+      ${/* Only when there is something to clear — a permanently visible Clear on an unfiltered
+            board is a control that does nothing, which is what half this row used to be. */""}
+      <button type="button" class="btn sm ghost" id="f-clear" hidden>Clear</button>
+      <span class="tb-shown" id="tb-shown"></span>
+      ${/* The saved-views picker appears only once you HAVE one (refreshViewList). An empty
+            dropdown reading "Saved views…" is the definition of an unusable control. */""}
+      <select id="f-view" title="Saved views" hidden></select>
     </div>
     <div id="tb-bulkbar" class="row" hidden></div>
     <div id="board"></div>`;
@@ -425,31 +514,30 @@ window.TaskBoard = {
   const writeViews = (v) => {
     try { localStorage.setItem(VIEWS_KEY, JSON.stringify(v)); } catch (e) { /* private mode */ }
   };
-  const currentView = () => ({ filters: { ...filters }, search, overdueOnly, mineOnly, mode });
+  const currentView = () => ({ filters: { ...filters }, search, att: { ...att }, mode });
 
   function applyView(v) {
     if (!v) return;
     filters = { client_id: "", team_id: "", priority: "", assignee_id: "", ...(v.filters || {}) };
     search = v.search || "";
-    overdueOnly = !!v.overdueOnly;
-    mineOnly = !!v.mineOnly;
+    // 🔴 A view saved BEFORE the pills existed carries `overdueOnly`/`mineOnly` booleans instead of
+    // `att`. These live in each person's localStorage, so dropping the old keys would quietly change
+    // what somebody's saved view shows — read both, write the new one.
+    att = v.att ? { ...v.att } : { overdue: !!v.overdueOnly, mine: !!v.mineOnly };
     if (v.mode && (v.mode !== "monitor" || canMonitor)) mode = v.mode;
     // Push the restored state back into the controls, or the board would filter by values the
-    // filter bar is not showing — which reads as a bug, not a view.
+    // filter bar is not showing — which reads as a bug, not a view. (The pills are re-rendered from
+    // `att` on every render, so they need no line here.)
     S.qs("#f-client").value = filters.client_id;
     S.qs("#f-team").value = filters.team_id;
-    S.qs("#f-priority").value = filters.priority;
     if (S.qs("#f-assignee")) S.qs("#f-assignee").value = filters.assignee_id;
     S.qs("#f-search").value = search;
-    S.qs("#f-overdue").checked = overdueOnly;
-    S.qs("#f-mine").classList.toggle("on", mineOnly);
     load();
   }
 
   S.qs("#f-search").oninput = (e) => { search = e.target.value.trim().toLowerCase(); render(); };
   S.qs("#f-client").onchange = (e) => { filters.client_id = e.target.value; load(); };
   S.qs("#f-team").onchange = (e) => { filters.team_id = e.target.value; load(); };
-  S.qs("#f-priority").onchange = (e) => { filters.priority = e.target.value; load(); };
   if (S.qs("#f-assignee")) S.qs("#f-assignee").onchange = (e) => { filters.assignee_id = e.target.value; load(); };
   if (canCreate) S.qs("#new-task").onclick = () => taskForm(null);
   S.qs("#past-work").onclick = () => showPastWork();
@@ -457,24 +545,25 @@ window.TaskBoard = {
 
   S.qsa("#view-seg button").forEach((b) => b.onclick = () => setMode(b.dataset.view));
 
-  // --- M9 overdue + M8 saved views ---------------------------------------------------------
-  S.qs("#f-overdue").onchange = (e) => { overdueOnly = e.target.checked; render(); };
-
-  // "My work" is the default M8 asks for, built in rather than saved: it is the same answer for
-  // everyone and should not need setting up once per person. A TOGGLE, because the one thing you do
-  // after narrowing the board to your own work is widen it back, and there was no way to.
-  //
-  // 🔴 It is ONLY that toggle now (2026-08-06). It used to route through `applyView`, which resets
-  // every filter — so turning My work ON silently threw away the client and department you had
-  // picked, and turning it OFF threw them away a second time instead of restoring the board you
-  // came from. "Show me only mine" is one predicate over the cards already on screen (`t.mine`,
-  // client-side), so it composes with the other filters rather than replacing them: My work +
-  // Overdue + one client is a real question, and it was unaskable.
-  S.qs("#f-mine").onclick = () => {
-    mineOnly = !mineOnly;
-    S.qs("#f-mine").classList.toggle("on", mineOnly);
-    render();
+  // One control to undo all of it. It only exists while something IS filtered (renderAttention), so
+  // it is never a button that does nothing — and it clears the pills and the selects together,
+  // because "why is the board empty?" is nearly always two of them at once.
+  S.qs("#f-clear").onclick = () => {
+    filters = { client_id: "", team_id: "", priority: "", assignee_id: "" };
+    search = "";
+    att = {};
+    S.qs("#f-search").value = "";
+    S.qs("#f-client").value = "";
+    S.qs("#f-team").value = "";
+    if (S.qs("#f-assignee")) S.qs("#f-assignee").value = "";
+    load();
   };
+
+  // Closing the More menu after picking something: a menu that stays open over the thing it just
+  // opened is the one bug every hand-rolled dropdown ships with.
+  S.qsa(".tb-more .tb-menu .btn").forEach((b) => b.addEventListener("click", () => {
+    const d = b.closest("details"); if (d) d.open = false;
+  }));
 
   // --- Saved views: pick / save / manage ---------------------------------------------------------
   // 🔴 NO `prompt()` (2026-08-06). Saving used a native prompt, and DELETING one made you TYPE the
@@ -483,20 +572,23 @@ window.TaskBoard = {
   // the browser and not by us, and some embedded contexts suppress them entirely (leaving a control
   // that looks live and does nothing). Both go through S.modal, like Park and Request changes.
   const viewSel = S.qs("#f-view");
+  // 🔴 HIDDEN UNTIL THERE IS ONE. A dropdown whose only entry is its own placeholder ("Saved
+  // views…") is a control that cannot do anything — it was one of the fourteen in the old bar, and
+  // for anyone who had never saved a view it was permanently inert. Saving now lives under More,
+  // and this picker appears the moment it has something to pick.
   function refreshViewList() {
     const names = Object.keys(readViews()).sort((a, b) => a.localeCompare(b));
+    viewSel.hidden = !names.length;
     viewSel.innerHTML = `<option value="">Saved views…</option>`
-      + names.map((n) => `<option value="${S.esc(n)}">${S.esc(n)}</option>`).join("")
-      + (names.length ? `<option value="__manage">Manage views…</option>` : "");
+      + names.map((n) => `<option value="${S.esc(n)}">${S.esc(n)}</option>`).join("");
   }
   refreshViewList();
   viewSel.onchange = () => {
     const pick = viewSel.value;
     viewSel.value = "";
-    if (!pick) return;
-    if (pick === "__manage") return manageViews();
-    applyView(readViews()[pick]);
+    if (pick) applyView(readViews()[pick]);
   };
+  S.qs("#f-manage-views").onclick = () => manageViews();
 
   function manageViews() {
     const names = Object.keys(readViews()).sort((a, b) => a.localeCompare(b));
@@ -653,11 +745,16 @@ window.TaskBoard = {
   async function refreshRequestCount() {
     const badge = S.qs("#tb-req-n");
     if (!badge) return;
+    // 🔴 The queue moved behind More (2026-08-06), so the count needs a second, outward sign: a
+    // dot on the menu itself. A waiting client request that is invisible until you happen to open
+    // a menu is a request nobody answers — which is worse than the crowded header it came out of.
+    const dot = S.qs("#tb-more-dot");
     try {
       const { pending } = await S.api("/api/tasks/requests?status=pending");
       badge.textContent = pending;
       badge.hidden = !pending;      // no badge at all when the queue is empty, not a "0"
-    } catch (e) { badge.hidden = true; }
+      if (dot) dot.hidden = !pending;
+    } catch (e) { badge.hidden = true; if (dot) dot.hidden = true; }
   }
 
   async function openRequests() {
@@ -758,22 +855,21 @@ window.TaskBoard = {
   }
 
   // The text search is applied client-side so typing never re-hits the server.
-  function matches(t) {
-    // "My work" — the server's `mine` (task_perms.is_assigned: the card's lead OR any phase/step of
-    // its breakdown), never `t.assigned_to_id === S.user.id`.
-    // 🔴 An Atrium-owned card carries the flag too, since 2026-08-06. It used to be omitted, with the
-    // reasoning that its owners are roster emails rather than Sentinel users — true when that was
-    // written, and obsolete the day `services/atrium_identity` started resolving an Atrium lead to a
-    // real Sentinel person. From then on a client card you lead showed YOUR face on the board, sat in
-    // YOUR By Employee lane and counted toward YOU on the Monitor, while this one button insisted it
-    // wasn't yours. `as_board_card` sets `mine` from the same resolved owner all three of those read.
-    if (mineOnly && !t.mine) return false;
-    // OVERDUE (M9, WP 5.4). The board only ever TINTED the due chip; there was no way to ask
-    // "what is late?" — the one question a morning triage starts with. Client-side because the
-    // cards are already here, and compared against PH_TODAY so it agrees with the server's
-    // Asia/Manila business rule rather than the viewer's timezone.
-    // A finished task is never overdue: its due date stopped mattering when it was completed.
-    if (overdueOnly && !(t.due_date && t.due_date < PH_TODAY && !isDoneStatus(t.status))) return false;
+  //
+  // The text search + the attention pills, split in two so the pills can be COUNTED over the set
+  // they filter. `inScope` is everything except the pills; `matches` is that plus the pills.
+  //
+  // 🔴 An Atrium-owned card carries `mine` too, since 2026-08-06. It used to be omitted, with the
+  // reasoning that its owners are roster emails rather than Sentinel users — true when that was
+  // written, and obsolete the day `services/atrium_identity` started resolving an Atrium lead to a
+  // real Sentinel person. From then on a client card you lead showed YOUR face on the board, sat in
+  // YOUR By Employee lane and counted toward YOU on the Monitor, while one button insisted it wasn't
+  // yours. `as_board_card` sets `mine` from the same resolved owner all three of those read.
+  //
+  // OVERDUE (M9, WP 5.4) is compared against PH_TODAY so it agrees with the server's Asia/Manila
+  // business rule rather than the viewer's timezone, and a FINISHED task is never overdue — its due
+  // date stopped mattering when it shipped.
+  function inScope(t) {
     if (!search) return true;
     // Searching a person's name finds the cards they SUPPORT too, not just the ones they lead —
     // otherwise typing a colleague's name silently under-reports what they are on, which is the same
@@ -784,13 +880,46 @@ window.TaskBoard = {
       .some((s) => (s || "").toLowerCase().includes(search));
   }
 
+  const matches = (t) => inScope(t) && ATT.every((a) => !att[a.key] || a.test(t));
+  const filtering = () => !!(search || att.overdue || att.changes || att.review || att.urgent
+    || att.mine || filters.client_id || filters.team_id || filters.assignee_id);
+
+  // The pills, their counts, and the "N of M" beside them. Counted over `inScope` — the cards the
+  // selects and the search left on the board — so pressing one pill never moves another's number.
+  function renderAttention(scope, shown) {
+    const bar = S.qs("#tb-att");
+    if (bar) {
+      bar.innerHTML = ATT.map((a) => {
+        const n = scope.filter(a.test).length;
+        // "to approve" is a job; "in review" is a status. Only a seat that can actually decide a
+        // review gets the verb — offering the job to somebody who cannot do it is the same lie as
+        // a button that can only answer 403.
+        const label = (a.key === "review" && !canMonitor) ? "in review" : a.label;
+        return `<button type="button" class="att ${a.tone}${n ? "" : " zero"}" data-att="${a.key}"
+          aria-pressed="${!!att[a.key]}"><b>${n}</b>${label}</button>`;
+      }).join("");
+      S.qsa("#tb-att .att").forEach((b) => b.onclick = () => {
+        att[b.dataset.att] = !att[b.dataset.att];
+        render();
+      });
+    }
+    const clear = S.qs("#f-clear");
+    if (clear) clear.hidden = !filtering();
+    const count = S.qs("#tb-shown");
+    // Only while something is filtered: "34 of 34" on an untouched board is noise, and the whole
+    // point of this row is that a control says nothing until it has something to say.
+    if (count) count.textContent = filtering() ? `${shown} of ${allTasks.length}` : "";
+  }
+
   function render() {
     S.qs("#tb-lead").textContent = LEADS[mode];
     S.qsa("#view-seg button").forEach((b) => b.classList.toggle("on", b.dataset.view === mode));
-    S.qs("#f-search").closest(".filters").style.display = mode === "monitor" ? "none" : "";
+    S.qs("#f-search").closest(".tb-bar").style.display = mode === "monitor" ? "none" : "";
     const board = S.qs("#board");
     board.className = mode === "board" ? "board" : "";
-    const tasks = allTasks.filter(matches);
+    const scope = allTasks.filter(inScope);
+    const tasks = scope.filter((t) => ATT.every((a) => !att[a.key] || a.test(t)));
+    renderAttention(scope, tasks.length);
     if (mode === "monitor") return renderMonitor(board);
     if (mode === "employee") return renderByEmployee(board, tasks);
     return renderBoard(board, tasks);

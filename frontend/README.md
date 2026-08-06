@@ -178,6 +178,36 @@ inside any comment that lives in a template literal**, never with a backtick.
   - **A shared Sentinel row's "✓ Shared with the client" chip is gone.** A state does not belong in
     an actions menu, and the record says it twice already (the kicker ends "· shared with the
     client"; the internal list carries "Client card · Published").
+- 🔴 **The toolbar: three rows of chrome became two** (2026-08-06, reported as "too many filters and
+  not all usable"). It was **fourteen controls** above a board whose whole job is to be scanned — and
+  the three questions a Monday morning starts with (what is late · what has a client asked for · what
+  is waiting on my approval) were not among them, because they were not askable at all. The rule
+  applied: **a control earns its place by answering a question somebody actually asks**; everything
+  else is a destination and goes behind **More** — reachable, not resident. Nothing was deleted.
+  | Was | Now |
+  |---|---|
+  | `Overdue` checkbox · `My work` button · `All Priority` select | **attention pills** (`3 overdue · 1 client asked · 2 to approve · 4 urgent · 6 on you`) |
+  | Requests · Filed by me · Past work · Select | the **More** menu in the header |
+  | `Save view` button + a `Saved views…` select that was empty for anyone who had never saved one | "Save this view…" under More; the picker **appears only once you have one** |
+  | nothing | a **Clear** that exists only while something is filtered, and `N of M` beside it |
+  Four properties of the pills are load-bearing:
+  - **Independent toggles, not one-of.** A single-choice row would undo the fix that made My work
+    *compose* with the other filters — "mine + overdue, on this client" is a real question that was
+    unaskable for months. They AND together.
+  - **Counted over `inScope`** — the cards the selects and the search left on the board, *before* the
+    pills apply — so pressing one never moves another's number. `render()` splits the two passes for
+    exactly this; don't collapse them back into one `matches()`.
+  - **A count is why a pill beats a select**: "3 overdue" is information whether or not you press it,
+    and a dropdown reading "All Priority" is not. Zero is shown dimmed, not hidden — a pill that
+    vanishes takes its question with it.
+  - **`urgent` reads the card's own priority, client-side.** The old select sent `?priority=` and
+    re-fetched; as a pill it must be counted from the same set as its neighbours, or the five numbers
+    would describe five different boards. `list_tasks` has no cap, so nothing is lost.
+  Two consequences worth knowing: **a saved view written before this** carries `overdueOnly` /
+  `mineOnly` instead of `att`, and `applyView` reads both — those live in each person's localStorage,
+  so dropping the old keys would quietly change what their view shows. And the **client request queue
+  moved behind More**, so `refreshRequestCount` also lights a dot on the menu — a waiting request
+  that is invisible until someone opens a menu is a request nobody answers.
 - **A card on a retired status gets its own column, marked, and takes no new cards.** `columnsFor`
   appends any status the vocabulary no longer lists. Before this, `renderBoard` bucketed by
   `t.status` and then rendered only `STATUSES`, so those cards **vanished** — no error, no empty
