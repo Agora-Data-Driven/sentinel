@@ -208,6 +208,13 @@ inside any comment that lives in a template literal**, never with a backtick.
   so dropping the old keys would quietly change what their view shows. And the **client request queue
   moved behind More**, so `refreshRequestCount` also lights a dot on the menu — a waiting request
   that is invisible until someone opens a menu is a request nobody answers.
+- 🟡 **A `height` on a form control must reset its padding.** The base rule gives every `select` a
+  `padding:10px 12px`; forcing `height:30px` on top of that leaves a **ten-pixel content box**, and a
+  select clips its label to that box — the bulk bar's three dropdowns read as "Move to" with the
+  bottom half sliced off (found 2026-08-06). Nothing overflows and nothing errors, which is why it
+  survived: the element is exactly the height it was told to be. Every shrunken control in
+  `taskboard.js` (`#tb-bulkbar select`, `.tb-facts select`, `.tb-move select`, `.tcard .t-move`)
+  zeroes the vertical padding for this reason.
 - **A card on a retired status gets its own column, marked, and takes no new cards.** `columnsFor`
   appends any status the vocabulary no longer lists. Before this, `renderBoard` bucketed by
   `t.status` and then rendered only `STATUSES`, so those cards **vanished** — no error, no empty
