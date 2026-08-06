@@ -71,22 +71,216 @@ window.TaskBoard = {
       /* One column on a narrow screen (or a phone), where 920px is not available anyway. */
       @media (max-width:820px){.tb-cols{grid-template-columns:1fr;gap:22px}}
 
+      /* ======================================================================
+         THE TASK RECORD (2026-08-06, ported from the same prototype).
+         Reading order is the order the questions are asked: what is wrong with
+         this -> who is on it -> the four facts -> the record and the work.
+
+         Nothing is printed twice. Due date and Priority used to appear in the
+         facts area AND two inches below in the field grid; a record that repeats
+         itself reads as longer than it is, and the reader stops trusting either
+         copy. The .kv list carries only what the facts strip does not. */
+      .tb-detail .modal-head{border-bottom:0;padding-bottom:0}
+      /* The modal title is now a KICKER -- 'Rooming House Expert - Task 110 - shared with the
+         client'. The task's own name is an h2 at the top of the body, because it is the loudest
+         thing in the dialog and a 16px head could not carry it. */
+      .tb-detail .modal-head h3{font-size:10px;font-weight:800;letter-spacing:.9px;
+        text-transform:uppercase;color:var(--muted)}
+      .tb-detail .modal-body{padding-top:10px}
+      .tb-h{font-size:19px;line-height:1.3;letter-spacing:-.4px;color:var(--ink);margin:0 0 16px}
+      /* ONE notice, the worst true thing -- the same ladder the card's flag uses. A left edge
+         rather than a filled box: five stacked coloured panels was the state this replaced. */
+      .tb-note{border-left:2px solid var(--line-strong);padding:2px 0 2px 13px;margin:0 0 18px;
+        font-size:12.5px;color:var(--text)}
+      .tb-note.bad{border-left-color:var(--danger)}
+      .tb-note.warn{border-left-color:var(--warn)}
+      .tb-note b{color:var(--ink);font-weight:700}
+      .tb-note .say{margin-top:5px;color:var(--sub);white-space:pre-wrap}
+      .tb-note .meta{margin-top:4px;font-size:11px;color:var(--muted)}
+      .tb-note .act{margin-top:7px}
+      /* WHO IS ON THIS, above the facts: it is the question the board could not answer and the
+         first thing anyone opening a card looks for. */
+      .tb-crew{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:2px 0 16px}
+      .tb-crew .lead{display:flex;align-items:center;gap:10px}
+      .tb-crew .lead .nm{font-size:14px;font-weight:700;color:var(--ink);line-height:1.25}
+      .tb-crew .lead .rl{font-size:11px;color:var(--muted)}
+      .tb-crew .bar{width:1px;height:28px;background:var(--line)}
+      .tb-crew .sup{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+      .tb-crew .sup-p{display:flex;align-items:center;gap:7px}
+      .tb-crew .sup-p .nm{font-size:12.5px;color:var(--text);font-weight:600;line-height:1.2}
+      .tb-crew .sup-p .st{font-size:10.5px;color:var(--muted)}
+      .tb-crew .none{font-size:12.5px;color:var(--muted)}
+      .tb-facts{display:flex;flex-wrap:wrap;gap:0 26px;padding:14px 0;
+        border-top:1px solid var(--line-soft);border-bottom:1px solid var(--line-soft)}
+      .tb-facts .k{font-size:9.5px;font-weight:800;letter-spacing:.7px;text-transform:uppercase;color:var(--muted)}
+      .tb-facts .v{font-size:13px;color:var(--ink);font-weight:600;margin-top:3px;
+        display:flex;align-items:center;gap:6px}
+      .tb-facts .v.bad{color:var(--danger)}
+      .tb-facts .v.warn{color:var(--warn)}
+      .tb-facts select{width:auto;min-width:110px;height:28px;font-size:12.5px;padding:0 6px}
+      .tb-kv{display:grid;grid-template-columns:auto 1fr;gap:9px 18px;font-size:12.5px;
+        align-items:baseline;margin:0}
+      .tb-kv dt{color:var(--muted)}
+      .tb-kv dd{margin:0;color:var(--text)}
+      /* TABS over the work / conversation column. All three panes stay in the DOM and are toggled
+         with [hidden] -- they are wired ONCE when the modal opens (the breakdown alone has eight
+         handlers per row), and re-rendering a pane on every tab click would drop that wiring. */
+      .tb-tabs{display:flex;gap:18px;border-bottom:1px solid var(--line-soft);margin-bottom:14px}
+      .tb-tabs button{border:0;background:transparent;padding:0 0 9px;font-size:12.5px;font-weight:700;
+        color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px;cursor:pointer}
+      .tb-tabs button:hover{color:var(--text)}
+      .tb-tabs button[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--ink)}
+      .tb-tabs .n{color:var(--muted);font-weight:500;margin-left:4px}
+      .tb-move{display:inline-flex;align-items:center;gap:7px;
+        border:1px solid var(--line);border-radius:var(--r-ctl);padding:3px 5px 3px 11px}
+      .tb-move span{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)}
+      .tb-move select{width:auto;border:0;background:transparent;height:26px;
+        font-size:12.5px;font-weight:700;color:var(--ink);padding:0 2px}
+      /* 🔴 THE FOOTER IS ONE ROW, and staying one row is a constraint, not a preference. A record
+         has up to a dozen possible actions; at most three of them are ever what you opened the card
+         for. Wrapped onto two rows it reads as broken (reported 2026-08-06) and the primary action
+         ends up stranded under a red Delete. So: the column control, Edit, the two or three actions
+         this STATE actually offers, then everything rare behind "More", then the two ways out.
+         'flex-wrap:wrap' stays as the safety net for a narrow window; it is not the design.
+         (NO BACKTICKS IN THIS COMMENT — it lives inside a template literal; see the note at the
+         top of this style block.) */
+      .tb-detail .modal-foot{flex-wrap:wrap;justify-content:flex-start;align-items:center;row-gap:8px}
+      .tb-detail .modal-foot .tb-end{margin-left:auto;display:inline-flex;gap:10px;align-items:center}
+      /* <details> rather than a JS popover: keyboard- and screen-reader-operable for free, no popup
+         layer, no document-level click handler to leak. Same pattern as the task form's
+         '.tk-extra'. It opens UPWARDS because it lives in a footer. */
+      .tb-more{position:relative}
+      .tb-more > summary{list-style:none;cursor:pointer;display:inline-flex;align-items:center;gap:6px;
+        border:1px solid var(--line);background:var(--white);color:var(--ink);border-radius:var(--pill);
+        padding:9px 16px;font-size:13.5px;font-weight:700;white-space:nowrap;user-select:none}
+      .tb-more > summary::-webkit-details-marker{display:none}
+      .tb-more > summary::after{content:"⌄";font-size:13px;line-height:1;margin-top:-4px;color:var(--muted)}
+      .tb-more > summary:hover{border-color:var(--line-strong)}
+      .tb-more[open] > summary{border-color:var(--line-strong);background:var(--hover)}
+      .tb-menu{position:absolute;bottom:calc(100% + 7px);left:0;z-index:5;min-width:238px;
+        display:flex;flex-direction:column;gap:2px;padding:6px;border:1px solid var(--line);
+        border-radius:13px;background:var(--card);box-shadow:var(--shadow-lg)}
+      .tb-menu .btn{width:100%;justify-content:flex-start;border-color:transparent;background:transparent;
+        border-radius:9px;padding:9px 11px;font-size:13px;font-weight:600;white-space:normal;text-align:left}
+      .tb-menu .btn:hover{background:var(--hover);border-color:transparent}
+      .tb-menu .btn:disabled:hover{background:transparent}
+      .tb-menu .btn.danger{background:transparent;border-color:transparent;color:var(--danger)}
+      .tb-menu .btn.danger:hover{background:var(--danger);color:#fff}
+      .tb-menu hr{border:0;border-top:1px solid var(--line-soft);margin:4px 2px}
+
+      /* ======================================================================
+         THE QUIET CARD (2026-08-06, ported from frontend/taskboard_ux_prototype.html)
+
+         THE ONE IDEA: a card says WHO is on it and WHETHER it is in trouble, and
+         nothing else. Everything that is true of EVERY card -- the priority word,
+         the filled label pill, the creator tag, the attachment count -- is noise,
+         because a signal every card carries is not a signal. None of it is lost:
+         the detail modal holds the whole record, one click away.
+
+           * ONE flag per card, at most (see flagOf) -- the worst true thing wins
+             and the rest stays silent.
+           * The label is a 6px DOT, not a filled pill. It was the loudest thing on
+             a board where it never varies within a client.
+           * Colour means a problem. Green is progress and the lead's ring.
+           * Faces: the LEAD is ringed, support sits beside them. Support has been
+             on the model since 2026-08-06 and the card only printed the lead.
+           * Overdue is carried by the DATE, in red, at the other end of the card --
+             which is why it is deliberately NOT in the flag ladder. Spending the
+             flag slot on it hid the actionable problem on the one card that had
+             both ("late" beat "the client asked for changes").
+
+         Rejected before, do not re-propose: left priority accent bars (2026-07-14),
+         per-column money totals (2026-07-14), a docked side panel (2026-08-03). */
+      /* 🔴 'flex:none' IS LOAD-BEARING. '.col-list' is a flex COLUMN, so its cards are flex items
+         with the default 'flex-shrink:1' -- once a column holds more than fits, the browser squashes
+         every card instead of scrolling, and the card clips its own title and loses its whole
+         footer (faces, date, comment count). It was survivable while the card had no 'overflow'
+         (the text simply spilled over the card below); the moment the progress hairline required
+         'overflow:hidden', squashing became silent truncation. Never remove this to "let cards
+         fit" -- the column scrolls, cards do not shrink.
+         (No backticks in this comment: template literal.) */
+      .col-list > .tcard{flex:0 0 auto}
+      .tcard{position:relative;overflow:hidden;padding:11px 12px 13px;cursor:grab;
+        box-shadow:none;transition:border-color .12s ease,box-shadow .12s ease}
+      .tcard:hover{border-color:var(--line-strong);box-shadow:var(--shadow)}
+      /* A parked card is deliberately not in play, so it must not read as loud as live work. */
+      .tcard.quiet{background:transparent;border-style:dashed}
+      .tcard.quiet .t-title{color:var(--sub);font-weight:550}
+      .tcard .t-top{display:flex;align-items:center;gap:6px;margin-bottom:6px;min-height:16px}
+      .tcard .t-disc{width:6px;height:6px;border-radius:50%;flex:none}
+      .tcard .t-client{font-size:10px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;
+        color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+      /* Right-aligned, and the ONLY coloured word on a healthy board. */
+      .tcard .t-flag{margin-left:auto;flex:none;font-size:10px;font-weight:800;letter-spacing:.5px;
+        text-transform:uppercase;color:var(--muted);white-space:nowrap}
+      .tcard .t-flag.bad{color:var(--danger)}
+      .tcard .t-flag.warn{color:var(--warn)}
+      .tcard .t-title{font-size:13.5px;font-weight:650;color:var(--ink);line-height:1.4;letter-spacing:-.1px}
+      .tcard .t-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:11px}
+      .tcard .t-people{display:flex;align-items:center;gap:8px;min-width:0}
+      .tcard .t-unassigned{font-size:11.5px;color:var(--muted);font-weight:550}
+      .tcard .t-meta{display:flex;align-items:center;gap:9px;flex:none;margin-top:0;
+        font-size:11.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+      .tcard .t-meta .over{color:var(--danger);font-weight:700}
+      .tcard .t-meta .soon{color:var(--warn);font-weight:600}
+      .tcard .t-meta .ship{color:var(--green-strong)}
+      .tcard .t-meta .cc{display:inline-flex;align-items:center;gap:3px}
+      .tcard .t-meta .svg-ic{width:12px;height:12px}
+      /* Progress is a 2px hairline on the card's own edge -- present when there is a breakdown,
+         invisible when there is not. The old 'done/total' text said the same thing in a place the
+         eye had to stop and read. */
+      .tcard .t-bar{position:absolute;left:0;right:0;bottom:0;height:2px;background:var(--line-soft)}
+      .tcard .t-bar > i{display:block;height:100%;background:var(--green);border-radius:0 2px 2px 0}
+
+      /* FACES.
+         🔴 An initials chip is NEUTRAL here, never a palette colour. The house avatar is a green
+         gradient with a green glow, so a green chip sitting inside the green LEAD ring read as one
+         solid blob and the ring stopped saying anything at all. Colour on this board means a
+         problem, a person's photo, or progress -- never decoration. Photos are untouched, and the
+         rest of the app (topbar, swimlane heads, people pages) keeps the green chip. */
+      .tcard .avatar,.tb-crew .avatar,.tb-detail .avatar{box-shadow:none}
+      .tcard .avatar:not(.has-photo),.tb-crew .avatar:not(.has-photo),
+      .tb-detail .avatar:not(.has-photo){background:var(--muted);color:#fff}
+      /* The lead is ringed green; anything of YOURS is ringed violet, which is what makes your own
+         work findable on a board of sixty cards without reaching for a filter. Both rings at once
+         is a card you lead. */
+      .avatar.is-lead{box-shadow:0 0 0 1.5px var(--card),0 0 0 3px var(--green)}
+      .avatar.is-me{box-shadow:0 0 0 1.5px var(--card),0 0 0 3px var(--violet)}
+      .avatar.is-lead.is-me{box-shadow:0 0 0 1.5px var(--card),0 0 0 3px var(--green),0 0 0 4.5px var(--violet-bg)}
+      .avatar.tb-xs{width:20px;height:20px;font-size:8px}
+      .avatar.tb-md{width:26px;height:26px;font-size:10px}
+      .avatar.tb-lg{width:40px;height:40px;font-size:14px}
       /* SUPPORT avatars on a card, overlapped. A 288px card cannot afford a row of them, and the
-         negative margin is what keeps four people from pushing the status pills off the end. */
-      .tcard .t-support{display:inline-flex;align-items:center;margin-left:7px}
-      .tcard .t-support .avatar{margin-left:-7px;border:1.5px solid var(--card)}
-      .tcard .t-support-more{margin-left:2px;font-size:10.5px;font-weight:800;color:var(--muted)}
+         negative margin is what keeps four people from pushing the date off the end. They spread
+         on hover, so the count is still countable. */
+      .tcard .t-support{display:inline-flex;align-items:center}
+      .tcard .t-support .avatar{margin-left:-9px;box-shadow:0 0 0 1.5px var(--card);
+        transition:margin-left .15s ease}
+      .tcard .t-support .avatar.is-me{box-shadow:0 0 0 1.5px var(--card),0 0 0 3px var(--violet)}
+      .tcard .t-support:hover .avatar{margin-left:-1px}
+      .tcard .t-support-more{margin-left:-9px;height:26px;min-width:26px;padding:0 6px;
+        display:inline-flex;align-items:center;justify-content:center;border-radius:var(--pill);
+        background:var(--input);color:var(--sub);font-size:10.5px;font-weight:800;
+        box-shadow:0 0 0 1.5px var(--card);transition:margin-left .15s ease}
+      .tcard .t-support:hover .t-support-more{margin-left:-1px}
       /* The "supporting" marker on a By Employee lane, and in the drawer's Support field. */
       .pill.supporting{background:var(--input);color:var(--sub)}
+      /* Its card-sized twin: in a supporter's lane the card has to say whose work it is, or the
+         lane is indistinguishable from the July 2026 bug where a board listed other people's work. */
+      .tcard .t-hat{flex:none;font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;
+        color:var(--sub);background:var(--input);border-radius:var(--pill);padding:1px 7px}
 
       /* An ORPHAN column: work stranded on a status Manage no longer lists (see columnsFor). Marked
          rather than styled loudly -- it is a temporary state somebody is meant to clear, not an
          error, and the cards inside it must still read as ordinary cards. */
       .col.col-orphan > .col-head .t{color:var(--warn)}
 
-      .tcard{position:relative}
-      .tcard .t-del{position:absolute;top:7px;right:7px;width:24px;height:24px;border:none;border-radius:7px;
-        background:transparent;color:var(--muted);font-size:13px;line-height:1;cursor:pointer;
+      /* 🔴 The ✕ and the bulk checkbox now sit IN the top row, in flow (2026-08-06). Both used to be
+         absolutely positioned top-right, which is exactly where the quiet card puts its flag -- so
+         "CLIENT ASKED" would have been sitting under the delete button on hover, on precisely the
+         cards that need reading. Laid out in the row, nothing can overlap anything. */
+      .tcard .t-del{flex:none;width:20px;height:20px;border:none;border-radius:6px;
+        background:transparent;color:var(--muted);font-size:12px;line-height:1;cursor:pointer;
         display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .12s ease,background .12s ease,color .12s ease}
       .tcard:hover .t-del,.tcard .t-del:focus-visible{opacity:1}
       .tcard .t-del:hover{background:var(--danger);color:#fff}
@@ -108,17 +302,15 @@ window.TaskBoard = {
       @media (hover: none){
         .tcard .t-move{position:static;display:block;width:100%;margin-top:8px;opacity:1;
           pointer-events:auto;height:32px;font-size:12px}
-        /* The delete affordance already sits top-right; keep it clear of the select. */
-        .tcard{padding-bottom:10px}
+        /* Clear of the progress hairline, which is on the card's bottom edge. */
+        .tcard{padding-bottom:14px}
       }
 
       /* BULK SELECTION (M7, WP 5.4). Opt-in: a permanent checkbox on every card is clutter on a
-         board people mostly read, and it competes with drag for the same pointer. */
-      .tcard .t-pick{position:absolute;top:8px;right:8px;width:16px;height:16px;margin:0;
-        cursor:pointer;z-index:2}
+         board people mostly read, and it competes with drag for the same pointer. In flow at the
+         head of the top row, for the same reason the ✕ is. */
+      .tcard .t-pick{flex:none;width:14px;height:14px;margin:0;cursor:pointer}
       .tcard.picked{outline:2px solid var(--accent);outline-offset:-2px}
-      /* With a checkbox in the corner the delete button would sit under it. */
-      .tcard .t-pick ~ .t-del{right:30px}
       #tb-bulkbar{gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 12px;padding:10px 12px;
         border:1px solid var(--line);border-radius:10px;background:var(--card)}
       /* Load-bearing: the bar carries .row (display:flex), and an author display rule BEATS the UA
@@ -632,7 +824,10 @@ window.TaskBoard = {
       <div class="col${orphan ? " col-orphan" : ""}" data-status="${S.esc(st)}">
         <div class="col-head"><span class="t">${S.esc(st)}</span><span class="c">${byStatus[st].length}</span></div>
         ${orphan ? `<div class="form-hint" style="margin:0 0 8px;border-left:3px solid var(--warn)">This column no longer exists in Manage → Task Fields. Move this work somewhere real and it will disappear.</div>` : ""}
-        <div class="col-list" data-status="${S.esc(st)}">${byStatus[st].map(card).join("")}</div>
+        ${/* 🔴 (t) => card(t), never a bare `card`: .map passes the INDEX as the second argument,
+              which card() reads as a By Employee lane id. An index that happened to equal a
+              supporter's user id printed a "supporting" hat on a card in the ordinary board. */""}
+        <div class="col-list" data-status="${S.esc(st)}">${byStatus[st].map((t) => card(t)).join("")}</div>
         ${(canCreate && !orphan) ? `<button class="col-add" data-status="${S.esc(st)}">${S.ICON.plus}<span>Add card</span></button>` : ""}
       </div>`;
     }).join("");
@@ -886,13 +1081,36 @@ window.TaskBoard = {
     return days <= 2 ? "soon" : "";
   }
 
-  // Where the review stands, small enough for a card. Nothing for a task nobody has submitted —
-  // most tasks, most of the time, and a pill on all of them would say nothing.
-  const REVIEW_PILL = {
-    pending: '<span class="pill amber" style="font-size:9px" title="Waiting on a lead\'s approval">◷ review</span>',
-    approved: '<span class="pill green" style="font-size:9px" title="Approved — it can be completed">✓ approved</span>',
-    changes_requested: '<span class="pill red" style="font-size:9px" title="Changes requested">↺ changes</span>',
-  };
+  // How many days late, for the one card it applies to. Positive only — the date itself already
+  // says "soon" for anything not yet due.
+  const daysLate = (due) => Math.round(
+    (Date.parse(PH_TODAY + "T00:00:00Z") - Date.parse(due + "T00:00:00Z")) / 864e5);
+
+  // 🔴 ONE FLAG PER CARD. This ladder IS the "say the important thing" rule, in one place: the
+  // worst true thing wins and everything else stays quiet and lives in the record. It replaces a
+  // row of five pills (parked / review / approved / changes / stale) that could all be on at once,
+  // on a card 288px wide — at which point none of them was read.
+  //
+  // 🔴 OVERDUE IS DELIBERATELY NOT IN THIS LADDER. The DATE carries it, in red, at the other end
+  // of the card. Returning it here spends the flag slot on something already said, which is how
+  // the one card that was both late AND had an open client change request showed only "late" —
+  // the worse of its two problems hid the actionable one.
+  function flagOf(t, done) {
+    if (done) return null;
+    if (t.open_changes) return { t: "Client asked", c: "bad" };
+    if (t.atrium_sync_error) return { t: "Not synced", c: "bad" };
+    if (t.review_state === "pending") return { t: "In review", c: "warn" };
+    if (t.review_state === "changes_requested") return { t: "Changes", c: "warn" };
+    if (t.review_state === "approved") return { t: "Approved", c: "" };
+    if (t.priority === "Urgent") return { t: "Urgent", c: "bad" };
+    if (t.on_hold) return { t: "Parked", c: "" };
+    if (t.archived) return { t: "Filed", c: "" };
+    // Bottom rung: routed to a department, owned by nobody. On a manager's board it is work that
+    // needs staffing; on a team member's it is the one card there that is not theirs (the team
+    // queue, task_perms._team_queue), and without the word it just looks like a card missing a face.
+    if (!t.assigned_to_id && t.assigned_team_id) return { t: "Unclaimed", c: "" };
+    return null;
+  }
 
   // Filing only makes sense at the two ends: a finished task can be filed, a filed one can come
   // back. Unfinished work that has to leave the board gets PARKED — the server refuses to file it.
@@ -910,12 +1128,14 @@ window.TaskBoard = {
   //                     (nothing deletes a card the client has already seen), so a shared row has no
   //                     action left to offer.
   //
-  // 🔴 So a shared Sentinel row renders a CHIP, not a button (2026-08-06). "✓ Shared with the
-  // client" was a `btn` and stayed clickable: it read as a state, and clicking it silently
-  // re-published and wrote another AtriumApproval row. (`task_bridge.publish` is idempotent, so it
-  // never created a second card — it was misleading, not destructive.) Re-pushing already happens
-  // automatically on every edit that touches a client-visible field, and a push that FAILED is
-  // covered by its own Retry button, so there is nothing for a human to press here.
+  // 🔴 So a shared Sentinel row renders NOTHING here (2026-08-06). "✓ Shared with the client" was a
+  // `btn` and stayed clickable: it read as a state, and clicking it silently re-published and wrote
+  // another AtriumApproval row. (`task_bridge.publish` is idempotent, so it never created a second
+  // card — it was misleading, not destructive.) It became a chip, and then went altogether when the
+  // footer moved behind More: a state does not belong in an actions menu, and the record says it
+  // twice already — the modal's kicker ends "· shared with the client", and the internal field list
+  // carries "Client card · Published". Re-pushing happens automatically on every edit that touches a
+  // client-visible field, and a push that FAILED has its own Retry, so there is nothing to press.
   //
   // 🔴 And an unshared row with NO CLIENT gets a disabled button, not a live one. `publish()` returns
   // "That task has no Atrium client linked" for it every time, so the button could only ever 502 —
@@ -927,9 +1147,7 @@ window.TaskBoard = {
       return `<button class="btn ghost" id="d-atrium">${t.atrium_visible
         ? "✓ Client can see this" : "Share with client"}</button>`;
     }
-    if (t.atrium_shared) {
-      return `<span class="pill blue" title="Client-safe fields are re-sent automatically whenever you edit them">✓ Shared with the client</span>`;
-    }
+    if (t.atrium_shared) return "";
     if (!t.client_id) {
       return `<button class="btn ghost" id="d-atrium" disabled
         title="This task has no client, so there is no workspace to share it into. Set a client under Edit → More options first.">Share with the client</button>`;
@@ -945,16 +1163,18 @@ window.TaskBoard = {
   // card"). An Atrium card's support is Atrium's roster — NAMES only, no Sentinel account and no
   // photo — so it renders from `atrium_support_names`; a Sentinel row has real users in `support`.
   // Reading only one of them would silently hide the support on half the board.
+  const supportOf = (t) => ((t.support || []).length
+    ? t.support
+    : (t.atrium_support_names || []).map((n) => ({ id: null, name: n })));
+
   function supportStack(t) {
-    const people_ = (t.support || []).length
-      ? t.support
-      : (t.atrium_support_names || []).map((n) => ({ name: n }));
+    const people_ = supportOf(t);
     if (!people_.length) return "";
     const shown = people_.slice(0, 3);
     const extra = people_.length - shown.length;
     const all = people_.map((p) => p.name).join(", ");
     return `<span class="t-support" title="Support: ${S.esc(all)}">`
-      + shown.map((p) => S.avatar(p, "sm")).join("")
+      + shown.map((p) => S.avatar(p, "tb-md" + (p.id === S.user.id ? " is-me" : ""))).join("")
       + (extra ? `<span class="t-support-more">+${extra}</span>` : "")
       + `</span>`;
   }
@@ -964,7 +1184,9 @@ window.TaskBoard = {
   // silently lists work whose Lead reads another name, which is indistinguishable from the July 2026
   // regression where a board showed other people's work.
   function card(t, laneUid) {
+    const done = isDoneStatus(t.status);
     const dueCls = dueClass(t.due_date);
+    const flag = flagOf(t, done);
     const laneSupports = laneUid != null && laneUid !== "none"
       && Number(laneUid) !== t.assigned_to_id
       && (t.support_ids || []).indexOf(Number(laneUid)) >= 0;
@@ -972,20 +1194,41 @@ window.TaskBoard = {
     // refuses composite ids), so it never gets a checkbox — better than offering one that only
     // ever produces a skip.
     const pickable = selecting && !String(t.id).startsWith("atrium:");
-    return `<div class="tcard" draggable="true" data-id="${t.id}">
-      ${pickable ? `<input type="checkbox" class="t-pick" aria-label="Select ${S.esc(t.title)}">` : ""}
-      ${(t.labels.length || laneSupports) ? `<div class="labels">${S.labelPills(t.labels)}${laneSupports
-        ? `<span class="pill supporting" title="Supporting — ${S.esc((t.assignee && t.assignee.name) || "somebody else")} leads this card">supporting</span>` : ""}</div>` : ""}
-      <div class="t-title">${S.esc(t.title)}</div>
-      <div class="t-meta">${S.priorityDot(t.priority)}<span>${S.esc(t.priority)}</span>
-        ${t.due_date ? `<span class="due ${dueCls}">· ${S.fmtDate(t.due_date + "T00:00:00+08:00")}</span>` : ""}
-        ${t.client_name ? `<span class="muted">· ${S.esc(t.client_name)}</span>` : ""}
-        ${t.created_by ? `<span class="muted" title="Created by ${S.esc(t.created_by.name)}">· by ${S.esc(t.created_by.name.split(" ")[0])}</span>` : ""}</div>
-      <div class="t-foot">
-        <div class="row"${t.source === "atrium" && t.assignee ? ` title="Lead on the client's Atrium card — Atrium's roster, not a Sentinel account"` : ""}>${t.assignee ? S.avatar(t.assignee, "sm") + `<span class="sub" style="font-size:12px">${S.esc(t.assignee.name.split(" ")[0])}</span>` : '<span class="muted" style="font-size:12px">Unassigned</span>'}${supportStack(t)}</div>
-        <div class="icons">${t.on_hold ? '<span class="pill amber" style="font-size:9px" title="Parked — see the card for why">⏸ parked</span>' : ""}${REVIEW_PILL[t.review_state] || ""}${t.atrium_sync_error ? '<span class="pill red" style="font-size:9px" title="The client copy of this card is out of date">⚠ stale</span>' : ""}${t.comment_count ? S.ICON.comment + t.comment_count : ""} ${t.attachment_count ? S.ICON.paperclip + t.attachment_count : ""} ${t.checklist_total ? `<span title="checklist">${t.checklist_done}/${t.checklist_total}</span>` : ""}</div>
+    // The label is a 6px DOT in the client's colour, not a filled pill: within a client it almost
+    // never varies, so as a pill it was the loudest thing on the board while saying the least.
+    // Its title attribute is what still names it, and the record spells it out in full.
+    const label = t.labels && t.labels[0];
+    // 🔴 The date is where "late" is said, and the only place. Finished work shows the day it
+    // SHIPPED (green) instead — on a done card a due date is a promise nobody is waiting on.
+    const dateBit = done
+      ? `<span class="ship" title="Completed">${S.fmtDate(t.completed_at || (t.due_date && t.due_date + "T00:00:00+08:00"))}</span>`
+      : (t.due_date
+        ? `<span class="${dueCls}" title="Due ${S.esc(S.fmtDateFull(t.due_date + "T00:00:00+08:00"))}">${S.fmtDate(t.due_date + "T00:00:00+08:00")}${
+            dueCls === "over" ? ` · ${daysLate(t.due_date)}d late` : ""}</span>`
+        : "");
+    const pct = t.checklist_total ? Math.round(100 * t.checklist_done / t.checklist_total) : 0;
+    return `<div class="tcard${t.on_hold ? " quiet" : ""}" draggable="true" data-id="${t.id}">
+      <div class="t-top">
+        ${pickable ? `<input type="checkbox" class="t-pick" aria-label="Select ${S.esc(t.title)}">` : ""}
+        ${label ? `<span class="t-disc" style="background:${S.esc(S.colors.labels[label] || "#6B7280")}" title="${S.esc(t.labels.join(", "))}"></span>` : ""}
+        <span class="t-client">${S.esc(t.client_name || "Internal")}</span>
+        ${laneSupports ? `<span class="t-hat" title="Supporting — ${S.esc((t.assignee && t.assignee.name) || "somebody else")} leads this card">supporting</span>` : ""}
+        ${flag ? `<span class="t-flag ${flag.c}">${flag.t}</span>` : ""}
+        ${canDelete(t) ? `<button class="t-del" data-del="${t.id}" title="Delete task" aria-label="Delete task">✕</button>` : ""}
       </div>
-      ${canDelete(t) ? `<button class="t-del" data-del="${t.id}" title="Delete task" aria-label="Delete task">✕</button>` : ""}
+      <div class="t-title">${S.esc(t.title)}</div>
+      <div class="t-foot">
+        <div class="t-people"${t.source === "atrium" && t.assignee ? ` title="Lead on the client's Atrium card — Atrium's roster, not a Sentinel account"` : ""}>
+          ${S.avatar(t.assignee, t.assignee
+            ? "tb-md is-lead" + (t.assignee.id === S.user.id ? " is-me" : "")
+            : "tb-md")}${supportStack(t)}
+          ${/* Unowned work has to SAY so — a lone grey "?" disc reads as a missing photo, not as a
+                card nobody has picked up. */
+            t.assignee ? "" : `<span class="t-unassigned">Unassigned</span>`}
+        </div>
+        <div class="t-meta">${dateBit}${t.comment_count ? `<span class="cc" title="${t.comment_count} comment${t.comment_count > 1 ? "s" : ""}">${S.ICON.comment}${t.comment_count}</span>` : ""}</div>
+      </div>
+      ${t.checklist_total ? `<div class="t-bar" title="${t.checklist_done} of ${t.checklist_total} steps done"><i style="width:${pct}%"></i></div>` : ""}
       ${!readOnly ? `<select class="t-move" data-move="${t.id}" aria-label="Move ${S.esc(t.title)} to another column">${moveOptions(t.status)}</select>` : ""}</div>`;
   }
 
@@ -1154,23 +1397,13 @@ window.TaskBoard = {
     const isAtrium = t.source === "atrium";
     const owners = isAtrium ? (t.atrium_roster || []) : people;
     const ownerId = (v) => (isAtrium ? (v || "") : (v ? +v : null));
+    // Priority is a management call (task_perms.can_prioritize), so it is a CONTROL for a manager
+    // and a plain value for everyone else — never a control that can only answer 403.
     const prioritySelect = canPrioritize(t)
-      ? `<select id="d-priority" style="margin-top:6px">${vocab.priorities.map((p) => `<option ${p === t.priority ? "selected" : ""}>${p}</option>`).join("")}</select>`
-      : `<div style="margin-top:6px">${S.priorityDot(t.priority)} ${S.esc(t.priority)}</div>`;
-    // The projection's state, said out loud. A push that failed leaves the CLIENT's copy stale
-    // while ours is current, and a pre-fix row claims a share that never happened — neither may
-    // look like a healthy share (see sentinel/AGENTS.md §5, "Send to Atrium used to publish NOTHING").
-    // `.form-hint` is the house inline-notice box (styles.css:198); the amber edge is the
-    // file's usual one-off inline style rather than a new class nobody else uses.
-    const WARN = 'class="form-hint" style="margin-bottom:14px;border-left:3px solid var(--warn)"';
-    const staleNote = (!isAtrium && t.atrium_sync_error)
-      ? `<div ${WARN}><strong>The client's copy is out of date.</strong>
-           ${S.esc(t.atrium_sync_error)} Your edits saved here — press <em>Retry the client push</em> to send them.</div>`
-      : (!isAtrium && t.atrium_visible && !t.atrium_shared)
-        ? `<div ${WARN}><strong>This was never actually shared.</strong>
-             It is flagged as shared but no client card exists — a row predating the 2026-08-03 fix.
-             Press <em>Share with the client</em> to create it for real.</div>`
-        : "";
+      ? `<select id="d-priority">${vocab.priorities.map((p) => `<option ${p === t.priority ? "selected" : ""}>${p}</option>`).join("")}</select>`
+      : `${S.priorityDot(t.priority)}${S.esc(t.priority)}`;
+    const done = isDoneStatus(t.status);
+    const overdue = !!t.due_date && !done && dueClass(t.due_date) === "over";
     // 🔴 WHAT THE CLIENT ASKED FOR, WHERE YOU ACTUALLY LOOK (2026-08-04).
     // The reverse channel (D4) delivered correctly from day one, and the card even showed a red
     // "1 change request" pill — but a pill is a COUNT. The words themselves went into the comment
@@ -1191,86 +1424,187 @@ window.TaskBoard = {
     // Atrium route `wireResolve` uses, which does not exist for a Sentinel row.
     const clientSaid = (t.comments || []).filter((c) => c.is_client);
     const lastClient = clientSaid.length ? clientSaid[clientSaid.length - 1] : null;
-    const changeNote = (t.open_changes && !isAtrium)
-      ? `<div class="form-hint" style="margin-bottom:14px;border-left:3px solid var(--danger)">
-           <strong>The client asked for changes.</strong>
-           ${lastClient
-             ? `<div style="margin:6px 0 8px;white-space:pre-wrap">${S.esc(String(lastClient.body || "").replace(/\n?\[atrium:[^\]]*\]/g, "").trim())}</div>
-                <div class="meta">${S.esc(lastClient.author ? lastClient.author.name : "The client")} · ${S.timeAgo(lastClient.created_at)}</div>`
-             : `<div class="meta">Their message is in the conversation below.</div>`}
-           <button class="btn sm ghost" id="d-resolve-changes" style="margin-top:8px">Mark as handled</button>
-         </div>`
-      : "";
     // Park REMEMBERS the column the card left (tasks.resume_to), so say where Resume will put it —
     // otherwise the button is a guess. An Atrium card's hold has no such memory to show.
     const resumeHint = (!isAtrium && t.resume_to)
-      ? ` · Resume puts it back in ${S.esc(t.resume_to)}` : "";
-    const chips = [
-      isAtrium ? `<span class="pill blue">Client card · ${S.esc(t.client_name || "Atrium")}</span>` : "",
-      (!isAtrium && t.atrium_shared) ? `<span class="pill blue">Shared with the client</span>` : "",
-      (!isAtrium && t.atrium_sync_error) ? `<span class="pill red">⚠ Client copy stale</span>` : "",
-      t.on_hold ? `<span class="pill amber">On hold</span>` : "",
-      t.archived ? `<span class="pill">Filed · Past work</span>` : "",
-      t.review_state === "pending" ? `<span class="pill amber">Awaiting approval</span>` : "",
-      t.review_state === "approved" ? `<span class="pill green">Approved${t.reviewer ? " by " + S.esc(t.reviewer.name) : ""}</span>` : "",
-      t.review_state === "changes_requested" ? `<span class="pill red">Changes requested</span>` : "",
-      t.open_changes ? `<span class="pill red">${t.open_changes} change request${t.open_changes > 1 ? "s" : ""}</span>` : "",
-      (isAtrium && t.reporter === "client") ? `<span class="pill violet">Requested by ${S.esc(t.reporter_name || "the client")}</span>` : "",
-    ].join("");
-    const body = `<div class="tb-cols">
+      ? `Resume puts it back in ${S.esc(t.resume_to)}.` : "";
+    // 🔴 ONE NOTICE — the worst true thing, the same ladder the card's flag uses (2026-08-06).
+    // This replaced a row of up to TEN chips plus two stacked warning boxes. Every one of them was
+    // true, which is exactly why the row said nothing: "Shared with the client · On hold · Awaiting
+    // approval · 1 change request" is four states competing for one glance, and the one that needed
+    // acting on had no more weight than the three that did not. The rest is not lost — it is in the
+    // facts strip, the crew row and the record below, where a reader goes looking for it.
+    //
+    // 🔴 IT REPORTS WHICH RUNG IT USED (`noticeKind`), and one reader depends on that. A card can be
+    // parked AND late, in which case "6 days past due" wins the notice and the hold REASON — the one
+    // piece of prose nothing else on this screen carries — would disappear entirely. So the internal
+    // field list prints it whenever the notice did not. Say it exactly once, wherever it fits: the
+    // alternative (print it in both places, always) is how a record starts repeating itself.
+    const note = (cls, html) => `<div class="tb-note ${cls}">${html}</div>`;
+    const noticeKind = t.open_changes ? "changes"
+      : (!isAtrium && t.atrium_sync_error) ? "stale"
+      : (!isAtrium && t.atrium_visible && !t.atrium_shared) ? "phantom"
+      : overdue ? "overdue"
+      : t.review_state === "pending" ? "review"
+      : t.review_state === "changes_requested" ? "rework"
+      : t.on_hold ? "parked"
+      : t.archived ? "filed"
+      : t.review_state === "approved" ? "approved"
+      : "";
+    // Keyed by the rung above, never re-tested here — two ladders in two shapes is how the notice
+    // and the thing that reads it come to disagree.
+    const NOTICES = {
+      changes: () => note("bad", `<b>The client asked for changes.</b>`
+        + (lastClient
+          ? `<div class="say">“${S.esc(String(lastClient.body || "").replace(/\n?\[atrium:[^\]]*\]/g, "").trim())}”</div>
+             <div class="meta">${S.esc(lastClient.author ? lastClient.author.name : "The client")} · ${S.timeAgo(lastClient.created_at)}</div>`
+          : `<div class="meta">Their message is in the conversation.</div>`)
+        // Sentinel rows only: /resolve-client-changes clears the TASK-level counter. An Atrium
+        // card resolves ONE comment at a time, from the comment itself (wireResolve).
+        + (isAtrium ? "" : `<div class="act"><button class="btn sm ghost" id="d-resolve-changes">Mark as handled</button></div>`)),
+      // The projection's state, said out loud. A push that failed leaves the CLIENT's copy stale
+      // while ours is current, and a pre-fix row claims a share that never happened — neither may
+      // look like a healthy share (AGENTS.md §5, "Send to Atrium used to publish NOTHING").
+      stale: () => note("bad", `<b>The client's copy is out of date.</b>
+        <div class="say">${S.esc(t.atrium_sync_error)}</div>
+        <div class="meta">Your edits saved here — press <em>Retry the client push</em> (under More) to send them.</div>`),
+      phantom: () => note("bad", `<b>This was never actually shared.</b>
+        <div class="meta">It is flagged as shared but no client card exists — a row predating the
+        2026-08-03 fix. Press <em>Share with the client</em> (under More) to create it for real.</div>`),
+      overdue: () => note("bad", `<b>${daysLate(t.due_date)} day${daysLate(t.due_date) === 1 ? "" : "s"} past due.</b>
+        <div class="meta">Due ${S.fmtDateFull(t.due_date + "T00:00:00+08:00")}.</div>`),
+      review: () => note("warn", `<b>Waiting on approval.</b>
+        <div class="meta">${S.esc((t.assignee && t.assignee.name) || "Somebody")} submitted this for review.</div>`),
+      rework: () => note("warn", `<b>Changes were requested.</b>
+        <div class="meta">The reviewer's note is in the conversation.</div>`),
+      parked: () => note("", `<b>Parked.</b>${t.hold_reason ? `<div class="say">${S.esc(t.hold_reason)}</div>` : ""}
+        ${resumeHint ? `<div class="meta">${resumeHint}</div>` : ""}`),
+      filed: () => note("", `<b>Filed to Past work.</b>
+        <div class="meta">Off the board, and still counted as shipped.</div>`),
+      approved: () => note("", `<b>Approved${t.reviewer ? ` by ${S.esc(t.reviewer.name)}` : ""}.</b>
+        <div class="meta">It can be completed.</div>`),
+    };
+    const notice = NOTICES[noticeKind] ? NOTICES[noticeKind]() : "";
+
+    // WHO IS ON THIS, before the facts: it is the question the board could not answer, and the
+    // first thing anyone opening a card looks for. Both kinds of card answer it from their own
+    // field (§2) — a Sentinel row has real users, an Atrium card has its roster's names.
+    const sup = supportOf(t);
+    const slotsOf = (pid) => (t.maintasks || []).reduce((n, m) =>
+      n + (m.assignee_id === pid ? 1 : 0) + m.subs.filter((s) => s.assignee_id === pid).length, 0);
+    const leadName = isAtrium
+      ? (t.atrium_lead_name || t.atrium_lead_id || (t.assignee && t.assignee.name))
+      : (t.assignee && t.assignee.name);
+    const crew = `<div class="tb-crew">
+      <div class="lead">
+        ${S.avatar(t.assignee, t.assignee
+          ? "tb-lg is-lead" + (t.assignee.id === S.user.id ? " is-me" : "") : "tb-lg")}
+        <div>
+          <div class="nm">${S.esc(leadName || "Unassigned")}</div>
+          <div class="rl">Lead${t.assigned_team_name ? ` · ${S.esc(t.assigned_team_name)}` : ""}${
+            /* An Atrium card's owner is a roster EMAIL, not a Sentinel account — say so, or the
+               face reads as a colleague whose profile you could open. */
+            isAtrium ? " · from Atrium's roster" : ""}</div>
+        </div>
+      </div>
+      ${sup.length ? `<div class="bar"></div>` : ""}
+      <div class="sup">${sup.length
+        ? sup.map((p) => {
+          const n = p.id ? slotsOf(p.id) : 0;
+          return `<span class="sup-p">${S.avatar(p, "tb-md" + (p.id === S.user.id ? " is-me" : ""))}
+            <span><span class="nm">${S.esc(p.name)}</span>${n
+              ? `<br><span class="st">${n} step${n > 1 ? "s" : ""}</span>` : ""}</span></span>`;
+        }).join("")
+        : `<span class="none">No support yet.</span>`}</div>
+      ${/* Naming somebody else on a card is DELEGATION, and the server is what enforces it
+            (routers/tasks._support_delegates). Adding or removing YOURSELF is always allowed, so
+            the button is offered to everyone who can edit — it opens the same form the Support
+            field lives in, which lists only the people this seat may actually pick. */
+        (!isAtrium && !readOnly)
+          ? `<button class="btn sm ghost" id="d-add-support">+ Add support</button>` : ""}
+    </div>`;
+
+    // FOUR FACTS. The rest of the record is below and does not need a box — and none of these four
+    // is repeated down there, because a record that prints its due date twice, two inches apart,
+    // reads as longer than it is and the reader stops trusting either copy.
+    const stageColor = (S.colors.statuses || {})[t.status];
+    const dueCls = done ? "" : dueClass(t.due_date);
+    const facts = [
+      ["Stage", `<span class="dot" style="background:${S.esc(stageColor || "#8A939F")}"></span>${S.esc(t.status)}`, ""],
+      [done ? "Delivered" : (isAtrium ? "Launch date" : "Due"),
+        done
+          ? S.fmtDateFull(t.completed_at || (t.due_date ? t.due_date + "T00:00:00+08:00" : null))
+          : (t.due_date ? S.fmtDateFull(t.due_date + "T00:00:00+08:00") : "No date"),
+        dueCls === "over" ? "bad" : dueCls === "soon" ? "warn" : ""],
+      // Filled in by renderBreakdown, which owns every count of the breakdown there is.
+      ["Progress", `<span id="d-bd-count"></span>`, ""],
+      ["Priority", prioritySelect, t.priority === "Urgent" ? "bad" : ""],
+    ].map((f) => `<div><div class="k">${f[0]}</div><div class="v ${f[2]}">${f[1]}</div></div>`).join("");
+    // 🔴 THE THREE PANES ARE ALL IN THE DOM, toggled with [hidden] — never re-rendered on a tab
+    // click. The breakdown alone wires eight handlers per row (and re-wires itself after every
+    // save), the comment box owns an input the user may be halfway through, and `wireResolve`
+    // binds inside the thread: rebuilding a pane would silently drop all of it. Tabs are a
+    // VISIBILITY control here, nothing more.
+    const body = `<h2 class="tb-h">${S.esc(t.title)}</h2>
+      ${notice}
+      ${crew}
+      <div class="tb-facts">${facts}</div>
+      <div class="tb-cols">
       <div>
-        ${changeNote}
-        ${staleNote}
-        <div class="labels" style="margin-bottom:8px">${S.labelPills(t.labels)}${chips}</div>
-        <h2 style="margin-bottom:6px">${S.esc(t.title)}</h2>
-        <div class="sub">${S.esc(t.description || "")}</div>
-        <div class="spread" style="margin-top:16px">
-          ${field("Client", t.client_name)}
+        ${t.description ? `<div class="sub" style="margin:0 0 16px">${S.esc(t.description)}</div>` : ""}
+        <dl class="tb-kv">
+          <dt>Client</dt><dd>${S.esc(t.client_name || "—")}</dd>
+          <dt>Started</dt><dd>${t.start_date ? S.fmtDateFull(t.start_date + "T00:00:00+08:00") : "—"}</dd>
           ${/* Optional grouping field — shown only when set, so a task that is not part of a
                 campaign does not carry an empty row (it used to echo the title back). */
-            t.campaign ? field("Campaign", t.campaign) : ""}
-          ${field("Content type", t.content_type)}
-          ${field(isAtrium ? "Launch date" : "Due date", t.due_date ? S.fmtDateFull(t.due_date + "T00:00:00+08:00") : "—")}
-          ${field("Started", t.start_date ? S.fmtDateFull(t.start_date + "T00:00:00+08:00") : "—")}
-          ${t.completed_at ? field("Completed", S.fmtDateFull(t.completed_at)) : ""}
-          ${t.service_charge_label ? field("Service charge", t.service_charge_label) : ""}
-        </div>
-        ${t.deliverable_url ? `<div style="margin-top:12px"><div class="section-label">Deliverable</div><a href="${S.esc(t.deliverable_url)}" target="_blank" class="btn sm ghost" style="margin-top:6px">Open deliverable →</a></div>` : ""}
-        ${t.client_facing_notes ? `<div style="margin-top:12px"><div class="section-label">${isAtrium ? "Client note" : "Client notes"}</div><div class="sub">${S.esc(t.client_facing_notes)}</div></div>` : ""}
-        <div style="margin-top:18px;padding-top:14px;border-top:1px dashed var(--line)">
-          <div class="section-label" style="color:var(--sentinel-2)">${S.ICON.lock}Internal, not visible to clients</div>
-          <div class="spread" style="margin-top:10px">
+            t.campaign ? `<dt>Campaign</dt><dd>${S.esc(t.campaign)}</dd>` : ""}
+          ${t.content_type ? `<dt>Content type</dt><dd>${S.esc(t.content_type)}</dd>` : ""}
+          ${t.deliverable_url ? `<dt>Deliverable</dt><dd><a href="${S.esc(t.deliverable_url)}" target="_blank">Open →</a></dd>` : ""}
+        </dl>
+        ${t.client_facing_notes ? `<div style="margin-top:14px"><div class="section-label">${isAtrium ? "Client note" : "Client notes"}</div><div class="sub" style="margin-top:5px">${S.esc(t.client_facing_notes)}</div></div>` : ""}
+        <div style="margin-top:20px;padding-top:15px;border-top:1px solid var(--line-soft)">
+          <div class="section-label" style="color:var(--sentinel-2)">${S.ICON.lock}Internal — never seen by the client</div>
+          <dl class="tb-kv" style="margin-top:10px">
+            <dt>Department</dt><dd>${S.esc(t.assigned_team_name || "—")}${
+              (!t.assigned_to_id && t.assigned_team_id) ? ` <span class="muted">· unclaimed queue</span>` : ""}</dd>
             ${isAtrium ? `
-              ${field("Department", t.assigned_team_name)}
-              ${field("Lead", t.atrium_lead_name || t.atrium_lead_id)}
-              ${field("Support", (t.atrium_support_names || []).join(", "))}
-              ${field("Shared with client", t.atrium_visible ? "Yes — on their Progress tab" : "No — internal only")}
+              <dt>Shared with client</dt><dd>${t.atrium_visible ? "Yes — on their Progress tab" : "No — internal only"}</dd>
+              ${t.reporter === "client" ? `<dt>Raised by</dt><dd>${S.esc(t.reporter_name || "the client")}</dd>` : ""}
             ` : `
-              ${field("Account Manager", t.account_manager ? t.account_manager.name : "—")}
-              ${field("Created by", t.created_by ? t.created_by.name : "—")}
-              ${field("Assigned team", t.assigned_team_name)}
-              ${field("Lead", t.assignee ? t.assignee.name : "Unassigned")}
-              ${/* Only when there IS support — an empty "Support: —" row on the great majority of
-                    cards is the same noise the Campaign field was before it learned to hide. */
-                (t.support || []).length
-                  ? field("Support", t.support.map((p) => p.name).join(", ")) : ""}
+              <dt>Filed by</dt><dd>${S.esc(t.created_by ? t.created_by.name : "—")}</dd>
+              <dt>Account manager</dt><dd>${S.esc(t.account_manager ? t.account_manager.name : "—")}</dd>
+              ${t.service_charge_label ? `<dt>Service charge</dt><dd>${S.esc(t.service_charge_label)}</dd>` : ""}
+              ${t.atrium_shared ? `<dt>Client card</dt><dd>Published — client-safe fields re-sent on every edit</dd>` : ""}
             `}
-            <div><div class="section-label">Priority</div>${prioritySelect}</div>
-          </div>
-          ${(t.on_hold && t.hold_reason) ? `<div style="margin-top:12px"><div class="section-label">On hold because${resumeHint}</div><div class="sub">${S.esc(t.hold_reason)}</div></div>` : ""}
-          ${t.internal_notes ? `<div style="margin-top:12px"><div class="section-label">Internal notes</div><div class="sub">${S.esc(t.internal_notes)}</div></div>` : ""}
+            ${t.labels && t.labels.length ? `<dt>Labels</dt><dd>${S.labelPills(t.labels)}</dd>` : ""}
+          </dl>
+          ${/* The hold reason, but ONLY when a worse notice took the top of the record (a card can
+                be parked AND late). It is the one piece of prose no other surface carries — the
+                card shows a "Parked" flag, the facts strip shows the column, neither can say why. */
+            (t.on_hold && t.hold_reason && noticeKind !== "parked")
+              ? `<div style="margin-top:12px"><div class="section-label">Parked because${resumeHint ? " · " + resumeHint : ""}</div><div class="sub" style="margin-top:5px">${S.esc(t.hold_reason)}</div></div>` : ""}
+          ${t.internal_notes ? `<div style="margin-top:12px"><div class="section-label">Internal notes</div><div class="sub" style="margin-top:5px">${S.esc(t.internal_notes)}</div></div>` : ""}
         </div>
       </div>
       <div>
-        <div class="spread" style="align-items:center;margin-bottom:2px"><div class="section-label">Work breakdown <span id="d-bd-count"></span></div></div>
-        <div class="progress" style="margin:8px 0 12px"><i id="d-bd-bar" style="width:0%"></i></div>
-        <div id="d-breakdown"></div>
-        ${readOnly ? "" : `<button class="btn sm ghost" id="d-bd-addmain" style="margin-top:10px">${S.ICON.plus}Add main task</button>`}
-        <div class="section-label" style="margin-top:18px">Comments${(isAtrium && t.atrium_visible) ? ' <span class="muted" style="font-weight:400">· this card is shared, so the client sees these</span>' : ""}</div>
-        <div class="thread" id="d-thread" style="margin:10px 0">${t.comments.map(cmt).join("") || '<div class="muted">No comments yet.</div>'}</div>
-        ${readOnly ? "" : `<div class="row" style="gap:8px"><input id="d-comment" placeholder="Write a comment… use @name to mention"><button class="btn primary sm" id="d-send">Send</button></div>`}
-        <div class="section-label" style="margin-top:18px">Activity</div>
-        <ul class="activity">${t.history.map((h) => `<li><span>${h.actor ? S.esc(h.actor.name) : "System"}</span> ${S.esc(h.field)} ${h.old_value ? `<span class="muted">${S.esc(h.old_value)} → </span>` : ""}<strong>${S.esc(h.new_value || "")}</strong> <span class="muted">· ${S.timeAgo(h.changed_at)}</span></li>`).join("")}</ul>
+        <div class="tb-tabs" role="tablist">
+          <button type="button" role="tab" data-tab="work" aria-selected="true">Work<span class="n" id="d-bd-tabn"></span></button>
+          <button type="button" role="tab" data-tab="comments" aria-selected="false">Comments${t.comments.length ? `<span class="n">${t.comments.length}</span>` : ""}</button>
+          <button type="button" role="tab" data-tab="activity" aria-selected="false">Activity</button>
+        </div>
+        <div class="tb-pane" data-pane="work">
+          <div class="progress" style="margin:0 0 12px"><i id="d-bd-bar" style="width:0%"></i></div>
+          <div id="d-breakdown"></div>
+          ${readOnly ? "" : `<button class="btn sm ghost" id="d-bd-addmain" style="margin-top:10px">${S.ICON.plus}Add main task</button>`}
+        </div>
+        <div class="tb-pane" data-pane="comments" hidden>
+          ${(isAtrium && t.atrium_visible) ? `<div class="muted" style="font-size:12px;margin-bottom:10px">This card is shared, so the client sees these.</div>` : ""}
+          <div class="thread" id="d-thread" style="margin:0 0 10px">${t.comments.map(cmt).join("") || '<div class="muted">No comments yet.</div>'}</div>
+          ${readOnly ? "" : `<div class="row" style="gap:8px"><input id="d-comment" placeholder="Write a comment… use @name to mention"><button class="btn primary sm" id="d-send">Send</button></div>`}
+        </div>
+        <div class="tb-pane" data-pane="activity" hidden>
+          <ul class="activity">${t.history.map((h) => `<li><span>${h.actor ? S.esc(h.actor.name) : "System"}</span> ${S.esc(h.field)} ${h.old_value ? `<span class="muted">${S.esc(h.old_value)} → </span>` : ""}<strong>${S.esc(h.new_value || "")}</strong> <span class="muted">· ${S.timeAgo(h.changed_at)}</span></li>`).join("") || '<li class="muted">Nothing yet.</li>'}</ul>
+        </div>
       </div></div>`;
     // The bridge button means the opposite thing on each kind of card: a Sentinel row is PUSHED to
     // Atrium (one-way, client-safe fields only), while an Atrium card is already there — the toggle
@@ -1280,7 +1614,7 @@ window.TaskBoard = {
     // The lifecycle controls (Stage 2). All Sentinel-only: an Atrium-owned card has no local row to
     // hold a hold, a review or a filing, and faking one would split ownership of the record again.
     // Only the buttons that CAN act appear — the server enforces the same rules either way.
-    const done = isDoneStatus(t.status);
+    //
     // 🔴 FINISHED WORK IS NOT PENDING WORK (2026-08-06). Park and Submit for review were offered on
     // EVERY unarchived card, including one sitting in a done column — so a delivered task showed
     // seven footer buttons, two of which mean nothing: parking work that is finished, and asking for
@@ -1289,11 +1623,20 @@ window.TaskBoard = {
     // precisely why they had to come out of the UI: they would both have "worked".
     // A card that comes back OUT of a done column gets both buttons again, because it is live work
     // again — the test is where the card is now, not what it once was.
-    const lifecycle = (isAtrium || readOnly) ? "" : [
-      // Nothing to park about finished work. Resume always shows while a hold is on, whatever column
-      // the card is in, or a card parked and then dragged straight to done could never be un-parked.
-      t.on_hold ? `<button class="btn ghost" id="d-resume">Resume</button>`
-                : (done ? "" : `<button class="btn ghost" id="d-park">Park…</button>`),
+    //
+    // 🔴 PARK IS NOT A BUTTON ANY MORE (2026-08-06). Parking a card IS putting it in the parked
+    // column, and the Move control below already does that — two controls for one state change is
+    // the duplication the board's own "one field, ONE control" rule exists to prevent (see
+    // frontend/README.md), and it was half of why this footer wrapped onto two rows. Nothing is
+    // lost: choosing the parked stage in Move asks for the reason and calls the SAME `park`
+    // endpoint, so `hold_reason` and `resume_to` are still written by `task_workflow`, never by a
+    // bare status PATCH.
+    //
+    // Only the buttons this STATE offers stay inline; the rest go behind More.
+    const inlineActs = (isAtrium || readOnly) ? "" : [
+      // Resume shows while a hold is on, whatever column the card is in, or a card parked and then
+      // dragged straight to done could never be un-parked.
+      t.on_hold ? `<button class="btn ghost" id="d-resume">Resume</button>` : "",
       // Nothing to submit once it is approved, nothing to submit about filed work, and nothing to
       // submit about work that is already done.
       (!done && !t.archived && t.review_state !== "approved" && t.review_state !== "pending")
@@ -1301,23 +1644,103 @@ window.TaskBoard = {
       (canReview(t) && t.review_state === "pending")
         ? `<button class="btn ghost" id="d-approve">Approve</button>
            <button class="btn ghost" id="d-changes">Request changes…</button>` : "",
-      filingBtn(t, done),
+    ].join("");
+    // Behind More: rare, one-per-card or destructive. Every one of them keeps its id, so the wiring
+    // below is unchanged — this is where the button sits, not what it does.
+    const moreItems = [
+      (isAtrium || readOnly) ? "" : filingBtn(t, done),
       // Send back (D11) — refuse queued work and return it to whoever filed it. Offered ONLY in the
       // exact state the rule allows: still unassigned, routed to a team, filed by somebody else, and
       // I am the one who could triage it. Once anyone owns it, reassigning is the honest move.
-      (canReview(t) && !t.assigned_to_id && t.assigned_team_id && t.created_by_id
-        && t.created_by_id !== S.user.id)
+      (!isAtrium && !readOnly && canReview(t) && !t.assigned_to_id && t.assigned_team_id
+        && t.created_by_id && t.created_by_id !== S.user.id)
         ? `<button class="btn ghost" id="d-sendback" title="Send this back to whoever filed it — it leaves your team's queue">Not ours…</button>` : "",
-    ].join("");
-    const footer = `${readOnly ? "" : `<button class="btn ghost" id="d-edit">Edit</button>`}${lifecycle}
-      ${canManage ? atriumControl(t, isAtrium) : ""}
-      ${(canManage && !isAtrium && t.atrium_sync_error) ? `<button class="btn danger" id="d-atrium-retry">Retry the client push</button>` : ""}
-      ${canDelete(t) ? `<button class="btn danger" id="d-delete">Delete</button>` : ""}
-      <button class="btn primary" id="d-close">Close</button>`;
-    const m = openTaskModal(
-      isAtrium ? "Client card · " + (t.client_name || "Atrium") : "Task #" + t.id,
-      body, footer, id);
+      canManage ? atriumControl(t, isAtrium) : "",
+      (canManage && !isAtrium && t.atrium_sync_error) ? `<button class="btn ghost" id="d-atrium-retry">Retry the client push</button>` : "",
+      canDelete(t) ? `<hr><button class="btn danger" id="d-delete">Delete this task</button>` : "",
+    ].filter(Boolean);
+    const more = moreItems.length
+      ? `<details class="tb-more"><summary>More</summary><div class="tb-menu">${moreItems.join("")}</div></details>`
+      : "";
+    // 🔴 MOVING A CARD MUST NOT REQUIRE A MOUSE OR A CLOSED DIALOG. The board has three move
+    // affordances (drag, the card's own select, the bulk bar) and the open record had NONE — you
+    // closed the card to move the card. This is the same control the card carries (WP 5.5), in the
+    // one place where the whole record is on screen to decide from.
+    const moveCtl = readOnly ? ""
+      : `<label class="tb-move"><span>Move to</span>
+           <select id="d-move" aria-label="Move this task to another column">${moveOptions(t.status)}</select>
+         </label>`;
+    // The primary action, and the only status this dialog names: the DONE column, resolved by STAGE
+    // (task_status_meta / D13) because every label here is renameable in Manage. A card already in a
+    // done column has nothing to advance to. The review gate can still refuse it — 409
+    // NEEDS_REVIEW — which the toast reports rather than the button pretending to be enabled.
+    const doneStatus = STATUSES.find((s) => isDoneStatus(s));
+    const advance = (!readOnly && !done && doneStatus)
+      ? `<button class="btn primary" id="d-done">Mark complete</button>` : "";
+    const footer = `${moveCtl}${readOnly ? "" : `<button class="btn ghost" id="d-edit">Edit</button>`}${inlineActs}${more}
+      ${/* The two ways OUT stay together and stay right — as ONE flex item, so a footer forced to
+            wrap on a narrow window can never leave the primary action stranded alone on a line of
+            its own, which a bare spacer did. */""}
+      <span class="tb-end"><button class="btn ${advance ? "ghost" : "primary"}" id="d-close">Close</button>${advance}</span>`;
+    // The head is a KICKER, not a title: which client, which card, and whether it is published.
+    // The task's own name is the h2 the body opens with.
+    const kicker = [
+      t.client_name || "Internal",
+      isAtrium ? "Client card" : "Task " + t.id,
+      (isAtrium ? t.atrium_visible : t.atrium_shared) ? "shared with the client" : "",
+    ].filter(Boolean).join(" · ");
+    const m = openTaskModal(kicker, body, footer, id);
+    // Scoped to this dialog: `.tb-detail` restyles the head into that kicker, and every wide modal
+    // on this board (the task form, Past work, the request queue) must keep its ordinary title.
+    const modalEl = m.root.querySelector(".modal");
+    if (modalEl) modalEl.classList.add("tb-detail");
     S.qs("#d-close").onclick = m.close;
+
+    // Tabs: visibility only (see the body comment). `hidden` is honoured because `.tb-pane` sets no
+    // display of its own — the trap documented at the top of styles.css.
+    S.qsa(".tb-tabs button", m.root).forEach((b) => b.onclick = () => {
+      S.qsa(".tb-tabs button", m.root).forEach((x) => x.setAttribute("aria-selected", String(x === b)));
+      S.qsa(".tb-pane", m.root).forEach((p) => { p.hidden = p.dataset.pane !== b.dataset.tab; });
+    });
+
+    // Move + Mark complete both go through ONE path, and it is the same PATCH the board's other
+    // three move affordances use. Reopening the card afterwards is deliberate: the notice, the
+    // facts strip and half the footer buttons all depend on the stage it just entered.
+    //
+    // 🔴 EXCEPT INTO THE PARKED COLUMN, which asks WHY first and posts `park` instead. A bare status
+    // PATCH would land the card there with `hold_reason` and `resume_to` derived by `_sync_hold`
+    // and no reason recorded at all — the card would say "Parked." with nothing after it, and
+    // Resume would have no remembered column to name. This is what lets Park stop being a second
+    // button for a state the column control already owns.
+    const moveTo = async (to, sel) => {
+      if (to === t.status) return;
+      const reset = () => { if (sel) sel.value = t.status; };
+      if (!isAtrium && STAGE_OF[to] === "blocked") {
+        return askReason({
+          title: "Park this task?",
+          hint: `It moves to the ${S.esc(to)} column and comes back to <strong>${S.esc(t.status)}</strong> when you resume it.`,
+          label: "Why is it paused? (internal — the client never sees this)",
+          confirm: "Park it",
+          onCancel: reset,
+          onSubmit: (reason) => act("park", { reason }, "Parked"),
+        });
+      }
+      try {
+        await S.api(`/api/tasks/${id}/status`, { method: "PATCH", body: { status: to } });
+        S.toast(`Moved to ${to}`, "ok");
+        m.close(); load(); openDetail(id);
+      } catch (err) {
+        reset();                    // the card did not move; the control must not claim it did
+        S.toast(err.detail || "Couldn't move that", "err");
+      }
+    };
+    if (S.qs("#d-move")) {
+      const sel = S.qs("#d-move");
+      sel.onchange = () => moveTo(sel.value, sel);
+    }
+    if (S.qs("#d-done")) S.qs("#d-done").onclick = () => moveTo(doneStatus, S.qs("#d-move"));
+    // Support is edited in the task form (which is where the field's own permission rules live).
+    if (S.qs("#d-add-support")) S.qs("#d-add-support").onclick = () => { m.close(); taskForm(t); };
     if (S.qs("#d-atrium-retry")) S.qs("#d-atrium-retry").onclick = async () => {
       try {
         await S.api(`/api/tasks/${id}/atrium-retry`, { method: "POST" });
@@ -1426,7 +1849,13 @@ window.TaskBoard = {
     function renderBreakdown() {
       let d = 0, total = 0;
       t.maintasks.forEach((m) => m.subs.forEach((s) => { total += 1; if (s.done) d += 1; }));
-      S.qs("#d-bd-count").textContent = total ? `· ${d}/${total}` : "";
+      // Three places show this count and ONE function derives it: the Progress fact, the Work
+      // tab's own badge, and the bar. Ticking a step in a hidden pane still has to move the number
+      // the reader is looking at, which is why the fact is written from here and not built inline.
+      const fact = S.qs("#d-bd-count");
+      if (fact) fact.textContent = total ? `${d} of ${total} steps` : "No breakdown";
+      const tabn = S.qs("#d-bd-tabn");
+      if (tabn) tabn.textContent = total ? `${d}/${total}` : "";
       S.qs("#d-bd-bar").style.width = (total ? Math.round(100 * d / total) : 0) + "%";
       S.qs("#d-breakdown").innerHTML = routingRow() + t.maintasks.map((m) => `
         <div class="mtask" data-mid="${m.id}">
@@ -1590,13 +2019,8 @@ window.TaskBoard = {
         m.close(); load(); openDetail(id);
       } catch (err) { S.toast(err.detail || "Couldn't do that", "err"); }
     };
-    if (S.qs("#d-park")) S.qs("#d-park").onclick = () => askReason({
-      title: "Park this task?",
-      hint: `It moves to the ${S.esc(pausedColumn())} column and comes back to <strong>${S.esc(t.status)}</strong> when you resume it.`,
-      label: "Why is it paused? (internal — the client never sees this)",
-      confirm: "Park it",
-      onSubmit: (reason) => act("park", { reason }, "Parked"),
-    });
+    // Park has no button of its own — it is what the Move control does when the target is the
+    // parked stage (see moveTo above).
     if (S.qs("#d-resume")) S.qs("#d-resume").onclick = () =>
       act("resume", {}, "Back on the board");
     if (S.qs("#d-submit")) S.qs("#d-submit").onclick = () =>
@@ -1627,11 +2051,10 @@ window.TaskBoard = {
     if (S.qs("#d-delete")) S.qs("#d-delete").onclick = () => confirmDelete(t, m);
   }
 
-  // The column parked work sits in, BY STAGE — never the literal "Blocked". That label is
-  // renameable in Manage (Blocked → Parked is the planned rename), and the whole point of
-  // task_status_meta is that no name is hardcoded here (decision D13).
-  const pausedColumn = () =>
-    Object.keys(STAGE_OF).find((n) => STAGE_OF[n] === "blocked") || "the blocked";
+  // (`pausedColumn()` lived here until 2026-08-06. Park lost its button — the Move control owns
+  // that column now — and the one place that still has to recognise the parked column asks
+  // `STAGE_OF[target] === "blocked"` directly. The rule it carried is unchanged and still absolute:
+  // recognise the column by its STAGE, never by the literal "Blocked", which Manage can rename.)
 
   // A small "why?" prompt, shared by Park, Request changes, Send back and Decline. All four write
   // prose that has to be recorded, and all four are refusals of a sort, so they ask the same way.
@@ -1641,8 +2064,13 @@ window.TaskBoard = {
   //
   // Since 2026-08-06 this opens ON TOP of the card rather than replacing it (S.modal stacks), so
   // Cancel returns you to the task you were reading instead of closing it.
-  function askReason({ title, hint, label, confirm, require: needsText, onSubmit }) {
+  // `onCancel` fires on EVERY way out that is not the confirm button — Cancel, ✕, Esc, backdrop —
+  // which is what a caller needs when the prompt was opened BY a control that has already changed
+  // (the record's Move select): abandoning the prompt has to put that control back.
+  function askReason({ title, hint, label, confirm, require: needsText, onSubmit, onCancel }) {
+    let submitted = false;
     const rm = S.modal({
+      onClose: () => { if (!submitted && onCancel) onCancel(); },
       title,
       body: `<div class="stack" style="gap:12px">
         <div class="form-hint">${hint}</div>
@@ -1656,6 +2084,7 @@ window.TaskBoard = {
     S.qs("#rz-ok", rm.root).onclick = () => {
       const text = box.value.trim();
       if (needsText && !text) { S.toast("A reason is required here", "err"); return; }
+      submitted = true;             // set BEFORE close, or onClose reports this as a cancel
       rm.close();
       onSubmit(text);
     };
@@ -1764,7 +2193,6 @@ window.TaskBoard = {
     };
   }
 
-  const field = (label, val) => `<div><div class="section-label">${label}</div><div style="margin-top:4px">${S.esc(val || "—")}</div></div>`;
   // Atrium cards carry one comment kind Sentinel rows don't: a client's "Request changes", which
   // stays flagged until someone on the team clears it (see wireResolve in the drawer).
   // 🔴 `is_client` is finally read here. A client's words on an internal thread have to be

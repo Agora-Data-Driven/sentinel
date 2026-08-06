@@ -11,7 +11,7 @@ kiosk. Operating rules (CSP, cache bumping, `api()`-only fetches) live in
 |---|---|
 | `pages/*.html` | 19 shells (~0.7 kb each; JS renders everything): dashboard, attendance, approvals, gym, growth, reading, academy, philosophical, spiritual, people, leave, north-star, reports, settings, manage, payroll, login, kiosk, scanner. Routes registered in `backend/app/main.py:381` (`_PAGES`; `/login` is its own route) |
 | `static/js/app.js` | The shell every page loads: `NAV` array `:78` (roles/`min`/`hideRoles` gate visibility), `api()` (CSRF echo + FastAPI error flattening), `toast`, `skeleton`, `modal`, `esc`/`qs`/`qsa`, `ICON`, `avatar`, command palette (`initCommandPalette`), Coach FAB, `setTheme`/`engineUrl`/`themeEmbeds` (hands our light/dark to every embedded Mastery Engine) |
-| `static/js/taskboard.js` | Mountable Kanban (`TaskBoard.mount`). Optimistic DnD (native HTML5 — deliberate, see AGENTS.md §9), SSE reload, quick-add, Atrium-card editing, and the lifecycle controls: Park/Resume, Submit/Approve/Request changes, Past work. **"My work" is a client-side toggle over the card's `mine` flag, NOT the `?assignee_id=` filter** — see the gotcha below. **Support** (many people per card, since 2026-08-06): `supportOptions` builds the picker and mirrors the server's delegation rule (a non-delegator's list contains only THEM; a colleague already on the card renders `selected disabled` so the list round-trips instead of 403ing), `supportStack` draws the overlapped avatars — reading `support` for a Sentinel row **and** `atrium_support_names` for a client card, because both kinds have support and only one has Sentinel users |
+| `static/js/taskboard.js` | Mountable Kanban (`TaskBoard.mount`). Optimistic DnD (native HTML5 — deliberate, see AGENTS.md §9), SSE reload, quick-add, Atrium-card editing, and the lifecycle controls: Park/Resume, Submit/Approve/Request changes, Past work. **"My work" is a client-side toggle over the card's `mine` flag, NOT the `?assignee_id=` filter** — see the gotcha below. **Support** (many people per card, since 2026-08-06): `supportOptions` builds the picker and mirrors the server's delegation rule (a non-delegator's list contains only THEM; a colleague already on the card renders `selected disabled` so the list round-trips instead of 403ing), `supportStack` draws the overlapped avatars — reading `support` for a Sentinel row **and** `atrium_support_names` for a client card, because both kinds have support and only one has Sentinel users. **The card and the record were redesigned 2026-08-06** (`flagOf` + `card()` + `openDetail`) — see "The quiet card" below |
 | `static/js/tasks.js` | **The Task Board page** (`/tasks`) — its own page again since 2026-08-03 (decision D7); a thin shell that mounts `taskboard.js` full-width. It was embedded in the dashboard from 2026-07-26 until then, so `/dashboard?open=<id>` forwards here forever (the notifications minted in that window are permanent rows) |
 | `static/js/dashboard.js` | **The Overview** (`/dashboard`, labelled "Overview" since 2026-08-03): greeting + the day strip (attendance/gym as two buttons), then `GrowthPanel`'s rings, the **"my work"** strip (`renderMyWork` — three `.mw-tile` doors into `/tasks` + the "Up next" shortlist, **soonest deadline first**, undated last; fails silently; "mine" = the card's `mine` flag, see the gotcha below), `GrowthPanel`'s ledger, and — admins only, last — the org KPIs/chart/late list/handovers |
 | `static/js/growth-page.js` | `/growth` = a manager's read-only view of ONE person (`?user=<id>`); without a `?user` it redirects to the Overview |
@@ -123,6 +123,61 @@ inside any comment that lives in a template literal**, never with a backtick.
   the task has no client (`publish()` can only answer "no Atrium client linked"). Park and Submit for
   review are hidden on a card in a done column for the same reason — nothing to pause, and the
   approval a review authorises is spent by the completion that already happened.
+- 🔴 **The quiet card, and the record behind it (2026-08-06).** Ported from
+  `frontend/taskboard_ux_prototype.html`, which is kept as the reference drawing. **A card says WHO
+  is on it and WHETHER it is in trouble, and nothing else** — a signal every card carries is not a
+  signal, so the priority word, the filled label pill, the creator tag, the attachment count and the
+  `done/total` text all came off it. Five rules, each of which is a decision:
+  - **ONE flag per card, at most** (`flagOf`, in `taskboard.js`): client-asked → not-synced →
+    in-review → changes → approved → urgent → parked → filed → unclaimed. It replaced a row of five
+    pills that could all be lit at once on a 288px card, at which point none of them was read.
+  - 🔴 **Overdue is deliberately NOT in that ladder.** The DATE carries it, in red, at the other end
+    of the card ("Jul 31 · 6d late"). Putting it in the ladder spends the one flag slot on something
+    already said — which is exactly how the single card that was both late AND had an open client
+    change request showed only "late", hiding the actionable half.
+  - **The label is a 6px dot** in the label's own colour (`S.colors.labels`), named in its `title`
+    and spelled out in the record. Within one client it never varies, so as a filled pill it was the
+    loudest thing on the board while saying the least.
+  - **Faces, not names**: the lead is ringed green, anything of yours is ringed violet, support is an
+    overlapped stack that spreads on hover. 🔴 Initials chips are **neutral grey on this board only**
+    — the house avatar is a green gradient, and a green chip inside the green lead ring read as one
+    blob. The rest of the app keeps the green chip.
+  - **Progress is a 2px hairline** on the card's bottom edge, present only when there is a
+    breakdown — which is what made 🔴 **`.col-list > .tcard{flex:0 0 auto}`** load-bearing. `.col-list`
+    is a flex **column**, so cards are flex items that the browser SHRINKS once a column holds more
+    than fits, rather than scrolling. That was survivable while a card had no `overflow` (the text
+    just spilled over the card below); with `overflow:hidden` it became silent truncation — clipped
+    titles and no footer at all (reported 2026-08-06, on a short window). The column scrolls; cards
+    do not shrink.
+  The **record** (`openDetail`) reads in the order the questions get asked: kicker + name → **ONE
+  notice** (the same worst-true-thing ladder, replacing up to ten chips and two stacked warning
+  boxes) → **who is on it** (`.tb-crew`, lead + support + how many steps each holds) → **four facts**
+  (stage · due/delivered · progress · priority) → the record on the left, **Work / Comments /
+  Activity tabs** on the right. Two rules: **nothing is printed twice** (the `.tb-kv` list carries
+  only what the facts strip does not — due date and priority used to appear twice, two inches
+  apart), and 🔴 **the three panes stay in the DOM and are toggled with `[hidden]`, never
+  re-rendered** — the breakdown wires eight handlers per row and re-wires itself after every save,
+  and the comment box may hold half a sentence. The notice also reports **which rung it used**
+  (`noticeKind`), because a card can be parked AND late: the internal field list prints the hold
+  reason exactly when the notice didn't, so the one piece of prose no other surface carries can
+  never vanish.
+- 🔴 **The record's footer is ONE row, and that is a constraint** (2026-08-06 — it wrapped onto two,
+  stranding the primary action under a red Delete). Left to right: the **Move to** select (you used
+  to have to close the card to move the card), Edit, the two or three actions this STATE offers,
+  **More** (a `<details>` menu — filing, Not ours…, the Atrium bridge, Retry, Delete), then Close +
+  **Mark complete**. Three consequences:
+  - **Park lost its button.** Parking a card *is* putting it in the parked column, and Move already
+    does that — the same "one field, ONE control" rule as the row above. Choosing the parked stage
+    asks for the reason and calls the same `park` endpoint, so `hold_reason`/`resume_to` are still
+    written by `task_workflow` and never by a bare status PATCH. `askReason` grew an **`onCancel`**
+    for it: abandoning the prompt has to put the select back, or the control claims a move that
+    never happened.
+  - **Mark complete resolves its target column by STAGE** (`isDoneStatus`), never by the label
+    "Completed" — see AGENTS.md §5 (D13). The review gate can still refuse it with a 409, which the
+    toast reports rather than the button pretending to be disabled.
+  - **A shared Sentinel row's "✓ Shared with the client" chip is gone.** A state does not belong in
+    an actions menu, and the record says it twice already (the kicker ends "· shared with the
+    client"; the internal list carries "Client card · Published").
 - **A card on a retired status gets its own column, marked, and takes no new cards.** `columnsFor`
   appends any status the vocabulary no longer lists. Before this, `renderBoard` bucketed by
   `t.status` and then rendered only `STATUSES`, so those cards **vanished** — no error, no empty

@@ -1,0 +1,1358 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Task Board — quiet board, faces on the card (prototype)</title>
+<!-- =====================================================================
+     SENTINEL TASK BOARD — UX PROTOTYPE  (2026-08-06)
+     Standalone: no build step, no external request (CSP + offline rule).
+
+     THE ONE IDEA: a card should say WHO is on it and WHETHER it is in trouble,
+     and nothing else. Everything that is true of every card — the priority word,
+     the filled label pill, the creator, the attachment count — is noise, because
+     a signal every card carries is not a signal.
+
+       * ONE flag per card, at most. Overdue > client changes > stale > review >
+         urgent > parked. The rest is silence.
+       * Discipline is a 6px dot, not a filled pill. It was the loudest thing on
+         a board where it never varies within a client.
+       * Colour means a problem. Green is progress and the lead's ring. Nothing
+         else is coloured.
+       * Faces: the LEAD is ringed, the SUPPORT sits beside them. Support has
+         existed on the model since 2026-08-06; the card only printed the lead.
+       * Columns are transparent — the panel is the space between cards, not a
+         white slab with a border around a white card.
+
+     THREE SEATS (2026-08-06). The switcher top-right re-runs the SAME predicates the
+     server enforces (backend/app/services/task_perms.py) — there is no per-role markup
+     and no second copy of the rules. Super admin and Account manager get an identical
+     BOARD (both are task_perms.FULL); the super-admin difference lives off this page,
+     in Admin / Manage / client sync. The employee board is the interesting one:
+       - their own work, where "own" is `is_assigned` — lead, supporter, OR the owner
+         of any phase/step. Not `assigned_to_id`, which is the narrower rule that told
+         delegates their plate was empty in July 2026;
+       - PLUS their team's UNCLAIMED queue, and nothing else routed to that team — a
+         colleague's card is that colleague's job;
+       - no Atrium client cards (those are scoped by role, team lead and up);
+       - no priority control, no approvals, no delegation, no client sharing, and they
+         may only tick a step they own or that nobody owns.
+     Hiding a control is COURTESY, so nobody is offered a button that can only answer
+     403. It is never the protection — the server is.
+
+     Deliberately NOT here (rejected before, do not re-propose):
+       * left priority accent bars on cards        (rejected 2026-07-14)
+       * per-column money / pipeline totals        (rejected 2026-07-14)
+       * a docked side panel instead of the modal  (reverted 2026-08-03 — the
+         arithmetic is in sentinel/AGENTS.md §5)
+     ===================================================================== -->
+<style>
+/* ---------- tokens: from frontend/static/css/styles.css ---------- */
+:root{
+  --green:#54B948; --green-d:#3A9A2F; --green-strong:#2F8A2C; --green-bg:#E9F7E6;
+  --violet:#9484FB; --violet-d:#5C4BD0; --violet-bg:#F1EFFE;
+  --sentinel-2:#F2820C;
+  --ink:#0D1117; --text:#2B333C; --sub:#5B6673; --muted:#8A939F;
+  --line:#E7EAEE; --line-soft:#EEF0F3; --line-strong:#D8DDE3;
+  --canvas:#F6F7F9; --card:#FFFFFF; --sunken:#F1F3F5; --hover:#F1F3F5;
+  --warn:#B4720A; --danger:#D8443C; --info:#3B82F6;
+  --d-paid:#F97316; --d-organic:#54B948; --d-web:#3B82F6;
+  --pill:999px;
+  --shadow-sm:0 1px 2px rgba(16,24,40,.05);
+  --shadow:0 2px 6px rgba(16,24,40,.06), 0 12px 28px -16px rgba(16,24,40,.18);
+  --shadow-lg:0 2px 8px rgba(16,24,40,.06), 0 26px 60px -22px rgba(16,24,40,.28);
+}
+:root[data-theme="dark"]{
+  --ink:#F1F5F2; --text:#DCE3DD; --sub:#9AA6A0; --muted:#6D7A73;
+  --canvas:#0B0F0D; --card:#121A16; --sunken:#0F1613; --hover:rgba(255,255,255,.05);
+  --line:rgba(255,255,255,.09); --line-soft:rgba(255,255,255,.05); --line-strong:rgba(255,255,255,.16);
+  --green:#5FBE54; --green-d:#6BCB4E; --green-strong:#6BCB4E; --green-bg:rgba(95,190,84,.14);
+  --violet-bg:rgba(148,132,251,.15);
+  --warn:#E9A33A; --danger:#F0716A;
+  --shadow-sm:0 1px 2px rgba(0,0,0,.4);
+  --shadow:0 2px 6px rgba(0,0,0,.35), 0 14px 30px -16px rgba(0,0,0,.6);
+  --shadow-lg:0 2px 10px rgba(0,0,0,.5), 0 30px 64px -24px rgba(0,0,0,.7);
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{font-family:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  font-size:14px;line-height:1.5;color:var(--text);background:var(--canvas);-webkit-font-smoothing:antialiased}
+h1,h2,h3,h4{margin:0;color:var(--ink);letter-spacing:-.3px;font-weight:650}
+button{font:inherit;cursor:pointer}
+input,select,textarea{font:inherit;color:var(--text)}
+[hidden]{display:none !important}
+:focus-visible{outline:2px solid var(--violet-d);outline-offset:2px}
+
+.wrap{max-width:1600px;margin:0 auto;padding:26px 26px 64px}
+
+/* ---------- ONE toolbar ----------
+   Was three stacked rows (title block, five attention pills, five filter controls).
+   The sort selector and the density toggle are GONE, not moved: a board has one
+   sensible order — trouble first — and one comfortable size. Every control left
+   here answers a question somebody actually asks. */
+.phead{display:flex;flex-wrap:wrap;gap:12px 20px;align-items:center;justify-content:space-between;margin-bottom:14px}
+.phead h1{font-size:20px;letter-spacing:-.4px}
+.phead .lede{margin:3px 0 0;font-size:12.5px;color:var(--muted);max-width:72ch}
+.eyebrow{font-size:10px;font-weight:700;letter-spacing:.9px;text-transform:uppercase;color:var(--muted)}
+.ctl{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+
+.btn{border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:9px;
+  padding:7px 14px;font-size:12.5px;font-weight:600;display:inline-flex;align-items:center;gap:6px}
+.btn:hover{border-color:var(--line-strong)}
+.btn.primary{background:var(--green-d);border-color:var(--green-d);color:#fff}
+.btn.primary:hover{background:var(--green-strong)}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--sub)}
+.btn.ghost:hover{background:var(--hover);border-color:transparent}
+.btn.quiet{border-color:var(--line);background:transparent}
+.btn.sm{padding:5px 11px;font-size:11.5px}
+
+/* Prototype-only seat switcher + the line that says what the seat changed. */
+.seatpick{display:inline-flex;align-items:center;gap:2px;padding:2px 2px 2px 10px;background:var(--sunken);
+  border-radius:var(--pill)}
+.seatpick .lbl{font-size:10px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;
+  color:var(--muted);margin-right:5px}
+.seatpick button{border:0;background:transparent;border-radius:var(--pill);padding:5px 12px;
+  font-size:12px;font-weight:550;color:var(--muted)}
+.seatpick button[aria-pressed="true"]{background:var(--card);color:var(--ink);box-shadow:var(--shadow-sm)}
+.seatnote{display:flex;align-items:flex-start;gap:10px;margin:0 0 16px;padding:11px 14px;
+  border:1px solid var(--line);border-radius:12px;background:var(--card);font-size:12.5px;color:var(--sub)}
+.seatnote b{color:var(--ink);font-weight:650}
+.seatnote .who{display:flex;align-items:center;gap:8px;flex:none}
+
+.bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:18px}
+.bar input,.bar select{border:1px solid var(--line);background:var(--card);border-radius:9px;
+  padding:7px 11px;font-size:12.5px}
+.bar input{min-width:260px}
+.bar input::placeholder{color:var(--muted)}
+.bar .sep{width:1px;height:20px;background:var(--line);margin:0 4px}
+/* The exceptions, as words you can click. Grey until the count is real. */
+.att{border:0;background:transparent;padding:5px 9px;border-radius:8px;color:var(--muted);
+  font-size:12.5px;font-weight:500}
+.att b{font-weight:700;color:var(--text);font-variant-numeric:tabular-nums}
+.att:hover{background:var(--hover)}
+.att[aria-pressed="true"]{background:var(--sunken);color:var(--ink)}
+.att.bad b{color:var(--danger)}
+.att.warn b{color:var(--warn)}
+.att.zero{opacity:.42}
+.shown{margin-left:auto;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+
+/* ---------- panels: the column is space, not a slab ---------- */
+.board{display:flex;gap:18px;overflow-x:auto;padding-bottom:16px;align-items:flex-start}
+.col{flex:0 0 292px;display:flex;flex-direction:column;max-height:calc(100vh - 220px);min-height:120px}
+.col-head{display:flex;align-items:baseline;gap:8px;padding:0 4px 10px;position:sticky;top:0;
+  background:var(--canvas);z-index:2}
+.col-head .dot{width:7px;height:7px;border-radius:50%;flex:none;align-self:center}
+.col-head .t{font-size:12.5px;font-weight:650;color:var(--ink);letter-spacing:-.1px}
+.col-head .c{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.col-head .sig{margin-left:auto;font-size:11px;font-weight:600;color:var(--danger);white-space:nowrap}
+.col-head .sig.warn{color:var(--warn)}
+.col-head .fold{border:0;background:transparent;color:var(--line-strong);padding:0 2px;font-size:12px;line-height:1}
+.col-head .fold:hover{color:var(--sub)}
+.col-list{display:flex;flex-direction:column;gap:8px;overflow-y:auto;flex:1;padding:1px 2px 6px;min-height:36px}
+.col.drag-over .col-list{outline:1.5px dashed var(--violet);outline-offset:4px;border-radius:12px}
+.col-add{border:0;background:transparent;color:var(--muted);text-align:left;padding:8px 6px;font-size:12px;
+  font-weight:550;border-radius:9px;margin-top:2px}
+.col-add:hover{background:var(--hover);color:var(--ink)}
+/* An empty column is a DROP TARGET, so it should look like one — "Nothing here"
+   was a dead end where the only affordance on the board is dragging. */
+.col-empty{font-size:12px;color:var(--muted);padding:18px 10px;border:1px dashed var(--line-strong);
+  border-radius:12px;text-align:center}
+.col.folded{flex:0 0 40px}
+.col.folded .col-head{flex-direction:column;align-items:center;gap:10px;padding:0}
+.col.folded .t{writing-mode:vertical-rl;letter-spacing:.3px}
+.col.folded .sig{margin:0;writing-mode:vertical-rl}
+.col.folded .col-list,.col.folded .col-add{display:none}
+
+/* ---------- the card ---------- */
+.tcard{position:relative;background:var(--card);border:1px solid var(--line);border-radius:12px;
+  padding:12px 13px 11px;cursor:grab;overflow:hidden;transition:box-shadow .14s,border-color .14s}
+.tcard:hover{border-color:var(--line-strong);box-shadow:var(--shadow)}
+.tcard.dragging{opacity:.4}
+.tcard.quiet{background:transparent;border-style:dashed}
+.tcard.quiet .t-title{color:var(--sub);font-weight:550}
+.t-open{position:absolute;inset:0;border:0;background:transparent}
+.t-top{display:flex;align-items:center;gap:6px;margin-bottom:6px;min-height:14px}
+.disc{width:6px;height:6px;border-radius:50%;flex:none}
+.t-client{font-size:10px;font-weight:600;letter-spacing:.7px;text-transform:uppercase;color:var(--muted);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* ONE flag, top right, never two. */
+.t-flag{margin-left:auto;font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;
+  color:var(--muted);white-space:nowrap}
+.t-flag.bad{color:var(--danger)}
+.t-flag.warn{color:var(--warn)}
+.t-title{font-size:13.5px;font-weight:600;color:var(--ink);line-height:1.4;letter-spacing:-.1px}
+.t-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:11px}
+.t-meta{display:flex;align-items:center;gap:9px;font-size:11.5px;color:var(--muted);
+  font-variant-numeric:tabular-nums;white-space:nowrap}
+.t-meta .over{color:var(--danger);font-weight:650}
+.t-meta .soon{color:var(--warn);font-weight:600}
+.t-meta .ship{color:var(--green-strong)}
+.t-meta .cc{display:inline-flex;align-items:center;gap:3px}
+.t-meta svg{width:12px;height:12px}
+/* progress is a 2px hairline on the card's bottom edge — present when it matters,
+   invisible when it doesn't. It replaced a full-width bar plus a "2/5" caption. */
+.t-bar{position:absolute;left:0;right:0;bottom:0;height:2px;background:var(--line-soft)}
+.t-bar i{display:block;height:100%;background:var(--green);border-radius:0 2px 2px 0}
+
+/* ---------- faces ---------- */
+.avatar{width:26px;height:26px;border-radius:50%;overflow:hidden;flex:none;display:grid;place-items:center;
+  background:var(--sunken);color:#fff;font-size:9.5px;font-weight:700;position:relative}
+.avatar svg{width:100%;height:100%;display:block}
+.avatar.xs{width:20px;height:20px;font-size:8px}
+.avatar.lg{width:40px;height:40px;font-size:14px}
+/* The lead is the only ringed face — one neck, one ring. Your own face rings violet
+   so "where am I on this board" needs no filter. */
+.avatar.is-lead{box-shadow:0 0 0 1.5px var(--card),0 0 0 3px var(--green)}
+.avatar.is-me{box-shadow:0 0 0 1.5px var(--card),0 0 0 3px var(--violet)}
+.avatar.is-lead.is-me{box-shadow:0 0 0 1.5px var(--card),0 0 0 3px var(--green),0 0 0 4.5px var(--violet-bg)}
+.people{display:flex;align-items:center;gap:8px;min-width:0}
+.unassigned{font-size:11.5px;color:var(--muted);font-weight:550}
+.stack{display:flex;align-items:center}
+.stack .avatar{margin-left:-9px;box-shadow:0 0 0 1.5px var(--card);transition:margin-left .15s ease}
+.stack .avatar.is-me{box-shadow:0 0 0 1.5px var(--card),0 0 0 3px var(--violet)}
+.stack:hover .avatar{margin-left:-1px}
+.stack .more{margin-left:-9px;height:26px;min-width:26px;padding:0 6px;border-radius:var(--pill);
+  background:var(--sunken);box-shadow:0 0 0 1.5px var(--card);color:var(--muted);font-size:9.5px;
+  font-weight:700;display:grid;place-items:center;transition:margin-left .15s ease}
+.stack:hover .more{margin-left:-1px}
+
+/* ---------- modal ---------- */
+.veil{position:fixed;inset:0;background:rgba(9,14,11,.42);-webkit-backdrop-filter:blur(3px);
+  backdrop-filter:blur(3px);z-index:60;display:grid;place-items:center;padding:26px}
+.modal{background:var(--card);border-radius:18px;box-shadow:var(--shadow-lg);width:100%;max-width:940px;
+  max-height:90vh;display:flex;flex-direction:column;overflow:hidden}
+.mhead{flex:none;padding:20px 24px 16px;display:flex;gap:16px;align-items:flex-start}
+.mhead .kicker{font-size:10px;font-weight:700;letter-spacing:.9px;text-transform:uppercase;color:var(--muted);
+  display:flex;align-items:center;gap:7px}
+.mhead h2{font-size:19px;margin-top:6px;line-height:1.3;letter-spacing:-.4px}
+.mx{margin-left:auto;border:0;background:transparent;color:var(--muted);font-size:17px;line-height:1;
+  padding:4px 7px;border-radius:8px}
+.mx:hover{background:var(--hover);color:var(--ink)}
+.mbody{padding:0 24px 22px;overflow-y:auto;flex:1}
+.mfoot{flex:none;display:flex;gap:8px;align-items:center;padding:13px 24px;border-top:1px solid var(--line-soft)}
+.mfoot .sp{margin-left:auto}
+.movesel{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);border-radius:9px;
+  padding:4px 8px 4px 12px;font-size:12px;color:var(--muted)}
+.movesel select{border:0;background:transparent;font-size:12.5px;font-weight:600;color:var(--ink);padding:3px 2px}
+
+/* one quiet notice, only when something is actually wrong */
+.notice{border-left:2px solid var(--line-strong);padding:2px 0 2px 13px;margin:0 0 18px;font-size:12.5px;color:var(--text)}
+.notice.bad{border-left-color:var(--danger)}
+.notice.warn{border-left-color:var(--warn)}
+.notice b{color:var(--ink);font-weight:650}
+.notice .say{margin-top:5px;color:var(--sub)}
+.notice .meta{margin-top:4px;font-size:11px;color:var(--muted)}
+.notice .act{margin-top:7px}
+
+/* the facts, as a line — not six boxes */
+.facts{display:flex;flex-wrap:wrap;gap:0 26px;padding:14px 0;margin-bottom:2px;
+  border-top:1px solid var(--line-soft);border-bottom:1px solid var(--line-soft)}
+.fact .k{font-size:9.5px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;color:var(--muted)}
+.fact .v{font-size:13px;color:var(--ink);font-weight:550;margin-top:3px;display:flex;align-items:center;gap:6px}
+.fact .v.bad{color:var(--danger)}
+.fact .v.warn{color:var(--warn)}
+
+/* crew — the faces, named, with what each one holds */
+.crew{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:16px 0}
+.lead{display:flex;align-items:center;gap:10px}
+.lead .nm{font-size:14px;font-weight:650;color:var(--ink);line-height:1.25}
+.lead .rl{font-size:11px;color:var(--muted)}
+.crew-line{width:1px;height:28px;background:var(--line)}
+.sup{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.sup-p{display:flex;align-items:center;gap:7px}
+.sup-p .nm{font-size:12.5px;color:var(--text);font-weight:550;line-height:1.2}
+.sup-p .st{font-size:10.5px;color:var(--muted)}
+.crew-add{border:0;background:transparent;color:var(--muted);font-size:12px;font-weight:550;padding:5px 9px;border-radius:8px}
+.crew-add:hover{background:var(--hover);color:var(--ink)}
+.crew-none{font-size:12.5px;color:var(--muted)}
+
+.cols2{display:grid;grid-template-columns:1fr 1fr;gap:30px;padding-top:18px}
+@media (max-width:860px){.cols2{grid-template-columns:1fr}}
+.lbl-s{font-size:9.5px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;color:var(--muted)}
+.desc{font-size:13px;color:var(--sub);margin-bottom:16px}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:9px 18px;font-size:12.5px;align-items:baseline}
+.kv dt{color:var(--muted)}
+.kv dd{margin:0;color:var(--text)}
+.internal{margin-top:20px;padding-top:15px;border-top:1px solid var(--line-soft)}
+
+.tabs{display:flex;gap:18px;border-bottom:1px solid var(--line-soft);margin-bottom:14px}
+.tabs button{border:0;background:transparent;padding:0 0 9px;font-size:12.5px;font-weight:600;color:var(--muted);
+  border-bottom:2px solid transparent;margin-bottom:-1px}
+.tabs button[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--ink)}
+.tabs .n{color:var(--muted);font-weight:500;margin-left:4px}
+
+.phase{margin-bottom:16px}
+.phase-h{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.phase-h .pt{font-size:12.5px;font-weight:650;color:var(--ink);flex:1;min-width:0}
+.phase-h .pn{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+.step{display:flex;align-items:center;gap:9px;padding:5px 8px;border-radius:8px;font-size:12.5px;margin-left:2px}
+.step:hover{background:var(--hover)}
+.step.mine{background:var(--violet-bg)}
+.step input{width:14px;height:14px;accent-color:var(--green-d);flex:none}
+.step .tx{flex:1;min-width:0}
+.step.done .tx{color:var(--muted);text-decoration:line-through}
+.step .ow{font-size:11px;color:var(--muted);display:flex;align-items:center;gap:5px;white-space:nowrap}
+
+.thread{display:flex;flex-direction:column;gap:14px}
+.cmt{display:flex;gap:10px}
+.cmt .who{font-size:12px;font-weight:650;color:var(--ink)}
+.cmt .when{font-size:10.5px;color:var(--muted);margin-left:5px}
+.cmt .bd{font-size:12.5px;color:var(--text);margin-top:2px}
+.cmt.client .bd{color:var(--ink)}
+.cmt.client .who::after{content:" · client";color:var(--violet-d);font-weight:600}
+.reply{display:flex;gap:8px;margin-top:16px}
+.reply input{flex:1;border:1px solid var(--line);background:var(--card);border-radius:9px;padding:8px 12px;font-size:12.5px}
+.act-list{list-style:none;margin:0;padding:0;font-size:12px;color:var(--muted)}
+.act-list li{padding:6px 0;border-bottom:1px solid var(--line-soft)}
+.act-list strong{color:var(--text);font-weight:600}
+
+/* ---------- before / after ---------- */
+.compare{margin-top:46px;padding-top:26px;border-top:1px solid var(--line)}
+.cmp-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:20px;margin-top:16px;max-width:1000px}
+.cmp h4{font-size:12.5px}
+.cmp p{margin:3px 0 12px;font-size:11.5px;color:var(--muted);min-height:32px}
+.cmp .stage{background:var(--sunken);border-radius:14px;padding:20px;display:grid;place-items:center}
+.cmp .stage > *{width:270px}
+.why{margin-top:26px;max-width:840px}
+.why h3{font-size:12.5px;margin-bottom:10px}
+.why li{margin-bottom:9px;font-size:12.5px;color:var(--sub)}
+.why b{color:var(--ink);font-weight:600}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="phead">
+    <div>
+      <div class="eyebrow">Sentinel · prototype · 6 Aug 2026</div>
+      <h1>Task Board</h1>
+      <p class="lede">A card shows the client, the work, who holds it, and one flag if something is wrong.
+         Open a card to move it, tick a step, or answer the client.</p>
+    </div>
+    <div class="ctl">
+      <!-- PROTOTYPE ONLY. The real board has no seat switcher — you are whoever you
+           signed in as. This is here so one page can show all three boards. -->
+      <span class="seatpick" role="group" aria-label="Viewing as">
+        <span class="lbl">Viewing as</span>
+        <button type="button" data-seat="super_admin">Super admin</button>
+        <button type="button" data-seat="account_manager" aria-pressed="true">Account manager</button>
+        <button type="button" data-seat="employee">Employee</button>
+      </span>
+      <button type="button" class="btn ghost sm" id="theme">Dark</button>
+      <button type="button" class="btn primary" id="new-task">New task</button>
+    </div>
+  </div>
+
+  <div id="seatnote"></div>
+
+  <!-- One row: what you look for, then what you filter by. Clear only appears when
+       there is something to clear. -->
+  <div class="bar">
+    <input type="search" id="f-search" placeholder="Search tasks, clients, people" aria-label="Search tasks">
+    <select id="f-client" aria-label="Client"></select>
+    <select id="f-person" aria-label="Person"></select>
+    <span class="sep"></span>
+    <span id="attbar" style="display:flex;gap:2px;flex-wrap:wrap"></span>
+    <button type="button" class="btn ghost sm" id="f-clear" hidden>Clear</button>
+    <span class="shown" id="shown-n"></span>
+  </div>
+
+  <div class="board" id="board"></div>
+
+  <section class="compare">
+    <div class="eyebrow">The card, side by side</div>
+    <h2 style="font-size:16px;margin-top:5px">What came off</h2>
+    <div class="cmp-grid">
+      <div class="cmp">
+        <h4>Today</h4>
+        <p>Filled label chip, the word “Medium”, the client, the creator, an icon row — and one face.</p>
+        <div class="stage"><div id="cmp-before"></div></div>
+      </div>
+      <div class="cmp">
+        <h4>Proposed</h4>
+        <p>Client, title, the crew, the date. One flag when it is in trouble. Progress is a hairline.</p>
+        <div class="stage"><div id="cmp-after"></div></div>
+      </div>
+    </div>
+
+    <div class="why">
+      <h3>The decisions</h3>
+      <ol>
+        <li><b>Support faces on the card.</b> A task has had one lead and many supporters since
+            2026-08-06 and the card printed one of them — “who is on this?” was a click away, on every card.
+            The lead keeps the green ring; you keep a violet one.</li>
+        <li><b>One flag, never two</b>, and only when something is wrong: client-asked ▸ not-synced ▸
+            in-review ▸ changes ▸ urgent ▸ parked. Overdue is not in that list because the red date already
+            says it. Priority is silent unless it is Urgent, and the discipline is a 6px dot — thirty cards
+            reading “Medium” under a filled orange chip is thirty cards reading nothing.</li>
+        <li><b>Three rows of chrome became one.</b> The sort selector and the density toggle are gone rather
+            than moved: a board has one sensible order — trouble first — and one comfortable size. Clear
+            appears only when there is something to clear.</li>
+        <li><b>The columns lost their walls.</b> White cards inside white panels on a grey page is two
+            surfaces doing one job; the panel is now the gap. Columns fold — five of them need ~1500px
+            beside a 248px sidebar, which is why the board already scrolls sideways at 1800px.</li>
+        <li><b>Moving a card no longer needs a mouse.</b> Drag still works, but the record has a
+            <i>Move to</i> control, and both go through one function — so the two doors into a stage cannot
+            apply different rules, which is exactly how the live board ended up with cards sitting in the
+            parked column that were never actually parked.</li>
+        <li><b>The record opens with the crew</b>, then four facts, one quiet notice if something is wrong,
+            and Work / Comments / Activity as tabs — one screen instead of two scrolls.</li>
+        <li><b>One board, three seats.</b> The switcher runs the server's own predicates, so the employee
+            board really is “my work — lead, support or any step I own — plus my team's unclaimed queue”,
+            with no client cards, no priority control, no approvals and no delegation. Priority becomes a
+            control instead of a value for a manager; a step someone else owns is disabled and says whose
+            it is. Super admin and AM see the same board — that difference is off this page.</li>
+      </ol>
+    </div>
+  </section>
+</div>
+
+<div id="modal-root"></div>
+
+<script>
+"use strict";
+// =====================================================================
+// Seed. Shapes mirror the real card payload (serializers.task_card) closely
+// enough that porting is a rename job: assignee / support / support_ids /
+// labels / on_hold / review_state / mine / my_slots / source.
+// =====================================================================
+const TEAMS = { 1: "Acquisition", 2: "Lifecycle", 3: "Data Analyst", 4: "Development", 5: "Bidbrain" };
+
+const PEOPLE = [
+  { id: 1,  name: "Charles Tan",  team: null, role: "account_manager", photo: true  },
+  { id: 2,  name: "Ehjay Cruz",   team: 1,    role: "employee",        photo: true  },
+  { id: 3,  name: "Paulo Reyes",  team: 2,    role: "employee",        photo: true  },
+  { id: 4,  name: "Justine Roa",  team: 1,    role: "employee",        photo: true  },
+  { id: 5,  name: "Zhen Lim",     team: 1,    role: "employee",        photo: false },
+  { id: 6,  name: "Lance Dizon",  team: 1,    role: "employee",        photo: true  },
+  { id: 7,  name: "Ian Torres",   team: 3,    role: "employee",        photo: false },
+  { id: 8,  name: "Nico Alvarez", team: 4,    role: "employee",        photo: true  },
+  { id: 9,  name: "Samuel Ong",   team: 4,    role: "employee",        photo: false },
+  { id: 10, name: "Jerome Cruz",  team: 5,    role: "employee",        photo: true  },
+  { id: 11, name: "Christian Yu", team: 5,    role: "employee",        photo: false },
+  { id: 12, name: "Maria Santos", team: null, role: "super_admin",     photo: true  },
+];
+const byId = (id) => PEOPLE.find((p) => p.id === id) || null;
+const deptOf = (p) => (p && p.team ? TEAMS[p.team] : (p && p.role === "account_manager" ? "Account Management" : "—"));
+
+// The three seats. Switching seat re-runs the SAME predicates the server enforces
+// (backend/app/services/task_perms.py) — this prototype does not have a second copy
+// of the rules with different answers, which is the failure mode the real board has
+// hit twice ("the server was right, the UI lied").
+const SEATS = [
+  { key: "super_admin",     label: "Super admin",     userId: 12 },
+  { key: "account_manager", label: "Account manager", userId: 1  },
+  { key: "employee",        label: "Employee",        userId: 4  },
+];
+let SEAT = SEATS[1];
+let ME = SEAT.userId;                          // "you" — the violet ring follows the seat
+
+const STATUSES = [
+  { name: "To Do",           stage: "todo",      color: "#B6BDC6" },
+  { name: "In Progress",     stage: "active",    color: "#3B82F6" },
+  { name: "Revision Needed", stage: "revision",  color: "#E9A33A" },
+  { name: "Parked",          stage: "blocked",   color: "#9484FB" },
+  { name: "Completed",       stage: "completed", color: "#54B948" },
+];
+const DISC = { "Paid Media": "var(--d-paid)", "Organic": "var(--d-organic)", "Website": "var(--d-web)" };
+
+const TODAY = new Date();
+const iso = (o) => new Date(TODAY.getTime() + o * 864e5).toISOString().slice(0, 10);
+
+let SEQ = 100;
+function task(o) {
+  const t = Object.assign({
+    id: ++SEQ, source: "sentinel", labels: [], support: [], support_ids: [],
+    comment_count: 0, attachment_count: 0, maintasks: [], comments: [], history: [],
+    review_state: null, on_hold: false, hold_reason: "", atrium_shared: false,
+    atrium_sync_error: null, open_changes: 0, priority: "Medium", description: "",
+  }, o);
+  // The three FK-ish columns every permission rule is written in terms of. Derived
+  // once here so no rule has to reach through `assignee` and guess.
+  t.assigned_to_id = t.assignee ? t.assignee.id : null;
+  t.created_by_id = t.created_by ? t.created_by.id : null;
+  if (t.assigned_team_id === undefined) {
+    t.assigned_team_id = t.assignee && t.assignee.id ? (byId(t.assignee.id) || {}).team || null : null;
+  }
+  return t;
+}
+function bd(groups) {
+  return groups.map((g, i) => ({
+    id: "m" + i, title: g[0], assignee_id: g[1],
+    subs: g[2].map((s, j) => ({ id: "s" + i + j, text: s[0], done: !!s[1], assignee_id: s[2] || null })),
+  }));
+}
+
+const TASKS = [
+  task({ title: "RHE email to all emails list", status: "In Progress", client_name: "Rooming House Expert",
+    labels: ["Organic"], due_date: iso(0), start_date: iso(-6), assignee: byId(4),
+    support: [byId(3), byId(5)], support_ids: [3, 5], created_by: byId(1),
+    comment_count: 3, attachment_count: 1, atrium_shared: true,
+    description: "One-off broadcast to the full list ahead of the Rent-to-Rent webinar.",
+    maintasks: bd([
+      ["Copy and design", 3, [["Draft the email copy", true, 3], ["Header graphic", true, 5], ["Second-pass edit", false, 4]]],
+      ["Send and report",  4, [["Segment the list", false, 4], ["Schedule the send", false, 4], ["24h open-rate note", false, 7]]],
+    ]),
+    comments: [{ who: 1, body: "Client wants it out before Friday's webinar.", when: "2d ago" },
+               { who: 3, body: "Copy is in the doc — needs your pass, Justine.", when: "1d ago" }],
+    history: [{ who: 1, field: "priority", from: "Low", to: "Medium", when: "3d ago" },
+              { who: 4, field: "status", from: "To Do", to: "In Progress", when: "2d ago" }] }),
+
+  task({ title: "RHE 6 blogs + 1 newsletter buffer", status: "In Progress", client_name: "Rooming House Expert",
+    labels: ["Organic"], priority: "Low", due_date: iso(9), start_date: iso(-3), assignee: byId(3),
+    support: [byId(4)], support_ids: [4], created_by: byId(1), comment_count: 1,
+    maintasks: bd([["Outlines", 3, [["6 outlines", true, 3], ["AM review", false, 1]]],
+                   ["Drafting", 3, [["Blog 1–3", false, 3], ["Blog 4–6", false, 4]]]]) }),
+
+  task({ title: "Park & Porch — creative refresh", status: "In Progress", client_name: "Riverdance RV",
+    labels: ["Paid Media"], priority: "Urgent", due_date: iso(-2), start_date: iso(-14), assignee: byId(2),
+    support: [byId(6), byId(5), byId(11)], support_ids: [6, 5, 11], created_by: byId(1),
+    comment_count: 6, attachment_count: 4, review_state: "pending", atrium_shared: true,
+    description: "CPL has drifted 34% over three weeks. New statics plus one video cut.",
+    maintasks: bd([["Production", 2, [["3 statics", true, 6], ["Video cut", true, 5], ["Copy variants", false, 11]]],
+                   ["Launch", 2, [["Build the ad sets", false, 2], ["QA and go live", false, 2]]]]),
+    comments: [{ who: 2, body: "Submitted for review — statics and the cut are in the drive.", when: "5h ago" }],
+    history: [{ who: 2, field: "review", from: "", to: "submitted", when: "5h ago" }] }),
+
+  task({ title: "Direct Booking (Campspot) — landing page", status: "In Progress", client_name: "Riverdance RV",
+    labels: ["Website"], due_date: iso(4), start_date: iso(-8), assignee: byId(8),
+    support: [byId(9)], support_ids: [9], created_by: byId(1), comment_count: 2,
+    maintasks: bd([["Build", 8, [["Hero and form", true, 8], ["Mobile pass", false, 9]]]]) }),
+
+  task({ title: "TCS placement — Ads Manager rebuild", status: "In Progress", client_name: "The Contract Shop",
+    labels: ["Paid Media"], due_date: iso(6), start_date: iso(-2), assignee: byId(6),
+    support: [byId(2)], support_ids: [2], created_by: byId(1),
+    atrium_sync_error: "Atrium returned 502 on the last push",
+    maintasks: bd([["Account structure", 6, [["Audit the old sets", true, 6], ["New naming", false, 6]]]]) }),
+
+  task({ title: "Honey Tribe — New Arrivals flow", status: "In Progress", client_name: "Honey Tribe",
+    labels: ["Organic"], due_date: iso(11), start_date: iso(-1), assignee: byId(3), created_by: byId(12),
+    maintasks: bd([["Flow map", 3, [["Trigger and branches", false, 3]]]]) }),
+
+  // Routed to Acquisition, owned by nobody — the TEAM QUEUE (task_perms._team_queue).
+  // This is the one card an employee sees that isn't theirs, and the moment anybody
+  // claims it, it leaves every other member's board.
+  task({ title: "Melo Yelo — finance page copy", status: "To Do", client_name: "Melo Yelo",
+    labels: ["Website"], due_date: iso(13), created_by: byId(1), assignee: null,
+    assigned_team_id: 1 }),
+
+  task({ title: "ASL Logistics — GA4 event audit", status: "To Do", client_name: "ASL Logistics",
+    labels: ["Website"], priority: "Urgent", due_date: iso(1), created_by: byId(1), assignee: byId(7),
+    support: [byId(11)], support_ids: [11], comment_count: 1,
+    maintasks: bd([["Audit", 7, [["Event inventory", false, 7], ["Fix the checkout funnel", false, 11]]]]) }),
+
+  task({ title: "Q3 negative-keyword sweep (all accounts)", status: "To Do", client_name: "Agora Data Driven",
+    labels: ["Paid Media"], priority: "Low", due_date: iso(20), created_by: byId(1), assignee: byId(5),
+    support: [byId(6), byId(2)], support_ids: [6, 2] }),
+
+  task({ title: "Rent to Rent — landing variant B", status: "Revision Needed", client_name: "Rooming House Expert",
+    labels: ["Website"], priority: "Urgent", due_date: iso(-1), start_date: iso(-11), assignee: byId(9),
+    support: [byId(8), byId(4)], support_ids: [8, 4], created_by: byId(1),
+    comment_count: 4, open_changes: 1, atrium_shared: true,
+    description: "Variant B of the Rent-to-Rent page, split 50/50 against the current control.",
+    maintasks: bd([["Rebuild", 9, [["Section order", true, 9], ["New testimonial block", false, 8], ["Copy pass", false, 4]]]]),
+    comments: [{ who: 1, client: true, when: "6h ago",
+      body: "The testimonial block reads as an ad — can we soften it and drop the badge row?" }],
+    history: [{ who: 1, field: "status", from: "In Progress", to: "Revision Needed", when: "6h ago" }] }),
+
+  task({ title: "Get Clients (5 Unexpected Ways) — carousel", status: "Revision Needed",
+    client_name: "The Contract Shop", labels: ["Paid Media"], due_date: iso(3), start_date: iso(-9),
+    assignee: byId(2), support: [byId(5)], support_ids: [5], created_by: byId(1), comment_count: 2,
+    review_state: "changes_requested",
+    maintasks: bd([["Design", 2, [["6 frames", true, 5], ["Rework frames 3–4", false, 2]]]]) }),
+
+  task({ title: "Re-launch Qcard campaign", status: "Parked", client_name: "Melo Yelo",
+    labels: ["Paid Media"], due_date: iso(16), start_date: iso(-30), assignee: byId(4),
+    support: [byId(6)], support_ids: [6], created_by: byId(1), on_hold: true,
+    hold_reason: "Client paused spend until the new pricing page ships.", resume_to: "In Progress",
+    maintasks: bd([["Rebuild", 4, [["New audiences", true, 4], ["Creative brief", false, 6]]]]) }),
+
+  task({ title: "Park & Porch | Leads — budget reshuffle", status: "Parked", client_name: "Riverdance RV",
+    labels: ["Paid Media"], priority: "Low", due_date: iso(24), start_date: iso(-21), assignee: byId(6),
+    created_by: byId(1), on_hold: true, hold_reason: "Waiting on the client's Q4 budget sign-off.",
+    resume_to: "To Do" }),
+
+  task({ title: "2 statics for newsletter", status: "Completed", client_name: "Honey Tribe",
+    labels: ["Organic"], due_date: iso(-4), start_date: iso(-12), completed_at: iso(-4), assignee: byId(2),
+    support: [byId(5)], support_ids: [5], created_by: byId(1), review_state: "approved", atrium_shared: true,
+    maintasks: bd([["Design", 2, [["Static 1", true, 2], ["Static 2", true, 5]]]]) }),
+
+  task({ title: "August reporting pack", status: "Completed", client_name: "Agora Data Driven",
+    labels: ["Website"], due_date: iso(-6), completed_at: iso(-6), assignee: byId(7),
+    support: [byId(11), byId(10)], support_ids: [11, 10], created_by: byId(12), review_state: "approved" }),
+
+  task({ title: "TCS — July performance review deck", status: "Completed", client_name: "The Contract Shop",
+    labels: ["Paid Media"], priority: "Low", due_date: iso(-9), completed_at: iso(-8), assignee: byId(1),
+    support: [byId(6)], support_ids: [6], created_by: byId(1), atrium_shared: true }),
+
+  // An Atrium-owned card: support arrives as NAMES from Atrium's roster (no Sentinel
+  // account behind them), which is why the face stack reads two different fields.
+  task({ id: "atrium:rhe:412", source: "atrium", title: "Negative Gearing — client landing copy",
+    status: "In Progress", client_name: "Rooming House Expert", labels: ["Organic"], due_date: iso(7),
+    start_date: iso(-5), assignee: { id: null, name: "Charles Tan", photo: true },
+    atrium_support_names: ["Agustin Nico", "Zhen Lim"], created_by: null, comment_count: 1,
+    atrium_visible: true, assigned_team_name: "Lifecycle",
+    description: "Owned by Atrium — every edit here writes straight back to the client's workspace." }),
+];
+
+// =====================================================================
+// Faces. No external requests, so a "photo" is a generated portrait: a small
+// deterministic SVG per person. Not a real photo — it is here to prove the
+// layout reads at 20/26/40px, which initials alone would not.
+// =====================================================================
+const SKIN = ["#F0C9A4", "#E0AC80", "#C68A5F", "#8D5524", "#F5D5B8", "#A9714B"];
+const SHIRT = ["#3A9A2F", "#3B82F6", "#7C6CE8", "#E0821A", "#17A398", "#C94F49", "#5B6673"];
+const BG = ["#E9F2E8", "#E8EFF9", "#EDEBFA", "#FAF0E4", "#E6F5F3", "#F8ECEB", "#EEF0F3"];
+const INITIAL_BG = ["#7B8794", "#5F6B78", "#8D97A3"];   // people without a photo — neutral only
+function hash(s) { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0; return h; }
+function initials(name) {
+  return String(name || "?").split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase() || "?";
+}
+function portrait(name) {
+  const h = hash(name);
+  // 🔴 `>>>`, never `>>`: hash() returns a uint32 and `>>` coerces it back to int32,
+  // so a name whose hash sets the top bit produced a NEGATIVE index and every colour
+  // came out `undefined`. Caught by a render harness, not by `node --check`.
+  const skin = SKIN[h % SKIN.length], shirt = SHIRT[(h >>> 3) % SHIRT.length], bg = BG[(h >>> 6) % BG.length];
+  const hair = SHIRT[(h >>> 9) % SHIRT.length];
+  const style = h % 4;
+  const hairPath = style === 0
+    ? '<path d="M11 16a9 9 0 0 1 18 0v-3a9 9 0 0 0-18 0z" fill="' + hair + '"/>'
+    : style === 1
+      ? '<path d="M10 20V15a10 10 0 0 1 20 0v5h-3V15a7 7 0 0 0-14 0v5z" fill="' + hair + '"/>'
+      : style === 2
+        ? '<circle cx="20" cy="7" r="4" fill="' + hair + '"/><path d="M11 16a9 9 0 0 1 18 0v-2a9 9 0 0 0-18 0z" fill="' + hair + '"/>'
+        : '<path d="M12 15a8 8 0 0 1 16 0v-1a8 8 0 0 0-16 0z" fill="' + hair + '"/>';
+  return '<svg viewBox="0 0 40 40" aria-hidden="true">'
+    + '<rect width="40" height="40" fill="' + bg + '"/>'
+    + '<path d="M4 40c0-8.5 7.2-13 16-13s16 4.5 16 13z" fill="' + shirt + '"/>'
+    + '<circle cx="20" cy="17" r="8" fill="' + skin + '"/>' + hairPath
+    + '<circle cx="17" cy="17.6" r="1" fill="#3b3b3b"/><circle cx="23" cy="17.6" r="1" fill="#3b3b3b"/>'
+    + '<path d="M17.7 21.2a3.3 3.3 0 0 0 4.6 0" stroke="#3b3b3b" stroke-width=".9" fill="none" stroke-linecap="round"/>'
+    + '</svg>';
+}
+function avatar(p, cls, o) {
+  o = o || {};
+  if (!p) return '<div class="avatar ' + (cls || "") + '" title="Unassigned">?</div>';
+  // 🔴 An initials chip is NEUTRAL, never a palette colour. It used to pick from the
+  // same set the portraits do, so a green chip inside the green lead ring read as one
+  // solid blob and the ring stopped saying anything. Colour on this board means a
+  // problem or a person's photo — never decoration.
+  const inner = p.photo ? portrait(p.name)
+    : '<span style="background:' + INITIAL_BG[hash(p.name) % INITIAL_BG.length]
+      + ';width:100%;height:100%;display:grid;place-items:center">' + initials(p.name) + "</span>";
+  return '<div class="avatar ' + (cls || "") + " " + (o.ring || "") + '" title="'
+    + esc(o.title || p.name) + '">' + inner + "</div>";
+}
+function esc(s) {
+  return String(s === null || s === undefined ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+const PH_TODAY = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
+function dueState(due) {
+  if (!due) return "";
+  if (due < PH_TODAY) return "over";
+  return (Date.parse(due) - Date.parse(PH_TODAY)) / 864e5 <= 2 ? "soon" : "";
+}
+function fmtDate(d) {
+  return d ? new Date(d + "T00:00:00+08:00").toLocaleDateString("en-PH",
+    { timeZone: "Asia/Manila", month: "short", day: "numeric" }) : "—";
+}
+function fmtDateFull(d) {
+  return d ? new Date(d + "T00:00:00+08:00").toLocaleDateString("en-PH",
+    { timeZone: "Asia/Manila", weekday: "short", day: "numeric", month: "short" }) : "—";
+}
+const daysLate = (due) => Math.round((Date.parse(PH_TODAY) - Date.parse(due)) / 864e5);
+
+const ICON_CMT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">'
+  + '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>';
+
+// =====================================================================
+// State
+// =====================================================================
+const state = { search: "", client: "", person: "", attention: "", folded: {} };
+const filtering = () => !!(state.search || state.client || state.person || state.attention);
+
+// =====================================================================
+// WHO MAY SEE AND DO WHAT — one transcription of task_perms.py.
+//
+// 🔴 Every one of these is enforced on the SERVER. Hiding a control is courtesy, so
+// nobody is offered a button that can only answer 403 — it is never the protection.
+// The three seats differ here and nowhere else: there is no per-role markup.
+// =====================================================================
+const FULL = ["super_admin", "admin", "account_manager"];   // task_perms.FULL
+const me = () => byId(ME) || { id: ME, team: null };
+const isFull = () => FULL.indexOf(SEAT.key) >= 0;
+const leadsTeam = (t) => SEAT.key === "team_lead" && !!t.assigned_team_id && t.assigned_team_id === me().team;
+
+// task_perms.assigned_user_ids — the lead, the supporters, and every phase/step owner.
+// 🔴 ONE definition. The July 2026 bug was a second, narrower copy of it in JS
+// (`assigned_to_id === me`), which told delegates their plate was empty.
+function assignedIds(t) {
+  const ids = new Set();
+  if (t.assigned_to_id) ids.add(t.assigned_to_id);
+  (t.support_ids || []).forEach((i) => ids.add(i));
+  (t.maintasks || []).forEach((m) => {
+    if (m.assignee_id) ids.add(m.assignee_id);
+    m.subs.forEach((s) => { if (s.assignee_id) ids.add(s.assignee_id); });
+  });
+  return ids;
+}
+const isMine = (t) => assignedIds(t).has(ME);
+const mySlots = (t) => (t.maintasks || []).reduce((n, m) =>
+  n + (m.assignee_id === ME ? 1 : 0) + m.subs.filter((s) => s.assignee_id === ME).length, 0);
+// task_perms._team_queue: routed to my team AND owned by nobody. Both halves matter —
+// widening it to "everything routed to my team" re-creates the board full of other
+// people's work; dropping it makes routed-but-unassigned work invisible to the team
+// that has to pick it up.
+const teamQueue = (t) => !!t.assigned_team_id && t.assigned_team_id === me().team && !t.assigned_to_id;
+
+function canSee(t) {
+  // An Atrium-owned card belongs to no Sentinel user, so no ownership rule COULD
+  // apply to it — it is scoped by role instead (can_view_atrium: team lead and up).
+  if (t.source === "atrium") return isFull() || SEAT.key === "team_lead";
+  if (isFull()) return true;
+  if (SEAT.key === "team_lead") return leadsTeam(t) || isMine(t) || t.created_by_id === ME;
+  return isMine(t) || teamQueue(t);
+}
+const canPrioritize = (t) => (t.source === "atrium" ? isFull() : isFull() || leadsTeam(t));
+const canReview = (t) => t.source !== "atrium" && (isFull() || leadsTeam(t));
+const canReassign = (t) => isFull() || leadsTeam(t);
+const canDelete = (t) => (t.source === "atrium" ? isFull()
+  : isFull() || leadsTeam(t) || (t.created_by_id === ME && canSee(t)));
+const canBridge = () => isFull();                       // task_perms.BRIDGE = AM and up
+const canMonitor = () => isFull() || SEAT.key === "team_lead";
+// task_perms.can_tick_step — "done" is a claim about work another person performed.
+const canTick = (t, ownerId) => !ownerId || ownerId === ME || t.assigned_to_id === ME || canReassign(t);
+
+const steps = (t) => {
+  const all = (t.maintasks || []).reduce((a, m) => a.concat(m.subs), []);
+  return { done: all.filter((s) => s.done).length, total: all.length };
+};
+const isDone = (t) => t.status === "Completed";
+const isOverdue = (t) => !!t.due_date && !isDone(t) && dueState(t.due_date) === "over";
+const supportOf = (t) => ((t.support && t.support.length)
+  ? t.support
+  : (t.atrium_support_names || []).map((n) => ({ id: null, name: n, photo: false })));
+
+function matches(t) {
+  // 🔴 Permission FIRST, filters second. A card the seat may not see must never be
+  // reachable by clearing a filter — that is the difference between scoping a board
+  // and decorating one.
+  if (!canSee(t)) return false;
+  const q = state.search.trim().toLowerCase();
+  if (q) {
+    const hay = [t.title, t.client_name, t.assignee && t.assignee.name,
+      supportOf(t).map((p) => p.name).join(" ")].filter(Boolean).join(" ").toLowerCase();
+    if (hay.indexOf(q) < 0) return false;
+  }
+  if (state.client && t.client_name !== state.client) return false;
+  if (state.person) {
+    const pid = +state.person;
+    if (!((t.assignee && t.assignee.id === pid) || (t.support_ids || []).indexOf(pid) >= 0)) return false;
+  }
+  const a = state.attention;
+  if (a === "overdue" && !isOverdue(t)) return false;
+  if (a === "review" && t.review_state !== "pending") return false;
+  if (a === "changes" && !t.open_changes) return false;
+  if (a === "mine" && !isMine(t)) return false;
+  return true;
+}
+
+const PRIO = { Urgent: 0, Medium: 1, Low: 2 };
+// ONE order, no selector: trouble first, then urgency, then the soonest date. The
+// Due-date and Client sorts came out — a column you re-sort three ways is a column
+// whose default order you don't trust, and the filters answer those questions better.
+// Parked sinks: it is deliberately not in play, so it must not head a column.
+function sortTasks(list) {
+  const s = (t) => (t.on_hold ? 100 : 0) + (isOverdue(t) ? -10 : 0) + (t.open_changes ? -6 : 0) + PRIO[t.priority];
+  return list.slice().sort((a, b) =>
+    (s(a) - s(b)) || (a.due_date || "9999").localeCompare(b.due_date || "9999"));
+}
+
+// =====================================================================
+// ONE flag per card. This ladder is the whole "prioritise the important
+// details" rule, in one place: the worst true thing wins, everything else
+// stays quiet and lives in the record.
+// =====================================================================
+// 🔴 OVERDUE IS NOT IN THIS LADDER — the DATE carries it, in red, at the other end of
+// the card. Returning it here spent the flag slot on something already said, which is
+// how the one card that was both late AND had a client change request showed only
+// "late": the worse of its two problems hid the actionable one.
+function flagOf(t) {
+  if (isDone(t)) return null;
+  if (t.open_changes) return { t: "Client asked", c: "bad" };
+  if (t.atrium_sync_error) return { t: "Not synced", c: "bad" };
+  if (t.review_state === "pending") return { t: "In review", c: "warn" };
+  if (t.review_state === "changes_requested") return { t: "Changes", c: "warn" };
+  if (t.priority === "Urgent") return { t: "Urgent", c: "bad" };
+  if (t.on_hold) return { t: "Parked", c: "" };
+  // Bottom rung: routed to a team, owned by nobody. On a manager's board it is work
+  // that needs staffing; on a team member's it is the ONE card there that isn't
+  // theirs, and without the word it just looks like a card missing its face.
+  if (!t.assigned_to_id && t.assigned_team_id) return { t: "Unclaimed", c: "" };
+  return null;
+}
+
+// =====================================================================
+// Card
+// =====================================================================
+function card(t, legacy) {
+  const st = steps(t);
+  const ds = dueState(t.due_date);
+
+  // The card as it ships today — same task, so the comparison is honest.
+  if (legacy) {
+    return '<div class="tcard" style="cursor:default">'
+      + '<div style="margin-bottom:7px"><span style="display:inline-block;font-size:10px;font-weight:800;'
+        + "letter-spacing:.3px;color:#fff;padding:2px 8px;border-radius:6px;text-transform:uppercase;background:"
+        + (t.labels[0] === "Paid Media" ? "#F97316" : t.labels[0] === "Organic" ? "#54B948" : "#3B82F6")
+        + '">' + esc(t.labels[0] || "") + "</span></div>"
+      + '<div class="t-title" style="font-weight:700">' + esc(t.title) + "</div>"
+      + '<div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-top:9px;font-size:12px;color:var(--sub)">'
+        + '<span style="width:7px;height:7px;border-radius:50%;background:'
+        + (t.priority === "Urgent" ? "#EF4444" : t.priority === "Medium" ? "#F59E0B" : "#54B948") + '"></span>'
+        + "<span>" + esc(t.priority) + "</span>"
+        + (t.due_date ? '<span style="' + (ds === "over" ? "color:var(--danger);font-weight:700" : "")
+            + '">· ' + fmtDate(t.due_date) + "</span>" : "")
+        + (t.client_name ? '<span style="color:var(--muted)">· ' + esc(t.client_name) + "</span>" : "")
+        + (t.created_by ? '<span style="color:var(--muted)">· by ' + esc(t.created_by.name.split(" ")[0]) + "</span>" : "")
+      + "</div>"
+      + '<div style="display:flex;align-items:center;justify-content:space-between;margin-top:11px">'
+        + '<div class="people">' + avatar(t.assignee, "")
+        + '<span style="font-size:12px;font-weight:600">' + esc(t.assignee ? t.assignee.name.split(" ")[0] : "Unassigned") + "</span></div>"
+        + '<div style="display:flex;gap:9px;color:var(--muted);font-size:12px">'
+          + (t.comment_count ? "<span>" + ICON_CMT + " " + t.comment_count + "</span>" : "")
+          + (st.total ? "<span>" + st.done + "/" + st.total + "</span>" : "") + "</div>"
+      + "</div></div>";
+  }
+
+  const sup = supportOf(t);
+  const shown = sup.slice(0, 3);
+  const extra = sup.length - shown.length;
+  const stack = sup.length
+    ? '<span class="stack" title="Support: ' + esc(sup.map((p) => p.name).join(", ")) + '">'
+      + shown.map((p) => avatar(p, "", { title: "Support · " + p.name, ring: p.id === ME ? "is-me" : "" })).join("")
+      + (extra ? '<span class="more">+' + extra + "</span>" : "") + "</span>"
+    : "";
+
+  const flag = flagOf(t);
+  const dateBit = isDone(t)
+    ? '<span class="ship">' + fmtDate(t.completed_at || t.due_date) + "</span>"
+    : (t.due_date
+        ? '<span class="' + ds + '">' + fmtDate(t.due_date)
+          + (ds === "over" ? " · " + daysLate(t.due_date) + "d late" : "") + "</span>"
+        : "");
+
+  return '<article class="tcard ' + (t.on_hold ? "quiet" : "")
+      + '" draggable="true" data-id="' + esc(t.id) + '">'
+    + '<button type="button" class="t-open" data-open="' + esc(t.id) + '" aria-label="Open ' + esc(t.title) + '"></button>'
+    + '<div class="t-top">'
+      + (t.labels[0] ? '<span class="disc" style="background:' + DISC[t.labels[0]] + '" title="'
+          + esc(t.labels[0]) + '"></span>' : "")
+      + '<span class="t-client">' + esc(t.client_name || "Internal") + "</span>"
+      + (flag ? '<span class="t-flag ' + flag.c + '">' + flag.t + "</span>" : "")
+    + "</div>"
+    + '<div class="t-title">' + esc(t.title) + "</div>"
+    + '<div class="t-foot">'
+      + '<div class="people">'
+        + avatar(t.assignee, "", { title: "Lead · " + (t.assignee ? t.assignee.name : "Unassigned"),
+            ring: "is-lead" + (t.assignee && t.assignee.id === ME ? " is-me" : "") })
+        + stack
+        // Unowned work has to SAY so — a lone grey "?" disc reads as a missing photo,
+        // not as a card nobody has picked up.
+        + (t.assignee ? "" : '<span class="unassigned">Unassigned</span>')
+      + "</div>"
+      + '<div class="t-meta">' + dateBit
+        + (t.comment_count ? '<span class="cc">' + ICON_CMT + t.comment_count + "</span>" : "")
+      + "</div>"
+    + "</div>"
+    + (st.total ? '<div class="t-bar"><i style="width:' + Math.round((st.done / st.total) * 100) + '%"></i></div>' : "")
+    + "</article>";
+}
+
+// =====================================================================
+// Board
+// =====================================================================
+function render() {
+  const visible = TASKS.filter(matches);
+  document.getElementById("board").innerHTML = STATUSES.map((s) => {
+    const list = sortTasks(visible.filter((t) => t.status === s.name));
+    const over = list.filter(isOverdue).length;
+    const look = list.filter((t) => t.open_changes || t.review_state === "pending").length;
+    const folded = !!state.folded[s.name];
+    // The exception line: one phrase, only when there is one. A healthy column
+    // says nothing, which is what makes a red word mean something.
+    const sig = over ? '<span class="sig">' + over + " overdue</span>"
+      : look ? '<span class="sig warn">' + look + " to look at</span>" : "";
+    return '<section class="col ' + (folded ? "folded" : "") + '" data-status="' + esc(s.name) + '">'
+      + '<header class="col-head">'
+        + '<span class="dot" style="background:' + s.color + '"></span>'
+        + '<span class="t">' + esc(s.name) + "</span>"
+        + '<span class="c">' + list.length + "</span>"
+        + sig
+        + '<button type="button" class="fold" data-fold="' + esc(s.name) + '" aria-label="'
+          + (folded ? "Expand " : "Collapse ") + esc(s.name) + '">' + (folded ? "›" : "‹") + "</button>"
+      + "</header>"
+      + '<div class="col-list">'
+        + (list.length ? list.map((t) => card(t)).join("")
+            : '<div class="col-empty">' + (filtering() ? "Nothing matches" : "Drop a card here") + "</div>")
+      + "</div>"
+      + '<button type="button" class="col-add">+  Add card</button>'
+      + "</section>";
+  }).join("");
+
+  // 🔴 Counted over what this SEAT can see, never over the table. An employee whose
+  // board holds five cards being told "2 overdue" about work on somebody else's board
+  // is a number they can neither act on nor find.
+  const mine = TASKS.filter(canSee);
+  document.getElementById("shown-n").textContent = filtering()
+    ? visible.length + " of " + mine.length : mine.length + " tasks";
+  document.getElementById("f-clear").hidden = !filtering();
+  document.getElementById("seatnote").innerHTML = renderSeatNote();
+  // A person filter needs more than one person's work to be worth having; an
+  // employee's board is one person's work plus their team's queue.
+  document.getElementById("f-person").hidden = !canMonitor();
+  renderAttention(mine);
+  wireBoard();
+}
+
+function renderAttention(scope) {
+  const n = {
+    overdue: scope.filter(isOverdue).length,
+    changes: scope.filter((t) => t.open_changes).length,
+    review: scope.filter((t) => t.review_state === "pending").length,
+    mine: scope.filter(isMine).length,
+  };
+  // "to approve" is a job; "in review" is a status. Only a seat that can actually
+  // decide a review gets the verb.
+  const defs = [["overdue", "overdue", "bad"], ["changes", "client asked", "bad"],
+                ["review", canMonitor() ? "to approve" : "in review", "warn"],
+                ["mine", "on you", ""]];
+  document.getElementById("attbar").innerHTML = defs.map((d) =>
+    '<button type="button" class="att ' + d[2] + (n[d[0]] ? "" : " zero") + '" data-att="' + d[0]
+    + '" aria-pressed="' + (state.attention === d[0]) + '"><b>' + n[d[0]] + "</b> " + d[1] + "</button>").join("");
+}
+
+// The ONE way a card changes column, whichever door it came through — a drop, the
+// Move select, Resume, or the primary button. Mirrors the rules the server owns
+// (services/task_workflow.py): entering the parked column IS parking, leaving it
+// un-parks, and completing stamps a date.
+function moveTo(t, to) {
+  if (!to || t.status === to) return false;
+  if (to === "Parked") {
+    t.resume_to = t.status;
+    t.on_hold = true;
+    t.hold_reason = t.hold_reason || "Parked from the board.";
+  } else if (t.on_hold) {
+    t.on_hold = false;
+  }
+  if (to === "Completed") t.completed_at = PH_TODAY;
+  t.status = to;
+  flash("Moved to " + to);
+  return true;
+}
+
+function wireBoard() {
+  document.querySelectorAll("[data-open]").forEach((b) => {
+    b.onclick = (e) => { e.stopPropagation(); openDetail(b.dataset.open); };
+  });
+  document.querySelectorAll("[data-fold]").forEach((b) => {
+    b.onclick = () => { state.folded[b.dataset.fold] = !state.folded[b.dataset.fold]; render(); };
+  });
+  document.querySelectorAll(".col-add").forEach((b) => {
+    b.onclick = () => flash("Prototype — the real board opens the New Task form here.");
+  });
+  // Native HTML5 drag-and-drop, the same choice the real board makes (the CSP blocks
+  // CDNs, so SortableJS was never an option).
+  let dragId = null;
+  document.querySelectorAll(".tcard").forEach((el) => {
+    el.ondragstart = (e) => { dragId = el.dataset.id; el.classList.add("dragging"); e.dataTransfer.effectAllowed = "move"; };
+    el.ondragend = () => { el.classList.remove("dragging"); dragId = null; };
+  });
+  document.querySelectorAll(".col").forEach((col) => {
+    col.ondragover = (e) => { e.preventDefault(); col.classList.add("drag-over"); };
+    col.ondragleave = () => col.classList.remove("drag-over");
+    col.ondrop = (e) => {
+      e.preventDefault(); col.classList.remove("drag-over");
+      const t = TASKS.find((x) => String(x.id) === String(dragId));
+      if (t && moveTo(t, col.dataset.status)) render();
+    };
+  });
+}
+
+// =====================================================================
+// The record
+// =====================================================================
+let tab = "work";
+function openDetail(id) {
+  const t = TASKS.find((x) => String(x.id) === String(id));
+  // 🔴 An id is just a string. A card this seat may not see must be as absent when
+  // typed into the URL as it is on the board — scoping only the LIST would be theatre
+  // while the id still opened the record.
+  if (!t || !canSee(t)) { if (id) flash("That card isn't on your board"); return; }
+  tab = "work";
+  paint(t);
+}
+
+function crew(t) {
+  const sup = supportOf(t);
+  const slots = (pid) => (t.maintasks || []).reduce((n, m) =>
+    n + (m.assignee_id === pid ? 1 : 0) + m.subs.filter((s) => s.assignee_id === pid).length, 0);
+  return '<div class="crew">'
+    + '<div class="lead">'
+      + avatar(t.assignee, "lg", { title: "Lead · " + (t.assignee ? t.assignee.name : "Unassigned"),
+          ring: "is-lead" + (t.assignee && t.assignee.id === ME ? " is-me" : "") })
+      + "<div><div class=\"nm\">" + esc(t.assignee ? t.assignee.name : "Unassigned") + "</div>"
+      + '<div class="rl">Lead'
+        + (t.assignee && t.assignee.id ? " · " + esc(deptOf(byId(t.assignee.id))) : "")
+        + (t.source === "atrium" ? " · from Atrium's roster" : "") + "</div></div>"
+    + "</div>"
+    + (sup.length ? '<div class="crew-line"></div>' : "")
+    + '<div class="sup">'
+      + (sup.length
+          ? sup.map((p) => {
+              const n = p.id ? slots(p.id) : 0;
+              return '<span class="sup-p">'
+                + avatar(p, "", { title: "Support · " + p.name, ring: p.id === ME ? "is-me" : "" })
+                + '<span><span class="nm">' + esc(p.name) + "</span>"
+                + (n ? '<br><span class="st">' + n + " step" + (n > 1 ? "s" : "") + "</span>" : "")
+                + "</span></span>";
+            }).join("")
+          : '<span class="crew-none">No support yet.</span>')
+    + "</div>"
+    // Naming somebody else on a card is DELEGATION (task_perms.can_reassign) — the
+    // guard the real board has walked past twice. An employee gets no button.
+    + (canReassign(t) ? '<button type="button" class="crew-add" data-act="add-support">+ Add support</button>' : "")
+    + "</div>";
+}
+
+function paint(t) {
+  const st = steps(t);
+  const ds = dueState(t.due_date);
+  const done = isDone(t);
+  const stage = STATUSES.find((s) => s.name === t.status) || {};
+
+  // ONE notice, the worst true thing — the same ladder the card's flag uses.
+  const clientMsg = (t.comments || []).filter((c) => c.client).slice(-1)[0];
+  let notice = "";
+  if (t.open_changes) {
+    notice = '<div class="notice bad"><b>The client asked for changes.</b>'
+      + (clientMsg ? '<div class="say">“' + esc(clientMsg.body) + '”</div><div class="meta">'
+          + esc((byId(clientMsg.who) || {}).name || "The client") + " · " + esc(clientMsg.when) + "</div>" : "")
+      + '<div class="act"><button type="button" class="btn quiet sm" data-act="resolve">Mark as handled</button></div></div>';
+  } else if (isOverdue(t)) {
+    notice = '<div class="notice bad"><b>' + daysLate(t.due_date) + " days past due.</b> Due "
+      + fmtDateFull(t.due_date) + ".</div>";
+  } else if (t.atrium_sync_error) {
+    notice = '<div class="notice bad"><b>The client\'s copy is out of date.</b> ' + esc(t.atrium_sync_error)
+      + " Your edits saved here — retry the push to send them.</div>";
+  } else if (t.review_state === "pending") {
+    notice = '<div class="notice warn"><b>Waiting on approval.</b> '
+      + esc((t.assignee || {}).name || "Someone") + " submitted this for review.</div>";
+  } else if (t.on_hold) {
+    notice = '<div class="notice"><b>Parked.</b> ' + esc(t.hold_reason || "")
+      + (t.resume_to ? '<div class="meta">Resume puts it back in ' + esc(t.resume_to) + ".</div>" : "") + "</div>";
+  }
+
+  // Four facts. The rest of the record is below and does not need a box.
+  const facts = [
+    ["Stage", '<span class="dot" style="width:7px;height:7px;border-radius:50%;background:'
+      + (stage.color || "#ccc") + '"></span>' + esc(t.status), ""],
+    [done ? "Delivered" : "Due", done ? fmtDateFull(t.completed_at || t.due_date) : fmtDateFull(t.due_date),
+      done ? "" : ds === "over" ? "bad" : ds === "soon" ? "warn" : ""],
+    ["Progress", st.total ? st.done + " of " + st.total + " steps" : "No breakdown", ""],
+    // Priority is a management call (task_perms.can_prioritize), so it is a CONTROL for
+    // a manager and a value for everyone else — not a control that answers 403.
+    ["Priority", canPrioritize(t)
+      ? '<select id="m-prio" aria-label="Priority">'
+        + ["Urgent", "Medium", "Low"].map((p) =>
+            "<option " + (p === t.priority ? "selected" : "") + ">" + p + "</option>").join("") + "</select>"
+      : esc(t.priority), t.priority === "Urgent" ? "bad" : ""],
+  ].map((f) => '<div class="fact"><div class="k">' + f[0] + '</div><div class="v ' + f[2] + '">' + f[1] + "</div></div>").join("");
+
+  const work = (t.maintasks || []).length
+    ? t.maintasks.map((m) => {
+        const o = byId(m.assignee_id);
+        const dn = m.subs.filter((s) => s.done).length;
+        return '<div class="phase"><div class="phase-h">'
+          + avatar(o, "xs", { title: "Owns this phase · " + (o ? o.name : "unowned") })
+          + '<span class="pt">' + esc(m.title) + '</span><span class="pn">' + dn + "/" + m.subs.length + "</span></div>"
+          + m.subs.map((s) => {
+              const so = byId(s.assignee_id);
+              // "Done" is a claim about work somebody else performed, so a step you
+              // neither own nor lead is disabled AND says whose it is — a greyed box
+              // with no reason reads as broken.
+              const may = canTick(t, s.assignee_id);
+              return '<label class="step ' + (s.done ? "done " : "") + (s.assignee_id === ME ? "mine" : "") + '">'
+                + '<input type="checkbox" ' + (s.done ? "checked" : "") + (may ? "" : " disabled")
+                  + ' title="' + (may ? "" : esc(so ? so.name + " owns this step" : "")) + '"'
+                  + ' data-tick="' + m.id + ":" + s.id + '">'
+                + '<span class="tx">' + esc(s.text) + "</span>"
+                + '<span class="ow">' + (so ? avatar(so, "xs", { title: so.name, ring: so.id === ME ? "is-me" : "" })
+                    + esc(so.name.split(" ")[0]) : "unowned") + "</span></label>";
+            }).join("")
+          + "</div>";
+      }).join("")
+    : '<div class="crew-none">No breakdown yet.</div>';
+
+  const comments = (t.comments || []).length
+    ? '<div class="thread">' + t.comments.map((c) => {
+        const p = byId(c.who);
+        return '<div class="cmt ' + (c.client ? "client" : "") + '">' + avatar(p, "")
+          + '<div><div><span class="who">' + esc(p ? p.name : "Someone") + '</span><span class="when">'
+          + esc(c.when) + '</span></div><div class="bd">' + esc(c.body) + "</div></div></div>";
+      }).join("") + "</div>"
+      + '<div class="reply"><input placeholder="Write a comment"><button type="button" class="btn primary sm">Send</button></div>'
+    : '<div class="crew-none">No comments yet.</div>'
+      + '<div class="reply"><input placeholder="Write a comment"><button type="button" class="btn primary sm">Send</button></div>';
+
+  const activity = (t.history || []).length
+    ? '<ul class="act-list">' + t.history.map((h) => "<li>" + esc((byId(h.who) || {}).name || "System")
+        + " changed " + esc(h.field) + " " + (h.from ? esc(h.from) + " → " : "")
+        + "<strong>" + esc(h.to) + "</strong> · " + esc(h.when) + "</li>").join("") + "</ul>"
+    : '<div class="crew-none">Nothing yet.</div>';
+
+  const root = document.getElementById("modal-root");
+  root.innerHTML = '<div class="veil" id="veil"><div class="modal" role="dialog" aria-modal="true" aria-label="'
+      + esc(t.title) + '">'
+    + '<div class="mhead"><div style="min-width:0">'
+      + '<div class="kicker">'
+        + (t.labels[0] ? '<span class="disc" style="background:' + DISC[t.labels[0]] + '"></span>' : "")
+        + esc(t.client_name || "Internal") + " · " + (t.source === "atrium" ? "Atrium card" : "Task " + t.id)
+        + (t.atrium_shared ? " · shared with the client" : "") + "</div>"
+      + "<h2>" + esc(t.title) + "</h2>"
+    + '</div><button type="button" class="mx" id="m-x" aria-label="Close">✕</button></div>'
+    + '<div class="mbody">'
+      + notice
+      // People before facts: "who is on this" is the question the board could not
+      // answer, and it is the first thing anyone opening a card looks for.
+      + crew(t)
+      + '<div class="facts">' + facts + "</div>"
+      + '<div class="cols2"><div>'
+        + (t.description ? '<div class="desc">' + esc(t.description) + "</div>" : "")
+        // Only what the facts strip above does NOT already say. Due date and Priority
+        // were printed twice, two inches apart — a record that repeats itself reads as
+        // longer than it is, and the reader stops trusting either copy.
+        + '<dl class="kv">'
+          + "<dt>Client</dt><dd>" + esc(t.client_name || "—") + "</dd>"
+          + "<dt>Started</dt><dd>" + fmtDateFull(t.start_date) + "</dd>"
+        + "</dl>"
+        + '<div class="internal"><div class="lbl-s">Internal — never seen by the client</div>'
+          + '<dl class="kv" style="margin-top:10px">'
+            + "<dt>Department</dt><dd>"
+              + esc(t.assigned_team_name || TEAMS[t.assigned_team_id] || "—")
+              + (t.assigned_team_id && !t.assigned_to_id ? ' <span class="muted">· unclaimed queue</span>' : "")
+              + "</dd>"
+            + "<dt>Filed by</dt><dd>" + esc(t.created_by ? t.created_by.name : "—") + "</dd>"
+          + "</dl></div>"
+      + "</div><div>"
+        + '<div class="tabs" role="tablist">'
+          + '<button type="button" role="tab" data-tab="work" aria-selected="' + (tab === "work") + '">Work'
+            + (st.total ? '<span class="n">' + st.done + "/" + st.total + "</span>" : "") + "</button>"
+          + '<button type="button" role="tab" data-tab="comments" aria-selected="' + (tab === "comments") + '">Comments'
+            + ((t.comments || []).length ? '<span class="n">' + t.comments.length + "</span>" : "") + "</button>"
+          + '<button type="button" role="tab" data-tab="activity" aria-selected="' + (tab === "activity") + '">Activity</button>'
+        + "</div>"
+        + (tab === "work" ? work : tab === "comments" ? comments : activity)
+      + "</div></div>"
+    + "</div>"
+    + '<div class="mfoot">'
+      // 🔴 MOVING A CARD MUST NOT REQUIRE A MOUSE. Drag was the only way to move work,
+      // which excludes touch, keyboard and anyone on a trackpad with a 1500px board.
+      // The real board already ships this control on the card (WP 5.5); here it lives
+      // in the record, so the card itself stays clean.
+      + '<label class="movesel"><span>Move to</span><select id="m-move" aria-label="Move to column">'
+        + STATUSES.map((s) => '<option ' + (s.name === t.status ? "selected" : "") + ">" + esc(s.name) + "</option>").join("")
+      + "</select></label>"
+      // Claiming is NOT delegation — `may_claim` allows it for anyone who can see the
+      // card, but only while it is owned by nobody. Taking work off a colleague is a
+      // different act and stays with the people who may reassign.
+      + (!t.assigned_to_id && t.source !== "atrium"
+          ? '<button type="button" class="btn quiet" data-act="claim">Claim this</button>' : "")
+      + '<button type="button" class="btn quiet">Edit</button>'
+      // Park came OUT of the footer: parking is entering the Parked column, and the
+      // Move control above already does that. Two buttons for one state change is the
+      // kind of duplication that makes a footer unreadable. Review is not a column,
+      // so it keeps its buttons.
+      + (t.on_hold ? '<button type="button" class="btn quiet" data-act="resume">Resume</button>' : "")
+      // ASKING for a review is can_edit — anyone whose card this is. DECIDING one is a
+      // management call (can_review). The same button on both seats was the bug.
+      + (!done && !t.on_hold && t.review_state !== "pending" && t.review_state !== "approved"
+          ? '<button type="button" class="btn quiet" data-act="submit">Submit for review</button>' : "")
+      + (t.review_state === "pending" && canReview(t)
+          ? '<button type="button" class="btn quiet" data-act="approve">Approve</button>' : "")
+      // The Atrium bridge is AM and up (task_perms.BRIDGE) — it publishes into a
+      // client's workspace, so it is not an ordinary edit.
+      + (canBridge() && !t.atrium_shared && t.source !== "atrium"
+          ? '<button type="button" class="btn quiet" data-act="share">Share with client</button>' : "")
+      + (canDelete(t) ? '<button type="button" class="btn ghost" data-act="delete">Delete</button>' : "")
+      + '<span class="sp"></span>'
+      + '<button type="button" class="btn ghost" id="m-close">Close</button>'
+      + (done ? "" : '<button type="button" class="btn primary" data-act="advance">'
+          + (t.status === "Revision Needed" ? "Back to In Progress" : "Mark complete") + "</button>")
+    + "</div></div></div>";
+
+  const close = () => { root.innerHTML = ""; document.removeEventListener("keydown", onKey); };
+  const onKey = (e) => { if (e.key === "Escape") close(); };
+  document.addEventListener("keydown", onKey);
+  document.getElementById("m-x").onclick = close;
+  document.getElementById("m-close").onclick = close;
+  document.getElementById("veil").onclick = (e) => { if (e.target.id === "veil") close(); };
+
+  root.querySelectorAll("[data-tab]").forEach((b) => { b.onclick = () => { tab = b.dataset.tab; paint(t); }; });
+  root.querySelectorAll("[data-tick]").forEach((cb) => {
+    cb.onchange = () => {
+      const p = cb.dataset.tick.split(":");
+      const m = t.maintasks.find((x) => x.id === p[0]);
+      const s = m && m.subs.find((x) => x.id === p[1]);
+      if (s) { s.done = cb.checked; paint(t); render(); }
+    };
+  });
+  // The Move control and a drop onto a column are the SAME move — one function, so the
+  // two doors into a stage can't apply different rules (the live board learned this the
+  // hard way: dragging into the parked column skipped the parking rule entirely).
+  document.getElementById("m-move").onchange = (e) => { moveTo(t, e.target.value); paint(t); render(); };
+  if (document.getElementById("m-prio")) {
+    document.getElementById("m-prio").onchange = (e) => { t.priority = e.target.value; paint(t); render(); };
+  }
+
+  root.querySelectorAll("[data-act]").forEach((b) => {
+    b.onclick = () => {
+      const a = b.dataset.act;
+      if (a === "resolve") t.open_changes = 0;
+      else if (a === "resume") moveTo(t, t.resume_to || "In Progress");
+      else if (a === "submit") t.review_state = "pending";
+      else if (a === "approve") t.review_state = "approved";
+      else if (a === "share") { t.atrium_shared = true; flash("Client-safe fields sent to Atrium"); }
+      else if (a === "claim") {
+        const u = me();
+        t.assignee = u; t.assigned_to_id = u.id;
+        if (!t.assigned_team_id) t.assigned_team_id = u.team;
+        flash("Yours now — it has left the team queue");
+      }
+      else if (a === "delete") { flash("Prototype — the real board confirms first."); return; }
+      else if (a === "advance") moveTo(t, t.status === "Revision Needed" ? "In Progress" : "Completed");
+      else if (a === "add-support") { flash("Prototype — the real form opens the people picker."); return; }
+      paint(t); render();
+    };
+  });
+}
+
+// =====================================================================
+// Chrome
+// =====================================================================
+function flash(msg) {
+  let el = document.getElementById("flash");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "flash";
+    el.style.cssText = "position:fixed;left:50%;bottom:28px;transform:translateX(-50%);background:var(--ink);"
+      + "color:var(--canvas);padding:8px 16px;border-radius:999px;font-size:12.5px;font-weight:550;z-index:90;"
+      + "box-shadow:var(--shadow-lg);transition:opacity .35s";
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.style.opacity = "1";
+  clearTimeout(flash._t);
+  flash._t = setTimeout(() => { el.style.opacity = "0"; }, 2000);
+}
+
+// What this seat actually changed, said in one line — otherwise switching seats looks
+// like cards randomly appearing and vanishing.
+function renderSeatNote() {
+  const u = me();
+  const n = TASKS.filter(canSee).length;
+  const hidden = TASKS.length - n;
+  const body = SEAT.key === "employee"
+    ? "<b>" + n + " cards</b> — work you lead or support, plus " + esc(TEAMS[u.team])
+      + "'s unclaimed queue. A colleague's card is not on your board even when it is your team's."
+      + " No client cards, no priority control, no approvals, and you can only tick your own steps."
+    : SEAT.key === "account_manager"
+      ? "<b>Every card, every client (" + n + ")</b> — including Atrium's own. You set priority, approve"
+        + " reviews, reassign, and share client-safe fields into a workspace."
+      : "<b>Every card, every client (" + n + ")</b> — identical to the AM board, because both seats are"
+        + " task_perms.FULL. The super-admin difference is off this page: Admin, Manage, client sync"
+        + " and adoption.";
+  return '<div class="seatnote">'
+    + '<span class="who">' + avatar(u, "", { title: u.name, ring: "is-me" })
+      + "<b>" + esc(u.name) + "</b></span>"
+    + "<span>" + body + (hidden > 0 ? ' <span class="muted">' + hidden + " card"
+        + (hidden > 1 ? "s" : "") + " on the table are invisible to this seat.</span>" : "") + "</span>"
+    + "</div>";
+}
+
+function fillSelects() {
+  const clients = Array.from(new Set(TASKS.map((t) => t.client_name).filter(Boolean))).sort();
+  document.getElementById("f-client").innerHTML = '<option value="">All clients</option>'
+    + clients.map((c) => "<option>" + esc(c) + "</option>").join("");
+  const ids = new Set();
+  TASKS.forEach((t) => { if (t.assignee && t.assignee.id) ids.add(t.assignee.id); (t.support_ids || []).forEach((i) => ids.add(i)); });
+  document.getElementById("f-person").innerHTML = '<option value="">All people</option>'
+    + PEOPLE.filter((p) => ids.has(p.id)).map((p) =>
+        '<option value="' + p.id + '">' + esc(p.name) + (p.id === ME ? " (you)" : "") + "</option>").join("");
+}
+
+document.getElementById("f-search").oninput = (e) => { state.search = e.target.value; render(); };
+document.getElementById("f-client").onchange = (e) => { state.client = e.target.value; render(); };
+document.getElementById("f-person").onchange = (e) => { state.person = e.target.value; render(); };
+document.getElementById("f-clear").onclick = () => {
+  state.search = state.client = state.person = state.attention = "";
+  document.getElementById("f-search").value = "";
+  document.getElementById("f-client").value = "";
+  document.getElementById("f-person").value = "";
+  render();
+};
+document.getElementById("new-task").onclick = () => flash("Prototype — the real board opens the New Task form.");
+document.getElementById("attbar").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-att]");
+  if (!b) return;
+  state.attention = state.attention === b.dataset.att ? "" : b.dataset.att;
+  render();
+});
+function setSeat(key) {
+  const next = SEATS.find((s) => s.key === key);
+  if (!next) return;
+  SEAT = next;
+  ME = SEAT.userId;
+  document.querySelectorAll("[data-seat]").forEach((x) =>
+    x.setAttribute("aria-pressed", String(x.dataset.seat === key)));
+  // A seat change can strand a filter on a person this seat can't see, which would
+  // look like an empty board rather than a narrower one.
+  state.person = "";
+  document.getElementById("f-person").value = "";
+  fillSelects();
+  render();
+  renderCompare();
+}
+document.querySelectorAll("[data-seat]").forEach((b) => { b.onclick = () => setSeat(b.dataset.seat); });
+document.getElementById("theme").onclick = (e) => {
+  const dark = document.documentElement.getAttribute("data-theme") === "dark";
+  document.documentElement.setAttribute("data-theme", dark ? "light" : "dark");
+  e.target.textContent = dark ? "Dark" : "Light";
+  renderCompare();
+};
+
+function renderCompare() {
+  const t = TASKS.find((x) => x.title.indexOf("Park & Porch — creative") === 0) || TASKS[0];
+  document.getElementById("cmp-before").innerHTML = card(t, true);
+  document.getElementById("cmp-after").innerHTML = card(t);
+  document.querySelectorAll("#cmp-after [data-open]").forEach((b) => { b.onclick = () => openDetail(t.id); });
+}
+
+fillSelects();
+render();
+renderCompare();
+
+// ?open=<id> opens a card straight away — the same param the real board, every
+// notification and every shared link already use (sentinel/AGENTS.md §5).
+// ?seat=employee is prototype-only, so a review link can point at one seat.
+if (typeof location !== "undefined" && location.search) {
+  const p = new URLSearchParams(location.search);
+  if (p.get("seat")) setSeat(p.get("seat"));
+  if (p.get("open")) openDetail(p.get("open"));
+}
+</script>
+</body>
+</html>
