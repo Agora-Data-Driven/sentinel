@@ -317,6 +317,26 @@ What the resolved owner changes, and why each one matters:
 `atrium_tasks.py` still never touches the DB: the ROUTER resolves (`_owner_index` / `_atrium_owner`,
 one index per request) and passes `owner` into `as_board_card` / `as_task_detail`. Covered by
 `tests/test_atrium_identity.py`.
+
+🔴 **SUPPORT is resolved by the same ladder — it wasn't until 2026-08-06.** Only the lead went
+through the resolver, so on ONE card the lead wore their photo and every supporter rendered grey
+initials, including people who do have a photo in Sentinel (confirmed on the live board: "Weekly
+blog + Newsletter posting", Rooming House Expert — lead `agustinnico228@gmail.com` resolves by name,
+support `paulo@agoradatadriven.com` resolved to nobody). The resolver was never lead-specific; the
+second caller was just missing. Now `_atrium_support` resolves each roster entry and the card
+publishes **`support`** — the same field a Sentinel row publishes — so one renderer draws the faces
+on both kinds of card. Two rules:
+
+- **`atrium_tasks.support_pairs` is the ONE derivation** of "who supports this card", read by
+  `as_board_card` and by the router that resolves them. Atrium sends `support_ids` and
+  `support_names` in parallel and neither is guaranteed; a second copy of this pairing does not fail
+  loudly, it puts one person's name under another person's face.
+- 🔴 **A resolved supporter does NOT become a Sentinel `support_ids` entry.** By Employee groups
+  lanes on that field and `mine` / "My work" comes from the resolved **lead**, while the Monitor
+  (`task_analytics.atrium_workload`) counts a client card toward its lead. Filling it here would
+  move client cards onto supporters' lanes and My work while the Monitor disagreed — the same
+  three-surfaces-say-yours-and-one-says-no split this resolver was written to end. Widening support
+  to those surfaces is a real decision: make it everywhere at once, not as a side effect.
 - 🔴 **Only Atrium's own 404 may surface as "that card is gone."** The board LIST is fail-soft, but
   every explicit act (open / edit / delete / comment) reports its failure — the router keys its 404
   off `atrium_tasks.GONE`/`GONE_COMMENT` and answers **502** for anything else, so a timeout is

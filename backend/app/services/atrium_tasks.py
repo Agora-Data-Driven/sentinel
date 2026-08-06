@@ -349,6 +349,31 @@ def _person(name: str) -> dict | None:
     return {"id": None, "name": name, "profile_pic_url": None} if name else None
 
 
+def support_pairs(t: dict) -> list[tuple[str, str]]:
+    """A client card's support as `(roster_id, display_name)`, in Atrium's own order.
+
+    🔴 ONE derivation, called by BOTH `as_board_card` and the router that resolves these people to
+    Sentinel users. Two copies of this list would drift the moment Atrium sent `support_ids` and
+    `support_names` of different lengths — and a drifted list does not fail loudly, it pairs one
+    person's name with another person's face.
+
+    Atrium sends the two fields in parallel, but neither is guaranteed: an older payload carries ids
+    only (hence the `owner_label` fallback, which turns an email into something printable), and a
+    newer one can carry a name for somebody whose id it dropped. Index alignment is the only
+    relationship the payload actually asserts, so that is the one used, and an entry survives if
+    EITHER half is present.
+    """
+    ids = [str(s).strip() for s in (t.get("support_ids") or [])]
+    names = [str(n).strip() for n in (t.get("support_names") or [])]
+    pairs: list[tuple[str, str]] = []
+    for i in range(max(len(ids), len(names))):
+        sid = ids[i] if i < len(ids) else ""
+        name = (names[i] if i < len(names) else "") or owner_label(sid)
+        if sid or name:
+            pairs.append((sid, name))
+    return pairs
+
+
 def owner_label(person_id: str) -> str:
     """A roster EMAIL rendered as a display name — the fallback when Atrium sent no resolved name.
 
@@ -367,7 +392,8 @@ def owner_label(person_id: str) -> str:
     return local.replace(".", " ").replace("_", " ").replace("-", " ").title()
 
 
-def as_task_detail(envelope: dict, client: object = None, owner: dict | None = None) -> dict:
+def as_task_detail(envelope: dict, client: object = None, owner: dict | None = None,
+                   support: list[dict | None] | None = None) -> dict:
     """Map Atrium's full task onto the shape the detail drawer already renders (task_detail).
 
     Same contract as `as_board_card`: fields Sentinel has no Atrium equivalent for come back empty
@@ -375,7 +401,7 @@ def as_task_detail(envelope: dict, client: object = None, owner: dict | None = N
     an `atrium_` prefix so nothing here is mistaken for a Sentinel column. The pickers' vocabularies
     ride along so the drawer can offer Atrium's OWN roster and departments instead of Sentinel's."""
     t = envelope.get("task") or {}
-    card = as_board_card(t, client, owner)
+    card = as_board_card(t, client, owner, support=support)
     card.update({
         # Atrium has no `description`; its client-facing prose is client_note (mapped below) and its
         # internal prose is internal_notes -- both already have a home on the drawer.
@@ -484,7 +510,8 @@ def resolve_client(clients: list, client_key: str, client_name: str = ""):
 
 
 def as_board_card(t: dict, client: object = None, owner: dict | None = None,
-                  viewer_id: int | None = None) -> dict:
+                  viewer_id: int | None = None,
+                  support: list[dict | None] | None = None) -> dict:
     """Map an Atrium task onto the shape the Kanban board already renders (serializers.task_card).
 
     `client` is the matching Sentinel Client row (resolved via Client.atrium_client_id) when there
@@ -542,9 +569,21 @@ def as_board_card(t: dict, client: object = None, owner: dict | None = None,
     owner_name = (owner or {}).get("name")
     if owner_name:
         lead_name = owner_name
-    support_names = [n for n in (t.get("support_names") or []) if str(n).strip()]
-    if not support_names:
-        support_names = [n for n in (owner_label(s) for s in (t.get("support_ids") or [])) if n]
+    # 🔴 SUPPORT IS RESOLVED THE SAME WAY THE LEAD IS (2026-08-06). Only the lead went through
+    # `services/atrium_identity`, so on the SAME card the lead wore their photo and every supporter
+    # rendered grey initials — Paulo has a photo in Sentinel, and a client card he supports showed
+    # him as "P". That is the 2026-08-05 lead bug surviving in the half nobody re-read: an Atrium
+    # supporter is a roster email, we already know how to turn one of those into the Sentinel user
+    # who is that person, and we simply weren't doing it here.
+    # `support` is that resolution, done by the ROUTER (this module never touches the DB) and
+    # positionally aligned to `support_pairs`. An entry that did not resolve falls back to the
+    # id-less `_person`, exactly like an unresolved lead: named, never faked.
+    pairs = support_pairs(t)
+    support_names = [name for _, name in pairs]
+    resolved = list(support or [])
+    support_people = [p for p in (
+        (resolved[i] if i < len(resolved) else None) or _person(name)
+        for i, name in enumerate(support_names)) if p]
     # "Is this work on me?" — from the RESOLVED owner, so this card agrees with its own By Employee
     # lane and its own Monitor row. Omitted (not False) when the caller passed no viewer.
     mine: dict = {}
@@ -579,6 +618,18 @@ def as_board_card(t: dict, client: object = None, owner: dict | None = None,
         "atrium_lead_name": lead_name,
         "atrium_support_ids": list(t.get("support_ids") or []),
         "atrium_support_names": support_names,
+        # The same field a Sentinel row publishes (`serializers.task_card`), so ONE renderer draws
+        # the faces on both kinds of card. Entries carry a real Sentinel id + `profile_pic_url` when
+        # the person resolved and are id-less names when they did not.
+        # 🔴 `support_ids` is deliberately NOT set from these. That field is Sentinel's own
+        # supporter list: By Employee groups lanes by it, and `mine`/"My work" is derived from the
+        # resolved LEAD alone. Filling it here would silently move client cards into supporters'
+        # lanes and onto their My work, while the Monitor (`task_analytics.atrium_workload`, which
+        # counts a client card toward its lead) went on disagreeing — the exact three-surfaces-say-
+        # yours-and-one-says-no split this resolver was written to end. Widening support to those
+        # surfaces is a real decision; make it deliberately, everywhere at once, not as a side
+        # effect of showing a photo.
+        "support": support_people,
         "atrium_department": t.get("department") or "",
         "comment_count": t.get("comment_count") or 0,
         "attachment_count": 0,

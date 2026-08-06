@@ -92,13 +92,13 @@ def test_a_lead_who_is_nobody_here_resolves_to_nobody(make_user):
 
 # --- what the resolved owner does to the CARD ----------------------------------------------------
 
-def _card(owner=None, viewer_id=None, **over):
+def _card(owner=None, viewer_id=None, support=None, **over):
     payload = {"atrium_id": "rooming-house:tk_4", "task_id": "tk_4",
                "client_key": "rooming-house", "title": "ActiveCampaign manual list fix",
                "status": "In Progress", "lead_id": "justine@agoradatadriven.com",
                "lead_name": "Justine"}
     payload.update(over)
-    return atrium_tasks.as_board_card(payload, None, owner, viewer_id=viewer_id)
+    return atrium_tasks.as_board_card(payload, None, owner, viewer_id=viewer_id, support=support)
 
 
 _JUSTINE = {"id": 12, "name": "Justine Roa", "email": "justine@agora.ph",
@@ -163,6 +163,108 @@ def test_mine_is_ABSENT_when_no_viewer_was_passed():
     assert "mine" not in _card(_JUSTINE)
     assert "my_slots" not in _card(_JUSTINE, viewer_id=12), \
         "an Atrium breakdown has no Sentinel step owners to count, so a 0 would be a lie"
+
+
+# --- SUPPORT is resolved by the same ladder (2026-08-06) -----------------------------------------
+# 🔴 The lead had been resolved since 2026-08-05 and support had not, so on ONE card the lead wore
+# their photo while every supporter rendered grey initials — including people who do have a photo in
+# Sentinel. Confirmed on the live board: "Weekly blog + Newsletter posting (Thursday)" (Rooming House
+# Expert) carries lead `agustinnico228@gmail.com` (resolves by NAME → photo) and support
+# `paulo@agoradatadriven.com` (never resolved → "P"). Same roster, same ladder; the resolver was
+# never lead-specific.
+
+_PAULO = {"id": 7, "name": "Paulo Reyes", "email": "paulo@agora.ph",
+          "profile_pic_url": "https://x/paulo.jpg", "initials": "PR",
+          "role": "employee", "role_label": "Employee", "team_id": 2}
+
+
+def _sup_card(support=None, viewer_id=None, **over):
+    over.setdefault("support_ids", ["paulo@agoradatadriven.com"])
+    over.setdefault("support_names", ["Paulo"])
+    return _card(None, viewer_id=viewer_id, support=support, **over)
+
+
+def test_a_resolved_SUPPORTER_gets_a_photo_like_the_lead_does():
+    card = _sup_card([_PAULO])
+    assert card["support"][0]["profile_pic_url"] == "https://x/paulo.jpg", "the reported bug"
+    assert card["support"][0]["id"] == 7
+    assert card["support"][0]["name"] == "Paulo Reyes", "the Sentinel name, not Atrium's short one"
+
+
+def test_an_unresolved_supporter_is_still_NAMED_and_claims_no_identity():
+    """Same contract as an unresolved lead: initials are honest, a fabricated id is not."""
+    card = _sup_card([None])
+    assert card["support"][0]["id"] is None
+    assert card["support"][0]["name"] == "Paulo"
+
+
+def test_support_falls_back_to_names_when_the_router_resolved_nothing():
+    """`support=None` is the no-resolver path (anything calling this module without a DB)."""
+    card = _sup_card(None)
+    assert [p["name"] for p in card["support"]] == ["Paulo"]
+    assert card["support"][0]["id"] is None
+
+
+def test_resolved_support_does_NOT_become_a_sentinel_support_id():
+    """🔴 By Employee groups lanes on `support_ids` and `mine` comes from the LEAD. Filling it here
+    would move client cards onto supporters' lanes and My work while the Monitor still counted them
+    toward the lead — the same three-surfaces-disagree split this resolver exists to end. Widening
+    support to those surfaces is a separate, deliberate decision."""
+    card = _sup_card([_PAULO], viewer_id=7)
+    assert card.get("support_ids") in (None, []), "not a Sentinel supporter list"
+    assert card["atrium_support_ids"] == ["paulo@agoradatadriven.com"], "Atrium's own, unchanged"
+    assert card["mine"] is False, \
+        "Paulo supports this card and sees his face on it, but 'My work' still means the LEAD — " \
+        "today's boundary, pinned so widening it is a decision somebody makes on purpose"
+
+
+def test_a_card_with_no_support_says_so_with_an_empty_list():
+    card = _card(None)
+    assert card["support"] == []
+    assert card["atrium_support_names"] == []
+
+
+# --- pairing: the half that fails SILENTLY -------------------------------------------------------
+# A mis-paired list does not raise — it puts one person's name under another person's face, which is
+# worse than the bug being fixed. `support_pairs` is the single derivation both sides read.
+
+def test_ids_without_names_are_labelled_from_the_email():
+    pairs = atrium_tasks.support_pairs({"support_ids": ["paulo@agoradatadriven.com"]})
+    assert pairs == [("paulo@agoradatadriven.com", "Paulo")]
+
+
+def test_a_shorter_name_list_does_not_shift_everyone_up():
+    """Atrium sending two ids and one name must not label the SECOND person "Paulo"."""
+    pairs = atrium_tasks.support_pairs(
+        {"support_ids": ["paulo@agoradatadriven.com", "justine@agoradatadriven.com"],
+         "support_names": ["Paulo"]})
+    assert pairs == [("paulo@agoradatadriven.com", "Paulo"),
+                     ("justine@agoradatadriven.com", "Justine")]
+
+
+def test_a_name_with_no_id_still_survives():
+    assert atrium_tasks.support_pairs({"support_names": ["", "Zhen"]}) == [("", "Zhen")]
+
+
+def test_the_resolution_is_aligned_to_that_same_order():
+    """The router hands back one entry per pair, positionally. This pins the contract between the
+    two halves — swap either side's order and this fails instead of mislabelling a face."""
+    card = _card(None, support=[None, _PAULO],
+                 support_ids=["zhen@agoradatadriven.com", "paulo@agoradatadriven.com"],
+                 support_names=["Zhen", "Paulo"])
+    assert [p["name"] for p in card["support"]] == ["Zhen", "Paulo Reyes"]
+    assert card["support"][0]["id"] is None and card["support"][1]["id"] == 7
+
+
+def test_the_detail_drawer_shows_the_same_faces_as_the_card():
+    """Two surfaces, one resolution — the lead bug started as the card and the drawer disagreeing."""
+    detail = atrium_tasks.as_task_detail(
+        {"task": {"atrium_id": "rooming-house:tk_4", "task_id": "tk_4",
+                  "client_key": "rooming-house", "title": "x",
+                  "support_ids": ["paulo@agoradatadriven.com"], "support_names": ["Paulo"]}},
+        None, None, support=[_PAULO])
+    assert detail["support"][0]["profile_pic_url"] == "https://x/paulo.jpg"
+    assert detail["atrium_support_names"] == ["Paulo"], "Atrium's own vocabulary is untouched"
 
 
 def test_the_board_pill_can_see_an_atrium_hold():

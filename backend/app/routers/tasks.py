@@ -213,6 +213,19 @@ def _atrium_owner(index: atrium_identity.Resolver, task: dict) -> dict | None:
     return user_public(index.resolve(task.get("lead_id"), task.get("lead_name")))
 
 
+def _atrium_support(index: atrium_identity.Resolver, task: dict) -> list[dict | None]:
+    """The same resolution for SUPPORT, one entry per `atrium_tasks.support_pairs`, None where the
+    person has no unambiguous Sentinel account.
+
+    🔴 Support went unresolved until 2026-08-06 while the lead had been resolved since 2026-08-05,
+    so one card showed the lead's photo beside supporters rendered as grey initials — including
+    people who do have a photo in Sentinel. Same roster, same ladder, same refusal to guess: the
+    resolver is not lead-specific and never was.
+    """
+    return [user_public(index.resolve(sid, name))
+            for sid, name in atrium_tasks.support_pairs(task)]
+
+
 def _atrium_detail(db: Session, envelope: dict) -> dict:
     """An Atrium envelope as a Sentinel task_detail, with its client resolved the same way the
     board card resolves it (Client.atrium_client_id, then an unambiguous name match), and its lead
@@ -222,7 +235,9 @@ def _atrium_detail(db: Session, envelope: dict) -> dict:
     task = envelope.get("task") or {}
     client = atrium_tasks.resolve_client(clients, task.get("client_key", ""),
                                          task.get("client_name", ""))
-    return atrium_tasks.as_task_detail(envelope, client, _atrium_owner(_owner_index(db), task))
+    index = _owner_index(db)
+    return atrium_tasks.as_task_detail(envelope, client, _atrium_owner(index, task),
+                                       support=_atrium_support(index, task))
 
 
 def _resolve_task(db: Session, task_id: str) -> Task | None:
@@ -306,7 +321,8 @@ def list_tasks(
             card = atrium_tasks.as_board_card(
                 a, atrium_tasks.resolve_client(clients, a.get("client_key", ""),
                                                a.get("client_name", "")),
-                _atrium_owner(owners, a), viewer_id=user.id)
+                _atrium_owner(owners, a), viewer_id=user.id,
+                support=_atrium_support(owners, a))
             if status and card["status"] != status:
                 continue
             if priority and card["priority"] != priority:
