@@ -54,7 +54,11 @@ class AtriumWork:
     `updated_at`. Counting completion off `updated_at` is precisely the §2.4h bug: it re-dates a task
     finished in March to whenever somebody last touched it. So a client card contributes to
     **open / overdue / workload / sitting** — the questions its data can answer — and to nothing else.
-    `client_cards` on the row is what lets the UI say so out loud.
+    The Monitor's legend is what says so out loud, for the whole table.
+
+    🔴 `client_cards` on the row is the count of a person's OPEN client cards, not all of them
+    (2026-08-06). It renders as a sub-line under the Open count beside `stepped` and `supporting`,
+    both open-scoped, so a total could be larger than the number it appears to break down.
 
     `assigned_to_id` is set to the RESOLVED Sentinel user, so `_aggregate` does not count the card as
     "held via a step" — the Atrium lead genuinely is its owner, they are just recorded by email.
