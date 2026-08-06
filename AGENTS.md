@@ -718,8 +718,24 @@ email and never a Sentinel id. Four rules hold it together:
 🔴 **A client card carries no `completed_at`, so it reaches Open / Overdue / Sitting and NOTHING
 else.** `task_analytics.AtriumWork` sets it to `None` and `delivery()` skips any row without a stamp,
 so cycle time, the on-time rate and throughput are **Sentinel rows only** — substituting `updated_at`
-here would be the §2.4h bug wearing a new hat. `client_cards` on the row exists to make the UI *say*
+here would be the §2.4h bug wearing a new hat. The Monitor's **legend** is what makes the UI *say*
 that; without it, somebody who delivers mostly client work looks like they never ship anything.
+
+🔴 **`client_cards` counts a person's OPEN client cards, not all of them (2026-08-06).** It was
+`len(rows)` — every card the person leads, finished ones included — while the UI renders it as a
+sub-line **under the Open count**, beside `stepped` and `supporting`, both of which are open-scoped.
+So it could exceed the number it appears to break down: a live row read **"8 open · 19 client"**,
+which is not a fact about anything, and it read as a count of *clients* (there are 8) rather than of
+cards. An Atrium card genuinely does reach a done status — the rollup maps Atrium's `completed` stage
+through `task_config.status_for_stage` — so this was not a theoretical case. Two rules:
+
+- **Both call sites scope it the same way**, because two surfaces showing one number differently is
+  the same class of bug: `routers/tasks.py` (the Monitor) and `services/work_digest.py` (the Coach,
+  which prints it next to `open_total`).
+- **Any new sub-line under Open must be open-scoped too.** The cell is a breakdown of one number;
+  a total placed in it is wrong however it is labelled.
+
+Pinned by `test_client_cards_counts_only_the_OPEN_ones`.
 
 Two rules if you extend this:
 

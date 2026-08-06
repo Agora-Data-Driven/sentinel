@@ -1108,7 +1108,9 @@ window.TaskBoard = {
         // possibly zero steps. The label has to match the reason or the row is confidently wrong
         // about how somebody's day is actually spent.
         const supportNote = r.supporting ? `<span class="mon-sub" title="Cards somebody else leads, where this person is named as support">${r.supporting} supporting</span>` : "";
-        const clientNote = r.client_cards ? `<span class="mon-sub" title="Client cards Atrium owns, led by this person. Atrium sends no completion date, so these are NOT in Cycle or On time.">${r.client_cards} client</span>` : "";
+        // 🔴 OPEN client cards, like both sub-lines above it (2026-08-06). The server sent a TOTAL
+        // until then, so this line could be bigger than the Open count it hangs under.
+        const clientNote = r.client_cards ? `<span class="mon-sub" title="Open client cards Atrium owns, led by this person. Atrium sends no completion date, so these are NOT in Cycle or On time.">${r.client_cards} client</span>` : "";
         return `<tr data-uid="${u.id}" tabindex="0">
           <td class="who">${S.avatar(u, "sm")}<div><div class="n">${S.esc(u.name)} ${capacity(r)}</div><div class="r">${S.esc(u.role_label || u.role || "")}</div></div></td>
           <td>${bandPill(r)}</td>

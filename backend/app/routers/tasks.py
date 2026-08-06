@@ -482,7 +482,14 @@ def employee_summary(days: int = Query(30, ge=7, le=180,
 
         for uid, rows in task_analytics.atrium_workload(fresh, index, _status_of).items():
             by_person.setdefault(uid, []).extend(rows)
-            client_counts[uid] = len(rows)
+            # 🔴 OPEN cards only (2026-08-06). This counted `len(rows)` — every client card the
+            # person leads, finished ones included — while the number renders as a sub-line UNDER
+            # the Open count, beside `stepped` and `supporting`, both of which are open-scoped.
+            # So it could exceed the number it appears to break down: a row read "8 open · 19
+            # client", which is not a fact about anything. An Atrium card DOES reach a done status
+            # (`_status_of` maps Atrium's `completed` stage through `status_for_stage`), so this is
+            # not a theoretical case.
+            client_counts[uid] = sum(1 for r in rows if r.status not in done_statuses)
 
     rows = []
     for p in people:

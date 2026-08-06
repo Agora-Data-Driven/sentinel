@@ -250,7 +250,11 @@ def _people_rollup(db: Session, user: User, today) -> list[dict]:
 
             for uid, rows in task_analytics.atrium_workload(fresh, index, _status_of).items():
                 by_person.setdefault(uid, []).extend(rows)
-                client_counts[uid] = len(rows)
+                # OPEN cards only, exactly as the Monitor counts them (see routers/tasks.py). The
+                # coach reads this row next to `open_total`, so a total that includes finished
+                # cards would have it telling somebody they hold more open client work than they
+                # hold open work at all.
+                client_counts[uid] = sum(1 for r in rows if r.status not in done_statuses)
 
     week_start = today - timedelta(days=7)
     rows = []

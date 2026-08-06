@@ -314,7 +314,29 @@ def test_a_client_card_never_reaches_cycle_or_on_time(client, db, make_user, aut
     assert row["completed_window"] == 0
     assert row["median_cycle_days"] is None
     assert row["on_time_rate"] is None
-    assert row["client_cards"] == 1
+    # 🔴 0, not 1 (2026-08-06): `client_cards` is OPEN client work, and this card is Completed. It
+    # asserted 1 here while the value was `len(rows)` — a total. The Monitor renders it as a
+    # sub-line UNDER the Open count, so a total could exceed the number it broke down ("8 open · 19
+    # client"). What tells a reader these cards can't reach Cycle/On-time is the LEGEND, which says
+    # so for the whole table; it is not this per-row number's job.
+    assert row["client_cards"] == 0
+    assert row["open_total"] == 0
+
+
+def test_client_cards_counts_only_the_OPEN_ones(client, db, make_user, auth, monkeypatch):
+    """🔴 It sits under Open, beside `stepped` and `supporting` — both open-scoped. A total made the
+    row say "1 open · 2 client", which is not a fact about anything."""
+    boss = make_user(C.ROLE_ADMIN)
+    ana = make_user(C.ROLE_EMPLOYEE, name="Ana", email="ana@agora.ph")
+    _with_atrium(monkeypatch, [
+        _atrium_card(task_id="tk_open"),
+        _atrium_card(task_id="tk_done", stage="completed", status="Completed"),
+    ])
+    auth(boss)
+    row = _row(client, ana.id)
+    assert row["open_total"] == 1
+    assert row["client_cards"] == 1, "the completed one is not open client work"
+    assert row["client_cards"] <= row["open_total"], "it can never exceed the count it breaks down"
 
 
 def test_a_lead_with_no_sentinel_account_is_counted_for_nobody(client, db, make_user, auth, monkeypatch):
