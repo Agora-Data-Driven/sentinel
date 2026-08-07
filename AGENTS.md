@@ -1261,6 +1261,95 @@ running). Build every engine src through `S.engineUrl()` — a hand-built src lo
 Also give the iframe `background:var(--card)`, never `#fff`: a white slab flashes behind the
 engine on every load in dark mode. The engine end is `public/theme.js` there.
 
+### 🔴 The board has a QUERY BUDGET — `task_card` must never read per card
+
+Fixed 2026-08-07, and the two costs behind it are both invisible in the source, which is why this
+section exists. Measured on the board as it was: **801 cards → 2,946 SQL queries, 780 ms on SQLite**
+— and on Cloud SQL every one of those is a socket round-trip, so the same board cost *seconds*.
+After: **7 queries, 61 ms.**
+
+| Where | What it really did |
+|---|---|
+| `len(t.comments)` | a LAZY LOAD — one SELECT per card, to count rows. `Task.supporters` is `lazy="selectin"` and cost 1 query for the whole board; nothing batched comments |
+| `db.get(Client/User, …)` | 🔴 **SQLAlchemy's identity map holds WEAK references.** `task_card` returns a plain dict and keeps no reference to the row it read, so each one was garbage-collected before the next card asked for it and `db.get` went back to the DB. That is how the same **four** clients cost **703 SELECTs** |
+| `MT.normalize(...)` | parsed and rebuilt the breakdown JSON **3× per card** — `can_view`→`is_assigned`, then `my_slot_count` and `sub_stats` (2,400 calls for 801 cards) |
+
+Three rules, each of which is the fix:
+
+- **`serializers.CardPrefetch.for_tasks(db, tasks)` is the ONE prefetch**, and every list caller
+  passes it (`list_tasks`, `people.py`'s profile card). It is three queries whatever the board's
+  size, and **holding the rows alive is what makes the identity map work** — do not "simplify" it
+  into a lookup that drops its references.
+- **It is an optimisation, never a source of truth.** Every accessor falls back to a direct read, so
+  a card built without one (`task_detail`, one row) is still correct. `test_a_card_is_identical_with_
+  and_without_a_prefetch` pins that they can never disagree.
+- **Ask `maintasks.normalized(task)`, never `normalize(task.maintasks_json, …)`.** It memoizes on the
+  row, keyed on the *identity* of the raw strings — so a write rebinds the attribute and correctly
+  misses the memo.
+
+Adding a field to a card that needs another row? Put it in the prefetch. A single `db.get` in that
+function is a query per card again, and nothing will fail — pinned by
+`tests/test_performance_guards.py::test_board_query_count_is_bounded_not_per_card`.
+
+### 🔴 Atrium's board list is CACHED (15s), and share-on-create runs AFTER the response
+
+Both landed 2026-08-07, and both are about the same thing: a blocking call to another service was
+sitting inside a request somebody was waiting on. `atrium_bridge` is stdlib urllib and **pools no
+connections**, so every one of these paid a fresh TCP + TLS handshake.
+
+- **`atrium_tasks.fetch_tasks` caches successful reads** for `settings.atrium_cache_seconds`
+  (`ATRIUM_CACHE_SECONDS`, default 15, `0` disables). It was on the critical path of every board
+  load, every Monitor load and every Coach digest, with a 10s read timeout. Fail-soft covered an
+  Atrium *outage*; it did nothing about a *slow* Atrium, whose latency was simply added to ours.
+  🔴 **A failure is never cached** — caching the fail-soft `[]` would blank every client card for the
+  whole TTL over one blip. 🔴 **Every write in that module invalidates it**, or your own edit comes
+  back looking like it was dropped. A new write function must call `_invalidate()`;
+  `test_every_write_invalidates_the_cache` is parametrised over all six so a seventh fails until it
+  is added.
+- **Share-on-create is a `BackgroundTask`** (`tasks._publish_after_response`). `task_bridge.publish`
+  is TWO sequential blocking writes to Atrium (`add_task`, then `push`), each with a 30s timeout, and
+  they sat between the AM pressing Create and the form closing. Nothing about the contract changed —
+  the task was already committed first, the failure path was already `atrium_sync_error` + the
+  drawer's stale pill + one-click Retry, and the response never reported the result.
+  🔴 **It opens its OWN session**: FastAPI tears the request's session down *before* background tasks
+  run, so reusing `db` would pass tests and fail in production. 🔴 **Its `_broadcast` is
+  deliberately unattributed** (`actor_id=None`) — the frontend skips events it caused, and the board
+  that most needs this refresh is the creator's, still rendering their new card as unshared.
+
+### 🟡 The connection pool and `--max-instances` are ONE decision
+
+Every endpoint here is a sync `def`, so FastAPI runs it in anyio's **40-thread** pool, while
+SQLAlchemy's default pool is **5 + 10 = 15** connections. 25 threads could be queueing on
+`pool_timeout` (30s by default) with nothing in the logs but a slow request — which is what turned
+"slow" into "hung" whenever a query got expensive.
+
+🔴 **The answer is not one connection per thread.** `db-f1-micro` allows about **25 connections in
+total**, shared with the seed job, migrations and any psql — so a pool sized to the threadpool would
+starve the estate from one instance, and multiplying by `--max-instances` would ask for hundreds. The
+real fix was making the HOLD short (`CardPrefetch`: ~880ms → ~60ms per board request); the pool only
+covers what is genuinely in flight.
+
+| Knob | Value | Meaning |
+|---|---|---|
+| `db_pool_size` | 5 | what one warm instance **holds at rest** — this is the number that eats `max_connections` |
+| `db_max_overflow` | 15 | burst, opened on demand and closed on return; free at idle |
+| `db_pool_timeout` | 10s | fail fast; a caller that cannot get a connection is better served by a retryable error than a request that dies at the load balancer |
+| `--max-instances` | 3 | **worst case is `(5 + 15) × 3 = 60`.** Change this and the pool together, or neither |
+
+Set in `app/config.py`, applied in `database.py`; SQLite ignores all of it. If a genuinely slow
+endpoint appears (a big CSV export, adoption over a large workspace), raise these — and
+`max_connections` or the instance tier with them.
+
+### 🟡 The tests cannot all be run in ONE pytest process on Windows
+
+Pre-existing, confirmed against unmodified `main` on 2026-08-07. Every test file passes on its own,
+and the suite passes some of the time, but a long single process reliably stalls partway (seen in
+`test_task_adoption.py`, with no single predecessor able to reproduce it) — the profile of leaked
+`TestClient` threads/handles accumulating, since `conftest.client` never closes one. If `pytest`
+appears to hang, **it is not your diff**: fall back to per-file runs (below), and see §7 about the
+shared `%TEMP%\sentinel_pytest.db` — two pytest processes at once clobber each other's schema and
+produce "no such table" errors that look like a code bug.
+
 ### 🟡 A `/go` from another machine can clobber this repo
 
 Sentinel is swept by the polyrepo `/go`. A stale tree elsewhere can overwrite main and deploy.
@@ -1286,6 +1375,20 @@ suite too — from `backend/`:
 
 ```powershell
 ..\..\.venv\Scripts\python.exe -m pytest      # Agora/.venv — verified 213 passed
+```
+
+🔴 **Two things about running it on Windows, both of which have cost a debugging session:**
+
+```powershell
+# 1. Give this run its OWN temp dir. conftest puts the test DB at %TEMP%\sentinel_pytest.db, so two
+#    pytest processes (a second window, a background run) rebuild each other's schema mid-test and
+#    the failures read as "no such table: users" — a machine problem wearing a code problem's face.
+$env:TEMP = "$env:TEMP\sentinel-pytest-1"; $env:TMP = $env:TEMP
+mkdir $env:TEMP -Force | Out-Null
+
+# 2. If one long run stalls, run per file — see §5, "the tests cannot all be run in ONE pytest
+#    process". That stall predates any current change and reproduces on unmodified main.
+Get-ChildItem tests\test_*.py | ForEach-Object { python -m pytest -q $_.FullName }
 ```
 
 Existing coverage: attendance engine, CSRF, events, gym plan, internal HMAC endpoints, leave,

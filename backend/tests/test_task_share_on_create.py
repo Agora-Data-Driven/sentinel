@@ -116,3 +116,41 @@ def test_a_bridge_failure_does_not_fail_the_create(client, auth, make_user, db):
     # failure mode this contract exists to prevent.
     assert r.status_code in (200, 201), r.text
     assert r.json()["title"] == "Launch"
+
+
+# --- it runs AFTER the response (2026-08-07) -----------------------------------------------------
+
+def test_the_publish_runs_in_its_own_session_and_persists_the_error(client, auth, make_user, db):
+    """🔴 The publish moved to a BackgroundTask, so it no longer has the request's session — FastAPI
+    tears that down before background tasks run. Opening its own session is what makes the failure
+    contract survive the move: without the fresh session + commit, `atrium_sync_error` would be
+    written to a closed session and thrown away, and the drawer's "stale, click Retry" pill would
+    have nothing behind it.
+
+    The bridge is unconfigured under test, so `publish` really fails here — no mock. That is the
+    point: this exercises the whole path, including the commit.
+    """
+    from app.models import Task
+
+    auth(make_user(C.ROLE_ADMIN))
+    row = _client_row(db)
+    r = _mk(client, client_id=row.id)
+    assert r.status_code in (200, 201), r.text
+    # The response itself never reported the publish result, before or after the move.
+    assert r.json()["atrium_task_id"] is None
+
+    db.expire_all()                            # read what the BACKGROUND session committed
+    task = db.get(Task, r.json()["id"])
+    assert task.atrium_sync_error, "the failure must be recorded on the row, not just logged"
+    assert task.atrium_task_id is None, "nothing was published, so nothing may claim to be"
+
+
+def test_a_task_with_no_client_schedules_no_background_work(client, auth, make_user, db):
+    """The cheap create stays cheap: no client means no bridge round trip to schedule at all."""
+    from app.models import Task
+
+    auth(make_user(C.ROLE_ADMIN))
+    r = _mk(client)
+    db.expire_all()
+    task = db.get(Task, r.json()["id"])
+    assert task.atrium_sync_error is None

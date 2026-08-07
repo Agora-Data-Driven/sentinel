@@ -35,7 +35,21 @@ param(
   # client-facing tasks; the board reads them over HMAC so a card typed into a client's Atrium
   # shows up here. Omit it and the bridge falls back to PORTAL_LOGIN_URL's origin; if neither
   # resolves the board simply shows Sentinel's own rows.
-  [string]$AtriumApiUrl     = "https://portal.agoradatadriven.com"
+  [string]$AtriumApiUrl     = "https://portal.agoradatadriven.com",
+  # 🔴 ONE WARM INSTANCE. Sentinel had no --min-instances, so it scaled to zero and the first person
+  # to open it after any quiet spell paid a full cold start: pull the image, `alembic upgrade head`
+  # (entrypoint.sh), then create_all + _ensure_columns' per-table inspect() + three seed/backfill
+  # passes. That is the "the morning's first click takes forever" complaint, and it recurred on every
+  # scale-up all day. This is a real (small) standing cost — pass `-MinInstances 0` to trade it back
+  # for cold starts.
+  [int]$MinInstances        = 1,
+  # 🔴 Cloud Run's default cap is 100 and Sentinel had no cap at all. Every instance opens its OWN
+  # connection pool (app/config.py: 5 held + 15 burst), and `db-f1-micro` allows only ~25 connections
+  # for the whole estate — so this number and the pool are ONE decision: worst case is
+  # (pool_size + max_overflow) x MaxInstances = 60 here. Raise them together or neither.
+  # 3 x the default concurrency of 80 is ~240 in-flight requests, and note that every open browser
+  # tab permanently holds one of those slots with its SSE stream (routers/stream.py).
+  [int]$MaxInstances        = 3
 )
 $ErrorActionPreference = "Stop"
 
@@ -77,9 +91,15 @@ if ($DemoSqlite) {
 }
 elseif ($CloudSqlInstance -ne "") {
   Write-Host "PROD mode: Cloud SQL $CloudSqlInstance" -ForegroundColor Cyan
+  Write-Host "  min-instances=$MinInstances (0 = cold starts), max-instances=$MaxInstances" -ForegroundColor DarkGray
   $deployArgs += @(
     "--add-cloudsql-instances", $CloudSqlInstance,
     "--set-secrets", "DATABASE_URL=${DbUrlSecretName}:latest",
+    "--min-instances", "$MinInstances",
+    "--max-instances", "$MaxInstances",
+    # Full CPU while the container boots (migrations + the seed/backfill passes), which is exactly
+    # the window Cloud Run otherwise throttles. Costs nothing when there is no cold start to speed up.
+    "--cpu-boost",
     "--set-env-vars", $envVars
   )
 }

@@ -22,7 +22,10 @@ state (sentinel/CLAUDE.md §5). Nothing raises; every call returns a message fit
 from __future__ import annotations
 
 import logging
+import threading
+import time
 
+from ..config import settings
 from . import atrium_bridge
 from .atrium_bridge import enabled
 
@@ -80,16 +83,55 @@ STAGE_BY_STATUS = {
 }
 
 
+# --- The board-list cache -------------------------------------------------------------------
+# 🔴 `fetch_tasks` sat on the CRITICAL PATH of every board load, every Monitor load and every Coach
+# digest — a blocking cross-service HTTP call, with a 10s timeout, over a connection that is built
+# from scratch each time (`atrium_bridge` is stdlib urllib and pools nothing). Fail-soft protected us
+# from an Atrium OUTAGE; it did nothing about a merely SLOW Atrium, whose latency was added directly
+# to Sentinel's own. A board 15 seconds stale is not a new compromise — the SSE reload already
+# debounces bursts by 400ms and nobody was watching Atrium in real time through this window anyway.
+#
+# THREE rules hold this cache honest:
+#   1. **Only a SUCCESS is cached.** Caching the fail-soft `[]` would blank every client card on the
+#      board for the whole TTL because of one blip — turning a momentary glitch into a visible outage.
+#   2. **Every WRITE through this module invalidates it** (`_invalidate`). Otherwise editing a client
+#      card and landing back on the board would show the pre-edit copy, which reads as a lost save.
+#   3. **Keyed by `client_key`**, since the one-client call returns a subset.
+_cache_lock = threading.Lock()
+_cache: dict[str, tuple[float, list[dict]]] = {}
+
+
+def _invalidate() -> None:
+    """Drop the board-list cache. Called after every write, so our own edits are never hidden."""
+    with _cache_lock:
+        _cache.clear()
+
+
 def fetch_tasks(client_key: str = "") -> list[dict]:
-    """Every Atrium task (optionally one client's). [] on any failure -- never raises."""
+    """Every Atrium task (optionally one client's). [] on any failure -- never raises.
+
+    Cached for `settings.atrium_cache_seconds` (0 disables). See the block comment above.
+    """
+    ttl = max(0, settings.atrium_cache_seconds)
+    if ttl:
+        with _cache_lock:
+            hit = _cache.get(client_key)
+            if hit and (time.monotonic() - hit[0]) < ttl:
+                return hit[1]
+
     code, body = _call("tasks", "/api/internal/tasks",
                        params={"client": client_key} if client_key else None)
     if code != 200:
         if code:
             log.warning("atrium task fetch returned %s", code)
-        return []
+        return []                                   # NOT cached — see rule 1 above
     tasks = body.get("tasks")
-    return tasks if isinstance(tasks, list) else []
+    if not isinstance(tasks, list):
+        return []                                   # NOT cached either: a shape we don't understand
+    if ttl:
+        with _cache_lock:
+            _cache[client_key] = (time.monotonic(), tasks)
+    return tasks
 
 
 def fetch_clients() -> tuple[list[dict], str]:
@@ -125,6 +167,9 @@ def move_task(client_key: str, task_id: str, stage: str, actor: str = "") -> tup
                        body={"client_key": client_key, "task_id": task_id,
                              "stage": stage, "actor": actor},
                        timeout=_WRITE_TIMEOUT)
+    # Any write may have landed, even one Atrium never confirmed — so the board-list cache
+    # goes regardless of the outcome. Hiding our own edit behind a stale read reads as a lost save.
+    _invalidate()
     if code == 200:
         return True, ""
     if not code:
@@ -157,6 +202,9 @@ def add_task(client_key: str, title: str, stage: str = "todo", client_facing: bo
                              "department": department, "due_date": due_date,
                              "actor": actor, "actor_name": actor_name},
                        timeout=_WRITE_TIMEOUT)
+    # Any write may have landed, even one Atrium never confirmed — so the board-list cache
+    # goes regardless of the outcome. Hiding our own edit behind a stale read reads as a lost save.
+    _invalidate()
     if code == 200:
         task_id = str((body or {}).get("task_id") or "").strip()
         if task_id:
@@ -201,6 +249,9 @@ def edit_task(client_key: str, task_id: str, fields: dict, actor: str = "") -> t
                        body={"client_key": client_key, "task_id": task_id,
                              "fields": fields, "actor": actor},
                        timeout=_WRITE_TIMEOUT)
+    # Any write may have landed, even one Atrium never confirmed — so the board-list cache
+    # goes regardless of the outcome. Hiding our own edit behind a stale read reads as a lost save.
+    _invalidate()
     if code == 200 and isinstance(body.get("task"), dict):
         return body, ""
     if code == 404:
@@ -218,6 +269,9 @@ def remove_task(client_key: str, task_id: str, actor: str = "") -> tuple[bool, s
     code, body = _call("task-delete", "/api/internal/task-delete",
                        body={"client_key": client_key, "task_id": task_id, "actor": actor},
                        timeout=_WRITE_TIMEOUT)
+    # Any write may have landed, even one Atrium never confirmed — so the board-list cache
+    # goes regardless of the outcome. Hiding our own edit behind a stale read reads as a lost save.
+    _invalidate()
     if code == 200:
         return True, ""
     if code == 404:
@@ -239,6 +293,9 @@ def comment_task(client_key: str, task_id: str, body_text: str, actor: str = "",
                        body={"client_key": client_key, "task_id": task_id, "op": "add",
                              "body": body_text, "actor": actor, "actor_name": actor_name},
                        timeout=_WRITE_TIMEOUT)
+    # Any write may have landed, even one Atrium never confirmed — so the board-list cache
+    # goes regardless of the outcome. Hiding our own edit behind a stale read reads as a lost save.
+    _invalidate()
     if code == 200 and isinstance(body.get("comment"), dict):
         return body["comment"], ""
     if code == 404:
@@ -257,6 +314,9 @@ def resolve_change_request(client_key: str, task_id: str, comment_id: str,
                        body={"client_key": client_key, "task_id": task_id, "op": "resolve",
                              "comment_id": comment_id, "actor": actor},
                        timeout=_WRITE_TIMEOUT)
+    # Any write may have landed, even one Atrium never confirmed — so the board-list cache
+    # goes regardless of the outcome. Hiding our own edit behind a stale read reads as a lost save.
+    _invalidate()
     if code == 200:
         return True, ""
     if code == 404:

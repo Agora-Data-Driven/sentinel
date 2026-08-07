@@ -38,7 +38,8 @@ from ..models import (
 )
 from ..schemas import PersonCreateIn, PersonUpdateIn
 from ..security import get_current_user, is_admin, require_min_role, require_roles
-from ..serializers import gym_log_dict, leave_balance_dict, summary_dict, task_card, user_full
+from ..serializers import (CardPrefetch, gym_log_dict, leave_balance_dict, summary_dict, task_card,
+                           user_full)
 from ..services import audit
 from ..services import leave as leave_svc
 from ..utils.time import today_ph, utcnow
@@ -135,6 +136,7 @@ def profile(user_id: int, viewer: User = Depends(get_current_user), db: Session 
     tasks = db.execute(
         select(Task).where(Task.assigned_to_id == u.id, Task.status != "Completed")
     ).scalars().all()
+    task_pre = CardPrefetch.for_tasks(db, tasks)
 
     year = today.year
     leave_svc.ensure_balances(db, u.id, year)
@@ -146,7 +148,9 @@ def profile(user_id: int, viewer: User = Depends(get_current_user), db: Session 
         "profile": profile,
         "attendance": attendance,
         "gym": gym,
-        "tasks": [task_card(t, db) for t in tasks],
+        # No `viewer`: this lists somebody ELSE's work, so `mine`/`my_slots` are absent rather than
+        # a hardcoded false. `pre` is the same three-query prefetch the board uses (CardPrefetch).
+        "tasks": [task_card(t, db, pre=task_pre) for t in tasks],
         "leave_balances": [
             leave_balance_dict(b, db.get(LeaveType, b.leave_type_id)) for b in balances
         ],

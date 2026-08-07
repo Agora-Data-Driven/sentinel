@@ -41,6 +41,17 @@ def _fresh_schema():
     yield
 
 
+@pytest.fixture(autouse=True)
+def _clear_atrium_cache():
+    """`atrium_tasks.fetch_tasks` caches successful reads for `atrium_cache_seconds` in a
+    MODULE-level dict, which outlives the per-test schema rebuild. Clearing it here keeps cases
+    isolated: without this, a test that stubs the bridge could serve its answer to the next one."""
+    from app.services import atrium_tasks
+    atrium_tasks._invalidate()
+    yield
+    atrium_tasks._invalidate()
+
+
 @pytest.fixture
 def db():
     session = SessionLocal()

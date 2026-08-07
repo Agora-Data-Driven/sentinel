@@ -26,6 +26,18 @@ in the env/secrets that a hand deploy silently wipes. Full first-time setup: [DE
 | `GOOGLE_REDIRECT_URI` | `$envVars :71` | `routers/auth.py` OAuth flow | Google sign-in (redirect_uri mismatch) |
 | `ATRIUM_API_URL` | `$envVars :71` | `services/atrium_tasks.py` / watcher bridge | Atrium cards vanish from the board (fail-soft) |
 
+### Scaling flags (added 2026-08-07 — these are latency, not cosmetics)
+
+| Flag | Value | Why |
+|---|---|---|
+| `--min-instances` | `1` (param `-MinInstances`) | Sentinel had none, so it scaled to **zero** and the first click after any quiet spell paid a full cold start: image pull → `alembic upgrade head` → `create_all` + `_ensure_columns`' per-table `inspect()` + three seed/backfill passes. That is the "the morning's first click takes forever" complaint, and it recurred on every scale-up all day. Real (small) standing cost — `-MinInstances 0` trades it back |
+| `--cpu-boost` | on | Full CPU during boot, which is exactly the window Cloud Run otherwise throttles. Free when there is no cold start |
+| `--max-instances` | `3` (param `-MaxInstances`) | Cloud Run's default is **100** and Sentinel had no cap. Each instance opens its own DB pool (`app/config.py`: 5 held + 15 burst) and `db-f1-micro` allows only ~25 connections for the whole estate — so worst case is `(5+15) × 3 = 60`. **This number and the pool are one decision**: raise them together or neither. 3 × the default concurrency of 80 is ~240 in-flight requests, and every open browser tab permanently holds one slot with its SSE stream |
+
+`_mirror_clients` also came **off** the startup path the same day (`main._startup` runs it on a daemon
+thread): startup handlers complete before uvicorn accepts a connection, so its 10s Atrium call was
+being added to every cold start for a refresh its own docstring calls non-urgent.
+
 ## Cookbook
 
 1. **Standard prod deploy** — from `sentinel/`: `.\deploy\deploy.ps1` (defaults already target

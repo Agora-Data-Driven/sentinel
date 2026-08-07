@@ -7,9 +7,10 @@ not from the enum constants.
 from __future__ import annotations
 
 import json
+import logging
 from datetime import timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -38,7 +39,8 @@ from ..schemas import (
     TaskUpdateIn,
 )
 from ..security import get_current_user, is_manager, require_roles
-from ..serializers import atrium_payload, comment_dict, task_card, task_detail, user_public
+from ..serializers import (CardPrefetch, atrium_payload, comment_dict, task_card, task_detail,
+                           user_public)
 from ..services import atrium_tasks
 from ..services import audit
 from ..services import task_analytics
@@ -50,6 +52,7 @@ from ..services import (task_adoption, task_bridge, task_config, task_perms, tas
 from ..utils.time import today_ph, to_ph, utcnow
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
+log = logging.getLogger(__name__)
 
 AM_PLUS = ("account_manager", "admin", "super_admin")
 _NOT_FOUND = "Task not found"
@@ -161,8 +164,13 @@ def _log(db: Session, task_id: int, actor_id: int, field: str, old, new) -> None
     )
 
 
-def _broadcast(action: str, task: Task, actor_id: int) -> None:
-    """Notify live boards that a task changed (SSE). Best-effort; never fails the request."""
+def _broadcast(action: str, task: Task, actor_id: int | None) -> None:
+    """Notify live boards that a task changed (SSE). Best-effort; never fails the request.
+
+    `actor_id=None` means "no board should skip this" — the frontend drops events whose actor is
+    itself (its own change is already on screen), so a change made on somebody's BEHALF, after their
+    request finished, has to arrive unattributed or the one board that needs it ignores it.
+    """
     broker.publish({
         "type": "task", "action": action, "task_id": task.id,
         "status": task.status, "actor_id": actor_id,
@@ -287,9 +295,13 @@ def list_tasks(
     if priority:
         q = q.where(Task.priority == priority)
     tasks = [t for t in db.execute(q).scalars().all() if task_perms.can_view(user, t)]
+    # 🔴 THREE queries for the whole board instead of ~3.7 PER CARD. See `CardPrefetch` — the two
+    # dominant costs it removes (a lazy comment count, and a weak identity map that made `db.get`
+    # re-read the same four clients 703 times) are both invisible in `task_card`'s source.
+    pre = CardPrefetch.for_tasks(db, tasks)
     # `viewer=user` is what puts `mine`/`my_slots` on each card — the server's own "assigned" rule
     # (task_perms.is_assigned, which is also what filtered this list), so no surface has to guess it.
-    cards = [task_card(t, db, viewer=user) for t in tasks]
+    cards = [task_card(t, db, viewer=user, pre=pre) for t in tasks]
     # ATRIUM BRIDGE: Atrium owns the client-facing tasks (one workspace JSON per client), so a card
     # typed into a client's Atrium board must appear here too -- this board is the team's
     # cross-client window onto the same work, not a second system. Best-effort: if the bridge is
@@ -960,8 +972,43 @@ def get_task(task_id: str, user: User = Depends(get_current_user), db: Session =
     return task_detail(task, db)
 
 
+def _publish_after_response(task_id: int, actor_id: int) -> None:
+    """Share-on-create's Atrium round trip, run after the create response has been sent.
+
+    🔴 Opens its OWN session. The request's session is torn down before background tasks run (FastAPI
+    ≥0.106), so reusing `db` here would work in tests and fail in production — the worst shape of bug
+    this codebase can ship. The row is re-read by id for the same reason.
+
+    Swallows everything. It is the same rule the inline version followed — a bridge outage must not
+    cost the AM their typing — except that now there is no request left to fail, so an escaping
+    exception would only be an unlogged 500 in a worker thread.
+    """
+    from ..database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        task = db.get(Task, task_id)
+        actor = db.get(User, actor_id)
+        if task is None or actor is None:            # deleted within the second — nothing to share
+            return
+        ok, _err = task_bridge.publish(db, task, actor)
+        db.commit()
+        if ok:
+            audit.record(db, actor_id=actor_id, table_name="tasks", record_id=task.id,
+                         action="share-on-create", new=atrium_payload(task, db))
+        # actor_id=None on purpose: the frontend SKIPS events it caused (`actor === S.user.id`), and
+        # the one board that most needs this refresh is the creator's — it is showing the card they
+        # just made, still without its "shared" pill.
+        _broadcast("shared", task, None)
+    except Exception:                                # noqa: BLE001 — see the docstring
+        log.exception("share-on-create failed for task %s", task_id)
+    finally:
+        db.close()
+
+
 @router.post("")
-def create_task(payload: TaskCreateIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def create_task(payload: TaskCreateIn, background: BackgroundTasks,
+                user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     # Any staff member can create a task (Sentinel is an internal, employee-facing tool) — except the
     # read-only seat, which by definition raises nothing (D8). Checked here because there is no task
     # yet for a `task_perms` predicate to take.
@@ -1090,15 +1137,21 @@ def create_task(payload: TaskCreateIn, user: User = Depends(get_current_user), d
     # reason lands on `atrium_sync_error`, the drawer shows the stale pill, and Retry is one click
     # (the same contract `push` uses on edit — §4). This is only safe because 0.1/0.2 made
     # publishing real: before them it would have set a flag pointing at nothing.
+    #
+    # 🔴 And it happens AFTER THE RESPONSE (2026-08-07). `publish` is two sequential blocking HTTP
+    # writes to Atrium (`add_task`, then `push` for the note and the breakdown), each with a 30s
+    # timeout and its own TLS handshake, and they were sitting between the AM pressing Create and the
+    # form closing. Every one of the conditions that makes that safe was ALREADY true and is why the
+    # move is a scheduling change rather than a change of contract: the task is committed before this
+    # runs, the failure path is `atrium_sync_error` + the drawer's stale pill + one-click Retry, and
+    # nothing in the response ever reported the result. What IS new is the `_broadcast` at the end of
+    # the background job — without it the creator's own board would keep rendering the card as
+    # unshared until they happened to reload.
     share = payload.share_with_client
     if share is None:
         share = task.client_id is not None
     if share and task.client_id is not None and task_perms.can_bridge(user):
-        ok, err = task_bridge.publish(db, task, user)
-        db.commit()
-        if ok:
-            audit.record(db, actor_id=user.id, table_name="tasks", record_id=task.id,
-                         action="share-on-create", new=atrium_payload(task, db))
+        background.add_task(_publish_after_response, task.id, user.id)
 
     for uid in support_added:
         if uid == user.id:
