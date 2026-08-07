@@ -59,15 +59,11 @@ async function mountGrowth(S, root, opts) {
   ];
   const srcLabel = (v) => (SKILL_SOURCES.find((s) => s.v === v) || {}).t || v;
 
-  // The four dimensions. Hues live in styles.css as --dim-<key> so dark mode can retune them.
-  // ('philosophical' replaced 'mental' 2026-07-27; old rows were data-migrated.)
-  const DIMS = [
-    { key: "spiritual", name: "Spiritual", icon: "flame", blurb: "Faith & inner life" },
-    { key: "professional", name: "Professional", icon: "target", blurb: "Craft & career" },
-    { key: "philosophical", name: "Philosophical", icon: "cap", blurb: "Mindsets & mental models" },
-    { key: "physical", name: "Physical", icon: "heart", blurb: "Body & training" },
-  ];
-  const DIM_KEYS = DIMS.map((d) => d.key);
+  // The four dimensions and the pace arithmetic live in growthmath.js — the admin Team-progress
+  // table renders the same numbers about the same people, so a second copy of either would let
+  // one surface drift from the other with nothing to say which was right.
+  const DIMS = GrowthMath.DIMS;
+  const DIM_KEYS = GrowthMath.DIM_KEYS;
   // Legacy rows predate `dimension` — anything unknown reads as professional (the old scope).
   const dimOf = (g) => (DIM_KEYS.includes(g.dimension) ? g.dimension : "professional");
   const goalsFor = (key) => (data.career.goals || []).filter((g) => dimOf(g) === key);
@@ -104,28 +100,15 @@ async function mountGrowth(S, root, opts) {
 
   // The pace window every dimension races on: a fixed start (when the four-tab system began)
   // to the area's own deadline — editable on the pace band, stored per dimension.
-  const START_DEFAULT = "2026-07-27";
-  const DEADLINE_DEFAULT = "2026-11-04";
+  const START_DEFAULT = GrowthMath.START_DEFAULT;
+  const DEADLINE_DEFAULT = GrowthMath.DEADLINE_DEFAULT;
   const areaOf = (key) => (data.areas || {})[key] || {};
   const areaDeadline = (key) => areaOf(key).deadline || DEADLINE_DEFAULT;
 
   // Expected-by-today: linear from the start to this dimension's deadline.
-  function dimExpected(key) {
-    const start = new Date(START_DEFAULT + "T00:00:00").getTime();
-    const end = new Date(areaDeadline(key) + "T23:59:59").getTime();
-    if (!(end > start)) return 100;
-    return Math.max(0, Math.min(100, ((Date.now() - start) / (end - start)) * 100));
-  }
-
+  const dimExpected = (key) => GrowthMath.expected(areaDeadline(key));
   // The shared ahead/behind verdict: within ±2 points reads as "on pace".
-  function paceChip(actual, expected) {
-    if (actual == null || expected == null) return "";
-    const d = Math.round(actual - expected);
-    if (Math.abs(d) <= 2) return `<span class="pace-chip on">on pace</span>`;
-    return d > 0
-      ? `<span class="pace-chip ahead">▲ ${d} ahead</span>`
-      : `<span class="pace-chip behind">▼ ${Math.abs(d)} behind</span>`;
-  }
+  const paceChip = GrowthMath.paceChip;
 
   function dimWindow(key) {
     return { start: START_DEFAULT, end: areaDeadline(key) };

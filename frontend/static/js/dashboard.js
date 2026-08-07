@@ -8,10 +8,14 @@
         card whose only content is a count you can already see is a card that earns nothing.)
      2. Your growth — the four dimension rings (GrowthPanel's compass). Each ring OPENS its
         Mastery Engine tab; "Details" expands that dimension in the ledger further down.
-     3. The Task Board (taskboard.js) — the work itself, immediately visible.
+     3. "My work" — the three questions you open this page to answer (open / overdue / waiting on
+        me) plus the next five cards. The board itself left for /tasks on 2026-08-03 (decision D7),
+        so this strip links INTO it rather than duplicating it.
      4. The growth ledger — pace band, per-dimension details, mentor library (GrowthPanel again).
-     5. Across Agora — attendance KPIs, the clock-in trend, late list and handovers. Admins only,
-        and last, because it's the one block that isn't about the person reading it. */
+     5. Across Agora — Team progress (teamgrowth.js) first, then attendance KPIs, the clock-in
+        trend, late list and handovers. Admins only, and last, because it's the one block that
+        isn't about the person reading it. Team progress is also the page-wide people SCOPE
+        control: selecting there re-renders everything under it through applyScope(). */
 window.pageInit = async (S) => {
   const view = S.view();
   // Loading state so the page shows its shape immediately instead of a blank flash.
@@ -85,34 +89,19 @@ window.pageInit = async (S) => {
   html += `<div id="dash-growth" style="margin-top:26px"></div>`;
 
   // --- 5 · across Agora (admins only) ---------------------------------------------------------
+  // Team progress leads the block: it is both the collective view of everyone's growth AND the
+  // control that scopes everything under it (see applyScope below). The KPI row, the clock-in
+  // chart and the two lists are rendered by functions rather than baked into this string, because
+  // all three re-render when that scope changes.
   if (d.is_admin) {
-    // Presence-focused KPIs — tasks/approvals were dropped 2026-07-27 (tasks live on the
-    // board above; approvals have their own page + the bell).
-    const k = d.kpis;
     html += `<div class="row between sect-head" style="margin-top:30px">
         <div class="section-label">${S.ICON.users}Across Agora</div>
         ${u.role === "super_admin" ? `<button class="btn sm ghost" id="run-daily" title="Recompute yesterday's attendance and send reminders now">${S.ICON.check}Run daily processing</button>` : ""}
       </div>
-      <div class="kpis" style="margin-bottom:18px">
-        ${kpi("Present today", k.present_today, `of ${k.headcount} staff`, "", "clock")}
-        ${kpi("Late today", k.late_today, "clocked in late", k.late_today ? "warn" : "", "coffee")}
-        ${kpi("Gym this week", k.gym_completed_week, "sessions completed", "", "dumbbell")}
-      </div>
+      <div id="dash-team"></div>
+      <div class="kpis" id="dash-kpis" style="margin:18px 0"></div>
       <div class="card pad" id="chart-attendance" style="margin-bottom:18px"></div>
-      <div class="grid" style="grid-template-columns:1fr 1fr">
-        <div class="card"><div class="card-head"><h3>Late today</h3><span class="chip">${d.late_today_list.length}</span></div>
-          <div class="card-body">${d.late_today_list.length ? d.late_today_list.map((s) => `
-            <div class="row between" style="padding:7px 0;border-bottom:1px solid var(--line)">
-              <div class="t-name">${S.avatar(s.user, "sm")}<span>${S.esc(s.user.name)}</span></div>
-              <div>${S.statusPill("Late")} <span class="sub">${S.fmtTime(s.clock_in)}</span></div>
-            </div>`).join("") : '<div class="empty">Everyone on time.</div>'}</div></div>
-
-        <div class="card"><div class="card-head"><h3>Handover notes</h3><span class="chip">yesterday</span></div>
-          <div class="card-body">${d.handovers && d.handovers.length ? d.handovers.map((h) => `
-            <div style="padding:9px 0;border-bottom:1px solid var(--line)">
-              <div class="t-name" style="margin-bottom:3px">${S.avatar(h.user, "sm")}<strong>${S.esc(h.user.name)}</strong></div>
-              <div class="sub" style="font-size:13px">${S.esc(h.note)}</div></div>`).join("") : '<div class="empty">No handover notes.</div>'}</div></div>
-      </div>`;
+      <div class="grid" id="dash-admin-lists" style="grid-template-columns:1fr 1fr"></div>`;
   }
 
   view.innerHTML = html;
@@ -149,6 +138,15 @@ window.pageInit = async (S) => {
     };
   }
   wireAttCard();
+
+  // The page-wide people scope, set by the admin Team-progress table (see applyScope). An empty
+  // `ids` means "everyone" and leaves every section exactly as it renders today, which is what a
+  // non-admin — who never mounts that table — always sees.
+  // `scoped` (not `ids.length`) is the flag every consumer branches on — "the filter matched
+  // nobody" and "there is no filter" both carry an empty id list, and one means an empty board
+  // while the other means the whole team.
+  let scope = { ids: [], set: new Set(), order: [], label: "", rows: [], scoped: false };
+  let insights = null;   // /api/insights, fetched once and re-filtered per scope
 
   // Mount the growth hub across its two hosts — the compass above "my work", the ledger below it.
   // Fail-soft: growth is a section of this page, not the page, so a bad /api/development never
@@ -304,24 +302,132 @@ window.pageInit = async (S) => {
       </div>`;
   }
 
-  // Clock-in chart (admin only) — fetched after paint so the page never blocks on it.
-  // Clicking a day opens the roster of who clocked in (data rides along in the trend).
-  if (d.is_admin && window.SentinelCharts) {
-    try {
-      const ins = await S.api("/api/insights");
-      SentinelCharts.attendanceTrend(S.qs("#chart-attendance"), ins.attendance_trend, (day) => {
-        const rows = (day.people || []).map((p) => `
-          <div class="row between" style="padding:8px 0;border-bottom:1px solid var(--line)">
-            <div class="t-name">${S.avatar(p.user, "sm")}<span>${S.esc(p.user.name)}</span></div>
-            <div>${S.statusPill(p.status)} <span class="sub">${S.fmtTime(p.clock_in)}</span></div>
-          </div>`).join("");
-        S.modal({
-          title: `Clocked in · ${S.fmtDateFull(day.date + "T00:00:00+08:00")}`,
-          body: rows
-            ? `<div class="sub" style="margin-bottom:6px">${day.people.length} ${day.people.length === 1 ? "person" : "people"}, earliest first</div>${rows}`
-            : '<div class="empty">No one clocked in.</div>',
-        });
+  // --- the page-wide people scope ---------------------------------------------------------------
+  // Team progress owns the selection; this owns what the rest of the page does with it. Everything
+  // below re-renders from data already in hand — no refetch, so scoping is instant and can't fail.
+  //
+  // The Task Board used to be re-scoped from here as well; it left this page on 2026-08-03
+  // (decision D7) and lives at /tasks, so what scopes now is the admin block: the KPI row, the two
+  // lists and the clock-in chart. The "my work" strip above is deliberately NOT scoped — it answers
+  // "what is on ME", which no selection of other people can change.
+  function applyScope(next) {
+    scope = {
+      ids: next.ids || [],
+      set: new Set(next.ids || []),
+      order: next.order || [],
+      label: next.label || "",
+      rows: next.rows || [],
+      // Carried through from teamgrowth.js's scope(), never re-derived from `ids.length`: a filter
+      // that matched nobody and no filter at all are both an empty id list, and only this flag
+      // tells them apart. Dropping it here reads as "unscoped", which silently ignores every
+      // selection the admin makes.
+      scoped: !!next.scoped,
+    };
+    renderKpis();
+    renderAdminLists();
+    renderTrend();
+  }
+
+  const inScope = (userId) => !scope.scoped || scope.set.has(userId);
+
+  /** KPIs for the current scope. Unscoped, these are the SERVER's counts over everyone — the
+   *  authoritative numbers. Scoped, they're recounted from the per-person facts Team progress
+   *  already fetched (present/late/gym), so the tiles and the table can never disagree. */
+  function renderKpis() {
+    const host = S.qs("#dash-kpis");
+    if (!host) return;
+    let k = d.kpis;
+    let note = "staff";
+    if (scope.scoped) {
+      const sel = scope.rows.filter((r) => scope.set.has(r.user.id));
+      k = {
+        headcount: sel.length,
+        present_today: sel.filter((r) => r.present_today).length,
+        late_today: sel.filter((r) => r.late_today).length,
+        gym_completed_week: sel.reduce((a, r) => a + (r.gym_week || 0), 0),
+      };
+      note = "selected";
+    }
+    // Presence-focused on purpose: no absent/task/approval counts here (2026-07-27).
+    // Tasks live on the board above; approvals have their own page + the bell.
+    host.innerHTML =
+      kpi("Present today", k.present_today, `of ${k.headcount} ${note}`, "", "clock")
+      + kpi("Late today", k.late_today, "clocked in late", k.late_today ? "warn" : "", "coffee")
+      + kpi("Gym this week", k.gym_completed_week, "sessions completed", "", "dumbbell");
+  }
+
+  function renderAdminLists() {
+    const host = S.qs("#dash-admin-lists");
+    if (!host) return;
+    const late = (d.late_today_list || []).filter((s) => inScope(s.user.id));
+    const handovers = (d.handovers || []).filter((h) => inScope(h.user.id));
+    const scoped = scope.scoped ? " in this selection" : "";
+    host.innerHTML = `
+      <div class="card"><div class="card-head"><h3>Late today</h3><span class="chip">${late.length}</span></div>
+        <div class="card-body">${late.length ? late.map((s) => `
+          <div class="row between" style="padding:7px 0;border-bottom:1px solid var(--line)">
+            <div class="t-name">${S.avatar(s.user, "sm")}<span>${S.esc(s.user.name)}</span></div>
+            <div>${S.statusPill("Late")} <span class="sub">${S.fmtTime(s.clock_in)}</span></div>
+          </div>`).join("") : `<div class="empty">Everyone on time${scoped}.</div>`}</div></div>
+
+      <div class="card"><div class="card-head"><h3>Handover notes</h3><span class="chip">yesterday</span></div>
+        <div class="card-body">${handovers.length ? handovers.map((h) => `
+          <div style="padding:9px 0;border-bottom:1px solid var(--line)">
+            <div class="t-name" style="margin-bottom:3px">${S.avatar(h.user, "sm")}<strong>${S.esc(h.user.name)}</strong></div>
+            <div class="sub" style="font-size:13px">${S.esc(h.note)}</div></div>`).join("")
+          : `<div class="empty">No handover notes${scoped}.</div>`}</div></div>`;
+  }
+
+  /** Clock-in chart. Each day carries its full clocked-in roster, so a scoped chart is recounted
+   *  from that roster rather than re-requested — the same 14 days, just the selected people. */
+  function renderTrend() {
+    const host = S.qs("#chart-attendance");
+    if (!host || !insights || !window.SentinelCharts) return;
+    const trend = (insights.attendance_trend || []).map((day) => {
+      if (!scope.scoped) return day;
+      const people = (day.people || []).filter((p) => p.user && scope.set.has(p.user.id));
+      return {
+        ...day,
+        people,
+        ontime: people.filter((p) => p.status !== "Late").length,
+        late: people.filter((p) => p.status === "Late").length,
+      };
+    });
+    SentinelCharts.attendanceTrend(host, trend, (day) => {
+      const rows = (day.people || []).map((p) => `
+        <div class="row between" style="padding:8px 0;border-bottom:1px solid var(--line)">
+          <div class="t-name">${S.avatar(p.user, "sm")}<span>${S.esc(p.user.name)}</span></div>
+          <div>${S.statusPill(p.status)} <span class="sub">${S.fmtTime(p.clock_in)}</span></div>
+        </div>`).join("");
+      S.modal({
+        title: `Clocked in · ${S.fmtDateFull(day.date + "T00:00:00+08:00")}`,
+        body: rows
+          ? `<div class="sub" style="margin-bottom:6px">${day.people.length} ${day.people.length === 1 ? "person" : "people"}, earliest first</div>${rows}`
+          : '<div class="empty">No one clocked in.</div>',
       });
+    });
+  }
+
+  if (d.is_admin) {
+    renderKpis();
+    renderAdminLists();
+
+    // Team progress — everyone's growth, and the control that scopes this whole page.
+    // Fail-soft like every other section: a broken /api/development/team must not cost an admin
+    // their KPIs, their chart or their board.
+    if (window.TeamGrowth) {
+      TeamGrowth.mount(S, S.qs("#dash-team"), { onScope: applyScope })
+        .catch((e) => {
+          S.qs("#dash-team").innerHTML =
+            `<div class="empty card pad">${S.esc(e.detail || "Couldn't load team progress.")}</div>`;
+        });
+    }
+
+    // Clock-in chart — fetched after paint so the page never blocks on it. Clicking a day opens
+    // the roster of who clocked in (the data rides along in the trend).
+    try {
+      insights = await S.api("/api/insights");
+      renderTrend();
     } catch (e) { /* charts are non-critical */ }
   }
 

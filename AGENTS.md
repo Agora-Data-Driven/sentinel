@@ -151,7 +151,7 @@ deploy/            deploy.ps1, seed-job.ps1, DEPLOY.md
 | `tasks.py` | Kanban board (page `/tasks`), priority (AM-only), Send to Atrium, the lifecycle actions (park/resume/archive/review), **editing Atrium's own cards** |
 | `people.py` | Directory, profiles, QR badges |
 | `leave.py` | Requests, approvals, balances |
-| `development.py` | Holistic development hub — learning, reading, growth |
+| `development.py` | Holistic development hub — learning, reading, growth, **`GET /team`** (admin+: everyone's growth ranked by measured speed — `services/team_growth.py`) |
 | `payroll.py` | Payroll runs |
 | `reports.py` | 6 reports + CSV export |
 | `admin.py` | System settings, announcements, audit log |
@@ -1283,6 +1283,38 @@ ledger → the admin block. Consequences worth knowing before you edit any of it
   `/spiritual`, `/gym`); the quiet "Details" strip under it expands that dimension in the ledger.
   Two affordances, deliberately not one overloaded click.
 - Both mounts are **fail-soft**: a broken `/api/development` must never cost anyone their board.
+- **The pace arithmetic lives in `growthmath.js`, not in either component.** The admin table
+  renders the same numbers about the same people as a worker's own rings; two copies of
+  `expected()` would let one surface drift from the other with nothing to say which is right.
+
+### 🟡 The Overview's admin block has a PAGE-WIDE people filter — added 2026-08-03
+
+`TeamGrowth` (`teamgrowth.js` → `GET /api/development/team`) opens the "Across Agora" block with
+everyone's four dimensions in one table, and it is also the Overview's **scope control**: pick
+people, or a segment like "stalled", and `dashboard.js:applyScope` re-scopes the task board, the
+KPI tiles, the clock-in chart and the late/handover lists. State is URL-backed
+(`?people=&sort=&seg=&win=`). Three things to know before changing any of it:
+
+- **Speed is not the pace chip.** The chip is `actual − expected`: a POSITION against a calendar,
+  so somebody who banked progress in July and stopped still reads "▲ ahead". Speed is points of
+  engine mastery gained per WEEK, measured — the engine reports `progressSumThen` (the same rollup
+  recomputed against each topic's stats as they stood when the window opened) beside
+  `progressSum`, and `team_growth._velocity` takes the difference. Both columns are on the table
+  because they answer different questions; the default sort is speed.
+- 🔴 **Unknown is `None`, never `0.0` — end to end.** An unreachable engine, or a person with no
+  enrolled programme, renders "—", sorts LAST in both directions, is excluded from the named
+  segments, and is counted out loud under the table; `engine_error` carries the reason up. A team
+  of zeroes reads as "nobody is doing anything", which is the same confident-lie failure the
+  Watcher bridge produced twice (see the fail-soft entry below). `tests/test_team_growth.py` pins
+  it.
+- **Physical has a score but no speed, deliberately.** Its ring is the mean progress across target
+  PRs, and a PR row carries only a current value — nothing timestamps the climb. Reporting "no
+  history" as "no movement" would libel whoever is training hardest, so `velocity` is `None` and
+  the dimension sits outside the ranking.
+- **The rollup is ONE batched engine call, not one per head** (`/api/internal/team-progress`,
+  purpose `team-progress`), because the engine reads its shared ~540-doc catalogue once and
+  overlays each person onto it. Cached 120 s in-process; `?refresh=1` bypasses. Never loop
+  `enrollment-progress` per person to rebuild this — that is ~540 doc reads each.
 
 ### 🟡 An embedded Mastery Engine stays light inside a dark Sentinel
 
