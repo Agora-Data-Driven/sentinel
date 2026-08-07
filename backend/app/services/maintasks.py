@@ -69,6 +69,41 @@ def normalize(maintasks_raw, checklist_raw=None) -> list[dict]:
     return clean
 
 
+_MEMO_ATTR = "_mt_normalized"
+
+
+def normalized(task) -> list[dict]:
+    """`normalize` for a Task ROW, memoized on the instance. Use this whenever the input is a task.
+
+    🔴 PERFORMANCE, and it is not a micro-optimisation. Answering "is this work on me?" and "how far
+    along is it?" both go through `normalize`, so ONE board card parses this JSON three times —
+    `task_perms.is_assigned` (which is also what filtered the list), then `my_slot_count` and
+    `sub_stats` inside `serializers.task_card`. Measured 2026-08-07: **2,400 `normalize()` calls to
+    render 801 cards**, each one re-parsing the JSON and rebuilding every dict in it.
+
+    The memo is keyed on the IDENTITY of the two raw strings, not their value. Writing
+    `maintasks_json` always rebinds the attribute to a fresh `str`, so an edited row misses the memo
+    and re-normalizes — which is what makes this safe to hold across a whole request. Value equality
+    would be wrong the other way round: it would be slower (comparing long JSON) for no extra safety.
+
+    It also makes the result STABLER than calling `normalize` three times did: `normalize` mints a
+    fresh `uuid4` id for any step that arrives without one, so the three calls behind a single card
+    each invented different ids. Nothing read them across calls, so nothing was broken — but one
+    answer per row is the shape everything here assumes.
+    """
+    raw = getattr(task, "maintasks_json", "[]")
+    legacy = getattr(task, "checklist_json", None)
+    memo = getattr(task, _MEMO_ATTR, None)
+    if memo is not None and memo[0] is raw and memo[1] is legacy:
+        return memo[2]
+    out = normalize(raw, legacy)
+    try:
+        object.__setattr__(task, _MEMO_ATTR, (raw, legacy, out))
+    except (AttributeError, TypeError):      # a mapped stub / slotted object — just don't cache
+        pass
+    return out
+
+
 def sub_stats(maintasks: list[dict]) -> tuple[int, int]:
     """(done, total) counted across every sub-task of every main task."""
     total = done = 0

@@ -122,7 +122,7 @@ def assigned_user_ids(task: Task) -> set[int]:
     if task.assigned_to_id:
         ids.add(task.assigned_to_id)
     ids.update(s.user_id for s in (getattr(task, "supporters", None) or []))
-    for m in MT.normalize(getattr(task, "maintasks_json", "[]"), task.checklist_json):
+    for m in MT.normalized(task):
         if m.get("assignee_id"):
             ids.add(m["assignee_id"])
         ids.update(s["assignee_id"] for s in m.get("subs", []) if s.get("assignee_id"))
@@ -148,7 +148,7 @@ def my_slot_count(user: User, task: Task) -> int:
     replaced rather than the fix for it.
     """
     n = 0
-    for m in MT.normalize(getattr(task, "maintasks_json", "[]"), task.checklist_json):
+    for m in MT.normalized(task):
         if m.get("assignee_id") == user.id:
             n += 1
         n += sum(1 for s in m.get("subs", []) if s.get("assignee_id") == user.id)

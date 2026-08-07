@@ -23,6 +23,25 @@ class Settings(BaseSettings):
     # --- Database ----------------------------------------------------------
     # SQLite locally (zero-setup); point DATABASE_URL at Postgres in prod.
     database_url: str = "sqlite:///./sentinel.db"
+    # Postgres connection pool (ignored on SQLite). See database.py for why the default was wrong.
+    #
+    # 🔴 The ceiling is CLOUD SQL's `max_connections`, NOT the threadpool. `db-f1-micro` allows only
+    # ~25 connections for the whole estate — shared with the seed job, migrations and any psql — so
+    # `pool_size` is what one warm instance HOLDS AT REST and has to stay small. `max_overflow` is
+    # burst capacity that is opened on demand and closed on return, so it costs nothing at idle.
+    # Worst case is `(pool_size + max_overflow) x max-instances` (deploy.ps1), which is why those two
+    # numbers must be changed together — 20+20 across 10 instances would ask for 400.
+    #
+    # 5 + 15 is sized to the work, not to the thread count: a board request now holds its connection
+    # for ~60ms rather than the multiple seconds it did before `CardPrefetch`, so 20 concurrent
+    # checkouts is several hundred requests/second per instance. If a genuinely slow endpoint appears
+    # (a big CSV export, an adoption run over a large workspace), raise these — and `max_connections`
+    # or the instance tier with them.
+    db_pool_size: int = 5
+    db_max_overflow: int = 15
+    # Fail fast instead of hanging: a caller who cannot get a connection in 10s is better served by
+    # an error it can retry than by a request that eventually times out at the load balancer.
+    db_pool_timeout: int = 10
 
     # --- Auth --------------------------------------------------------------
     jwt_secret: str = "dev-only-change-me-in-production"
@@ -81,6 +100,16 @@ class Settings(BaseSettings):
     # Atrium shows up here. Unset = derived from portal_login_url; if neither resolves, the bridge
     # is simply off and the board shows Sentinel's own rows only.
     atrium_api_url: str = ""
+    # How long a fetched Atrium BOARD LIST may be reused (seconds; 0 disables the cache).
+    #
+    # 🔴 This is a LATENCY control, not a tuning knob to leave at 0. `atrium_tasks.fetch_tasks` is a
+    # blocking cross-service HTTP call on the critical path of every board load, every Monitor load
+    # and every Coach digest, and `atrium_bridge` pools no connections — so without this, Atrium's
+    # latency (up to the 10s read timeout) is added straight onto Sentinel's. Only successful reads
+    # are cached and every write invalidates, so the worst case is a client card up to this many
+    # seconds stale on the board. Raising it much past ~60s would start being visible to a person
+    # editing in Atrium and refreshing here.
+    atrium_cache_seconds: int = 15
     # OPTIONAL: pin the Growth hub's Mentor Library to ONE Atrium workspace's Watcher archive
     # (services/atrium_watcher.py). Unset (the default) reads EVERY workspace, which is what you
     # want: Watcher's channels are per-client, but mentor content (Nick Saraev, Carson Reed, ...)

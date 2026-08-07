@@ -145,6 +145,111 @@ def client_dict(c: Client) -> dict:
     }
 
 
+def _chunks(seq: list, size: int = 400):
+    """`seq` in batches. Every `IN (...)` below is chunked because SQLite caps the number of bound
+    parameters in one statement (999 before 3.32) — a 900-card board would raise, not slow down."""
+    for i in range(0, len(seq), size):
+        yield seq[i:i + size]
+
+
+class CardPrefetch:
+    """The rows every board card needs, loaded ONCE for a whole list of tasks.
+
+    🔴 This exists because `task_card` was issuing ~3.7 queries PER CARD, and two of the three
+    reasons are not obvious (measured 2026-08-07, 801 cards → 2,946 queries, 780 ms on SQLite; on
+    Cloud SQL every one of those is a socket round-trip, so the same board costs seconds):
+
+    1. `len(t.comments)` is a LAZY LOAD — one SELECT per card, purely to count rows. Unlike
+       `Task.supporters` (`lazy="selectin"`, 1 query for the whole board) nothing batched it.
+    2. **SQLAlchemy's identity map holds WEAK references.** `task_card` returns a plain dict and
+       keeps no reference to the `User` / `Client` it read, so each one was garbage-collected before
+       the next card asked for it and `db.get()` went back to the database. That is why the same
+       FOUR clients cost **703 SELECTs** on an 800-card board — a cache that looks like it should
+       work and does not. Holding the rows in this object is what makes the identity map effective,
+       so keep the dicts alive for as long as the cards are being built.
+
+    Every accessor FALLS BACK to a direct read when an id was not prefetched, so a card built
+    without a prefetch (`task_detail`, which serializes exactly one row) stays correct — just as
+    chatty as it was. Correctness never depends on the cache being warm.
+    """
+
+    __slots__ = ("users", "clients", "counts")
+
+    def __init__(self) -> None:
+        self.users: dict[int, User] = {}
+        self.clients: dict[int, Client] = {}
+        # task_id -> (comment_count, attachment_count). Absent means "not prefetched", which is
+        # different from 0 and must fall back rather than report an empty thread.
+        self.counts: dict[int, tuple[int, int]] = {}
+
+    @classmethod
+    def for_tasks(cls, db: Session, tasks: list[Task]) -> "CardPrefetch":
+        """Three queries total, whatever the board's size."""
+        from sqlalchemy import select as _select
+
+        pre = cls()
+        if not tasks:
+            return pre
+
+        user_ids: set[int] = set()
+        client_ids: set[int] = set()
+        for t in tasks:
+            for uid in (t.assigned_to_id, getattr(t, "created_by_id", None)):
+                if uid:
+                    user_ids.add(uid)
+            # `supporters` is already selectin-loaded, so this costs nothing extra.
+            user_ids.update(s.user_id for s in (getattr(t, "supporters", None) or []))
+            if t.client_id:
+                client_ids.add(t.client_id)
+
+        for batch in _chunks(sorted(user_ids)):
+            for u in db.execute(_select(User).where(User.id.in_(batch))).scalars().all():
+                pre.users[u.id] = u
+        for batch in _chunks(sorted(client_ids)):
+            for c in db.execute(_select(Client).where(Client.id.in_(batch))).scalars().all():
+                pre.clients[c.id] = c
+
+        # Counts only — deliberately NOT `selectinload(Task.comments)`. The card needs two integers;
+        # eager-loading the relationship would pull every comment BODY on the board (thousands of
+        # rows of prose) to count them.
+        task_ids = [t.id for t in tasks if t.id]
+        pre.counts = {tid: (0, 0) for tid in task_ids}
+        for batch in _chunks(task_ids):
+            rows = db.execute(_select(TaskComment.task_id, TaskComment.attachments_json)
+                              .where(TaskComment.task_id.in_(batch))).all()
+            for tid, attachments in rows:
+                have, files = pre.counts[tid]
+                pre.counts[tid] = (have + 1, files + len(_loads(attachments, [])))
+        return pre
+
+    def user(self, db: Session, uid: int | None) -> User | None:
+        if not uid:
+            return None
+        found = self.users.get(uid)
+        if found is None:
+            found = db.get(User, uid)
+            if found is not None:
+                self.users[uid] = found      # hold it, so the next card is free (see the docstring)
+        return found
+
+    def client(self, db: Session, cid: int | None) -> Client | None:
+        if not cid:
+            return None
+        found = self.clients.get(cid)
+        if found is None:
+            found = db.get(Client, cid)
+            if found is not None:
+                self.clients[cid] = found
+        return found
+
+    def comment_counts(self, t: Task) -> tuple[int, int]:
+        counted = self.counts.get(t.id)
+        if counted is not None:
+            return counted
+        return (len(t.comments),
+                sum(len(_loads(c.attachments_json, [])) for c in t.comments))
+
+
 def maintask_list(t: Task, db: Session) -> list[dict]:
     """The two-level breakdown with assignees resolved to user_public (assignee cached per call)."""
     from .services import maintasks as MT
@@ -167,24 +272,29 @@ def maintask_list(t: Task, db: Session) -> list[dict]:
     } for m in mts]
 
 
-def task_card(t: Task, db: Session, viewer: User | None = None) -> dict:
+def task_card(t: Task, db: Session, viewer: User | None = None,
+              pre: "CardPrefetch | None" = None) -> dict:
     """Compact shape for the Kanban board.
 
     `viewer` adds the two viewer-relative fields below. They are **absent, never faked**, when no
     viewer is named (people.py's profile card lists somebody else's work, where "mine" answers
     nothing) — the same rule the Atrium bridge follows for fields the other side lacks.
+
+    `pre` is a `CardPrefetch` covering the whole list being serialized. Optional and purely a
+    performance concern — read its docstring before removing it, because two of the three costs it
+    removes are invisible in this function's source.
     """
     from .services import maintasks as MT
     from .services import task_perms
 
-    comment_count = len(t.comments)
-    attach_count = sum(len(_loads(c.attachments_json, [])) for c in t.comments)
-    client = db.get(Client, t.client_id) if t.client_id else None
-    assignee = db.get(User, t.assigned_to_id) if t.assigned_to_id else None
-    creator = db.get(User, t.created_by_id) if getattr(t, "created_by_id", None) else None
+    pre = pre if pre is not None else CardPrefetch()
+    comment_count, attach_count = pre.comment_counts(t)
+    client = pre.client(db, t.client_id)
+    assignee = pre.user(db, t.assigned_to_id)
+    creator = pre.user(db, getattr(t, "created_by_id", None))
     # Progress now spans the two-level breakdown (all sub-tasks of all main tasks); a legacy flat
     # checklist is migrated by normalize(), so the count stays correct for old tasks too.
-    done, total = MT.sub_stats(MT.normalize(getattr(t, "maintasks_json", "[]"), t.checklist_json))
+    done, total = MT.sub_stats(MT.normalized(t))
     # 🔴 "Is this work on ME?" answered by the SERVER, from the one definition every permission in
     # task_perms already uses (2026-08-05). The Overview's strip and the board's "My work" button both
     # re-derived it as `assigned_to_id === me`, which is the narrower rule — so a card led by a
@@ -204,7 +314,7 @@ def task_card(t: Task, db: Session, viewer: User | None = None) -> dict:
     # drawer: the board has to show who is on a piece of work, and the whole reason this field exists
     # is that people were inventing checklist steps to get a second name onto a card.
     supporters = [user_public(u) for u in
-                  (db.get(User, sid) for sid in t.support_ids) if u is not None]
+                  (pre.user(db, sid) for sid in t.support_ids) if u is not None]
     return {
         **mine,
         # 🔴 Internal-only, like every other ownership field here — staffing never crosses to a

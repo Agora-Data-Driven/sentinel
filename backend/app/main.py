@@ -5,6 +5,7 @@ Seed first:   python seed.py
 """
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Request
@@ -366,7 +367,16 @@ def _startup() -> None:
     _backfill_status_meta()
     _ensure_default_shift()
     _startup_safeguards()
-    _mirror_clients()
+    # 🔴 OFF THE STARTUP PATH (2026-08-07). Startup handlers complete BEFORE uvicorn accepts a
+    # connection, so anything in here is added to every cold start — and `_mirror_clients` reaches
+    # over the network to Atrium with a 10s read timeout. On Cloud Run that is paid by whoever clicks
+    # first each morning, and it is paid again on every scale-up, for a refresh that is not urgent by
+    # its own docstring ("a client list one boot stale is a nuisance").
+    #
+    # A daemon thread, not a task on the loop: `client_sync.sync` is blocking, synchronous DB + urllib
+    # work, so awaiting it on the event loop would stall every other request instead of just the boot.
+    # `daemon=True` so it can never hold a shutdown open.
+    threading.Thread(target=_mirror_clients, name="client-mirror", daemon=True).start()
 
 
 @app.on_event("startup")
