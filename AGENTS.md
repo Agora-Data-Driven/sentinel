@@ -271,10 +271,42 @@ Retiring a client is therefore a deliberate two-step: read
 walk, because a preview that re-derives the plan is a second definition of it — then
 `POST /api/manage/clients/sync?deactivate=1`.
 
-It runs on boot (`main._mirror_clients`, last and fully swallowed — a client list one boot stale is a
-nuisance, a Sentinel that won't start is an outage) and on `POST /api/manage/clients/sync`. The
-read-only Manage pane surfaces `GET /api/manage/clients/sync-status`, whose `unlinked` list is the one
-actionable thing there: those clients are invisible to the bridge, and the fix is in **Atrium**.
+🔴 **It has THREE triggers, and "on boot" alone was not enough (2026-08-07).**
+
+| Trigger | Notes |
+|---|---|
+| boot — `main._mirror_clients` | on a daemon thread since 2026-08-07, and fully swallowed: a client list one boot stale is a nuisance, a Sentinel that won't start is an outage. **Off the startup path** because startup handlers complete before uvicorn accepts a connection, so its 10s Atrium call was billed to every cold start |
+| the **daily pass** — `services/daily.mirror_clients` | added 2026-08-07; runs before `task_recurring` so a workspace created today can still receive its recurrence on the same pass. 🔴 **Dormant in production today — see below** |
+| **Sync now** — `POST /api/manage/clients/sync` | the button in the Manage → Clients strip, plus the route for a script. **This is the only trigger you can rely on right now** |
+
+> 🔴 **`POST /api/cron/daily` DOES NOT RUN UNATTENDED. Checked against the live project 2026-08-07.**
+> The decisive fact, and the one to re-check first: **`CRON_KEY` is not set on the Cloud Run service**
+> (`deploy.ps1` never passed it, though the secret `sentinel-cron-key` has existed since 2026-07-04
+> with the runtime SA already granted accessor). With it empty, `cron._authorize`'s header branch can
+> never match, so **no** Scheduler job could authenticate even if one existed — and none was found in
+> `asia-southeast1` (where every other Agora job lives) or `us-central1`. There is no in-app scheduler
+> either. So the endpoint is reachable **only by a logged-in Super Admin**, i.e. the button in
+> `dashboard.js`. That
+> means the whole daily pass is manual: attendance day-summaries, approval reminders, recurring
+> retainer deliverables (WP 6.1) — and now this client mirror. The hook here is correct and tested;
+> it simply does not fire yet. Scheduling it needs three things together: a `CRON_KEY` secret, a
+> `--set-secrets` line in `deploy.ps1`, and a Cloud Scheduler job sending `X-Cron-Key`. Do not add
+> only the scheduler — without the key it will get a 403 forever, silently.
+
+🔴 **Why the daily pass exists, because it looks redundant and is not.** A client created in Atrium
+reaches the New Task picker only when this sync runs, and until 2026-08-07 boot was its only automatic
+trigger. That was survivable *only* because Cloud Run scaled to **zero**: any quiet spell ended in a
+fresh boot, so a new client appeared on its own within ~15 minutes. Adding `--min-instances 1` the
+same day removed those restarts — so "boot-only" silently became "once", and a client could stay
+invisible here indefinitely. Observed live that afternoon: a client added minutes after a deploy was
+still unpickable hours later, with a healthy `client mirror: created: 0` in the boot log and **no
+error anywhere**. If you ever make the service restart-free in some new way, check this trigger list
+again. 🔴 Neither automatic trigger passes `deactivate` — see above; a scheduled job is the worst
+place to act on absence, because nobody is watching when it runs.
+
+The read-only Manage pane surfaces `GET /api/manage/clients/sync-status`, whose `unlinked` list is the
+one actionable thing there: those clients are invisible to the bridge, and the fix is in **Atrium**.
+**Sync now** is the pane's only write, and it only ever creates and links.
 Covered by `tests/test_client_sync.py`; the Atrium half is `GET /api/internal/clients` (purpose
 `clients`), pinned in its `_atrium_smoketest.py`.
 

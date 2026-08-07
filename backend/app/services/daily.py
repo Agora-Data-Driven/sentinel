@@ -113,12 +113,54 @@ def send_reminders(db: Session) -> dict:
     return result
 
 
+def mirror_clients(db: Session) -> dict:
+    """Pull Atrium's client registry. Additive-only, fail-soft. Part of the daily pass.
+
+    🔴 THE MIRROR USED TO BE BOOT-ONLY, AND THAT STOPPED WORKING ON 2026-08-07. A client created in
+    Atrium reaches Sentinel's `clients` table — which is what feeds the New Task picker and the
+    board's client filter — only when `client_sync.sync` runs, and its only automatic trigger was
+    `main._mirror_clients` at boot. That was survivable while Cloud Run scaled to ZERO: any quiet
+    spell ended in a fresh boot, so a new client appeared on its own within about fifteen minutes.
+    Adding `--min-instances 1` the same day removed those restarts, so "boot-only" became "once" and
+    a new client could stay invisible here indefinitely. Confirmed live: a client added minutes after
+    a deploy was still absent hours later, with the boot log showing a healthy `created: 0` sync.
+
+    🔴 `deactivate` is NOT passed, so it stays False. Deactivation is driven by ABSENCE, and absence
+    is a lie whenever the two systems spell a client differently — a scheduled job is the LAST place
+    that should act on it, because nobody is watching when it runs. Retiring a client stays the
+    deliberate two-step in AGENTS.md §2: read `sync-preview`, then `sync?deactivate=1` by hand.
+
+    Fail-soft, and returned rather than raised: this runs after the attendance pass has committed, and
+    an Atrium outage must not take the daily job — or its already-written work — down with it.
+
+    🔴 **This does not fire yet in production.** Nothing schedules `POST /api/cron/daily` (verified
+    2026-08-07: no Cloud Scheduler job in any region, no in-app scheduler, and `CRON_KEY` unset on the
+    service, so only a Super Admin session can reach the route). Until that is wired up, the reliable
+    trigger is the **Sync now** button in Manage → Clients. See AGENTS.md §2.
+    """
+    from . import client_sync
+
+    try:
+        report = client_sync.sync(db)
+    except Exception as exc:                     # noqa: BLE001 — see the docstring
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    # `client_sync.sync` already refuses to act on an empty or failed answer; surface that verdict
+    # instead of flattening it, so a silent no-op and a real refusal are distinguishable in the log.
+    return {k: report.get(k) for k in ("ok", "error", "created", "updated", "linked",
+                                       "would_deactivate") if k in report}
+
+
 def run(db: Session, day: date | None = None) -> dict:
     """Full daily pass. ``day`` defaults to yesterday (PH). Commits once at the end."""
     target = day or (today_ph() - timedelta(days=1))
     att = process_attendance(db, target)
     rem = send_reminders(db)
     db.commit()
+
+    # Clients BEFORE recurring work, deliberately: a retainer deliverable hangs off a Sentinel
+    # `Client` row, so syncing first means a workspace created in Atrium today can already receive
+    # its recurrence on this same pass instead of waiting for tomorrow's.
+    clients = mirror_clients(db)
 
     # Retainer deliverables (WP 6.1). 🔴 Generated against TODAY, not `target`: the attendance pass
     # deliberately processes YESTERDAY (a day is only complete once it has ended), but a recurring
@@ -127,4 +169,5 @@ def run(db: Session, day: date | None = None) -> dict:
     # Safe to run repeatedly: each recurrence claims its period, so a second tick creates nothing.
     from . import task_recurring
     made = task_recurring.run(db, today_ph())
-    return {"ok": True, "attendance": att, "reminders": rem, "recurring": made}
+    return {"ok": True, "attendance": att, "reminders": rem, "recurring": made,
+            "clients": clients}

@@ -35,7 +35,7 @@ unit map + cookbook.
 | `app/services/mentor_search.py` | Per-user BM25-ish retrieval over `mentor_transcripts` (`resolve_mentor`, `DEFAULT_LIMIT`; no table of its own — deliberate) |
 | `app/services/development.py` | Holistic hub incl. `holistic_digest` (feeds the Coach) |
 | `app/services/work_digest.py` | **The task board, digested for the AI coach** (`work-digest` / `work-detail`). `work_digest` = the board as ONE viewer may see it (every card through `task_perms.can_view`; rollup on `/api/tasks/summary`'s cohort rule) · `work_detail` = full bodies, re-checking every id. Their own index is complete (open **+ finished history**), the wider board is capped with `truncated` declared, `service_charge` never crosses |
-| `app/services/` (rest) | `gym.py`, `leave.py`, `payroll.py`, `notifications.py`, `settings.py`, `audit.py`, `daily.py` — one domain each |
+| `app/services/` (rest) | `gym.py`, `leave.py`, `payroll.py`, `notifications.py`, `settings.py`, `audit.py`, `daily.py` — one domain each. **`daily.run` also mirrors Atrium's clients** (`mirror_clients`, additive-only): boot is no longer the mirror's only automatic trigger now that `--min-instances 1` stops the service restarting — AGENTS.md §2 |
 | `app/utils/` | `time.py` (**`utcnow()` — the only clock**), `qr.py`, `csv_export.py`, `passwords.py` |
 | `alembic/versions/` | 22 revisions; head `e8b3f5c7a2d9_task_workflow_fields` |
 | `entrypoint.sh` → `migrate.py` | Boot: `alembic upgrade head` (or `stamp head` to adopt a create_all schema), then uvicorn |
