@@ -264,3 +264,61 @@ def test_manage_can_still_SEE_an_inactive_client(client, db, make_user, auth):
 def test_the_sync_route_stays_super_admin_only(client, make_user, auth, role):
     auth(make_user(role))
     assert client.post("/api/manage/clients/sync").status_code == 403
+
+
+# --- 5. 🔴 the mirror is no longer BOOT-ONLY (2026-08-07) ----------------------------------------
+#
+# The failure this closes, observed live: a client created in Atrium could not be picked when raising
+# a service in Sentinel, for hours, with a perfectly healthy boot log. `client_sync.sync`'s only
+# automatic trigger was `main._mirror_clients` at boot, which was survivable only because Cloud Run
+# scaled to ZERO — every quiet spell ended in a fresh boot. Adding `--min-instances 1` removed those
+# restarts and turned "boot-only" into "once", so the daily pass now carries it too.
+
+def test_the_daily_pass_mirrors_clients(db, monkeypatch):
+    from app.services import daily
+
+    _atrium(monkeypatch, [_row("acme", "Acme Corp")])
+    out = daily.run(db)
+    assert out["clients"]["ok"] is True
+    assert out["clients"]["created"] == 1
+    got = db.execute(select(Client).where(Client.atrium_client_id == "acme")).scalars().first()
+    assert got is not None and got.name == "Acme Corp"
+
+
+def test_the_daily_pass_NEVER_deactivates_a_client(db, monkeypatch):
+    """🔴 Deactivation is driven by ABSENCE, and absence is a lie whenever the two systems spell a
+    client differently. A scheduled job is the worst possible place to act on it — nobody is watching
+    when it runs. Retiring a client stays the deliberate two-step (sync-preview, then
+    ?deactivate=1)."""
+    from app.services import daily
+
+    db.add(Client(name="Gone From Atrium", atrium_client_id="gone", is_active=True))
+    db.commit()
+    _atrium(monkeypatch, [_row("acme", "Acme Corp")])          # "gone" is absent from the answer
+    out = daily.run(db)
+    stayed = db.execute(select(Client).where(Client.atrium_client_id == "gone")).scalars().first()
+    assert stayed.is_active is True, "the daily job must never retire a client"
+    assert out["clients"].get("would_deactivate"), "but it must still REPORT the candidate"
+
+
+def test_an_atrium_outage_does_not_break_the_daily_pass(db, monkeypatch):
+    """The attendance pass has already committed by this point. An Atrium outage must cost the client
+    refresh, never the whole job."""
+    from app.services import daily
+
+    _atrium(monkeypatch, [], "Atrium didn't answer the client list — nothing was changed.")
+    out = daily.run(db)
+    assert out["ok"] is True, "the daily job still succeeded"
+    assert out["clients"]["ok"] is False and out["clients"]["error"]
+
+
+def test_a_raising_bridge_does_not_break_the_daily_pass(db, monkeypatch):
+    """Belt to the `sync` refusal's braces: even an unexpected exception is contained."""
+    from app.services import daily
+
+    def _boom():
+        raise RuntimeError("socket exploded")
+    monkeypatch.setattr(atrium_tasks, "fetch_clients", _boom)
+    out = daily.run(db)
+    assert out["ok"] is True
+    assert out["clients"]["ok"] is False and "RuntimeError" in out["clients"]["error"]

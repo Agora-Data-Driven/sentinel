@@ -38,6 +38,13 @@ in the env/secrets that a hand deploy silently wipes. Full first-time setup: [DE
 thread): startup handlers complete before uvicorn accepts a connection, so its 10s Atrium call was
 being added to every cold start for a refresh its own docstring calls non-urgent.
 
+🔴 **`--min-instances 1` has a non-obvious consequence: the service no longer restarts on its own.**
+Anything that only ran at boot now effectively runs *once*. That bit the client mirror the same
+afternoon — a client created in Atrium stayed unpickable in Sentinel for hours, with a healthy boot
+log and no error. Fixed by giving it two more triggers (the daily pass and a **Sync now** button — see
+[AGENTS.md](../AGENTS.md) §2). **Before adding boot-only work, ask what refreshes it now that nothing
+restarts.**
+
 ## Cookbook
 
 1. **Standard prod deploy** — from `sentinel/`: `.\deploy\deploy.ps1` (defaults already target

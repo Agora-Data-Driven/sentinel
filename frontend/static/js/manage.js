@@ -301,10 +301,46 @@ window.pageInit = async (S) => {
            matching workspace in Atrium — the names are matched automatically on the next sync.
          </div></div>`
       : "";
+    // 🔴 SYNC NOW is a recovery affordance, not a convenience (added 2026-08-07). This pane is
+    // read-only by design — Atrium owns clients — so when the mirror is stale there was NOTHING a
+    // human could do here: no button, and the only automatic trigger was a boot, which stopped
+    // happening once the service got `--min-instances 1`. The observed failure was somebody creating
+    // a client in Atrium and being unable to raise a service for it here at all, with no error to
+    // read anywhere. `services/daily.mirror_clients` is what keeps it fresh unattended; this is for
+    // the person who needs it in the next thirty seconds.
+    //
+    // Deliberately does NOT pass `?deactivate=1`: switching a client off is driven by absence and
+    // stays a deliberate two-step (AGENTS.md §2). This button only ever creates and links.
     host.innerHTML = `<div class="mgr-strip">
         <span>${s.active} active${s.inactive ? ` · ${s.inactive} no longer in Atrium` : ""}</span>
         <span>${link}</span>
+        <button class="btn sm ghost" id="cl-sync" title="Pull Atrium's client list now. Only adds and links — never retires a client.">Sync now</button>
       </div>${unlinked}`;
+    const btn = S.qs("#cl-sync");
+    if (btn) btn.onclick = async () => {
+      btn.disabled = true;
+      const was = btn.textContent;
+      btn.textContent = "Syncing…";
+      try {
+        const r = await S.api("/api/manage/clients/sync", { method: "POST" });
+        const added = (r.created || 0) + (r.linked || 0);
+        S.toast(added
+          ? `${r.created || 0} new client${r.created === 1 ? "" : "s"}, ${r.linked || 0} linked`
+          : "Already up to date with Atrium", "ok");
+        // Re-render the pane so the counts and the unlinked list reflect what just happened —
+        // a sync that says "1 new" beside an unchanged list is the same class of lie as the
+        // "shared with the client" flag that pointed at nothing.
+        // "Clients" is the ENTITIES key, and it has to match exactly — `render` looks the pane's
+        // config up by it, so a lowercase key silently renders nothing.
+        if (added) render("Clients"); else clientsNotice(host);
+      } catch (err) {
+        // 409 = Atrium didn't return a list we dare act on; the detail says which. Never silent:
+        // an unreported failure here is exactly how the list went stale unnoticed in the first place.
+        S.toast(err.detail || "Could not reach Atrium to sync clients", "err");
+        btn.disabled = false;
+        btn.textContent = was;
+      }
+    };
   }
 
   // Employee badge: view/print the QR + copy the typeable code, or reissue if lost.
