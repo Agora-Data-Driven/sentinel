@@ -1,9 +1,29 @@
 /* TaskBoard — the full Kanban (Board / By Employee / Monitor), formerly the /tasks page,
-   now a mountable component embedded in the dashboard: TaskBoard.mount(S, containerEl).
+   now a mountable component embedded in the dashboard: TaskBoard.mount(S, containerEl, opts).
    Deep links (?open=<id> from notifications, ?new=1 from the command palette, ?view=…) are
-   read from the CURRENT page URL, so they work at /dashboard; the old /tasks URL 302s there. */
+   read from the CURRENT page URL, so they work at /dashboard; the old /tasks URL 302s there.
+
+   `opts.scope` (and the `setScope` handle mount resolves to) is the Overview's PAGE-WIDE people
+   filter, driven by the admin Team-progress table above: `{ ids: [userId…], order: [userId…] }`.
+   An empty `ids` means no scoping at all. It is applied on top of this board's own filters, never
+   instead of them — the two are different questions ("which client's work" vs "whose work"), and
+   a page-level scope silently overriding a filter the user set here would be a lie about what
+   they're looking at. */
 window.TaskBoard = {
-  async mount(S, root) {
+  async mount(S, root, opts) {
+  const options = opts || {};
+  // The page-wide scope. Cards are matched CLIENT-SIDE against it rather than through
+  // ?assignee_id=: the API takes one assignee, this takes a set, and the list is already
+  // permission-filtered by the server (task_perms.can_view) before it gets here — so narrowing it
+  // further in the browser can only ever hide, never reveal.
+  let scope = normaliseScope(options.scope);
+  function normaliseScope(s) {
+    const ids = (s && Array.isArray(s.ids) ? s.ids : []).map(Number).filter((n) => Number.isFinite(n));
+    // `scoped`, NOT `ids.length`, decides whether to filter. A filter that matched nobody and no
+    // filter at all both arrive with an empty list, and treating those the same would answer
+    // "show me the stalled people" with the whole team's work.
+    return { ids, set: new Set(ids), order: (s && s.order) || [], scoped: !!(s && s.scoped) };
+  }
   // 🔴 The read-only seat (decision D8). `S.can()` is RANK-based and a viewer sits at the floor, so
   // every rank check already refuses it — but rank cannot express "sees everything, writes nothing",
   // so the seat is named explicitly here exactly as it is server-side (constants.VIEW_ALL_ROLES).
@@ -861,6 +881,19 @@ window.TaskBoard = {
     render();
   }
 
+  /** Is this card owned by somebody in the page-wide scope?
+   *
+   *  An Atrium client card has no Sentinel assignee at all — it belongs to a client, not a person
+   *  — so a "whose work is this" scope excludes it rather than showing it under everyone. That is
+   *  the same reasoning that gave those cards their own predicate on the server
+   *  (task_perms.can_view_atrium): a row with nobody to test can't pass an ownership filter, and
+   *  letting it through by default is how the board once showed an intern seven other people's
+   *  cards (AGENTS.md §5). */
+  function inPeopleScope(t) {
+    if (!scope.scoped) return true;
+    return t.assigned_to_id != null && scope.set.has(t.assigned_to_id);
+  }
+
   // The text search is applied client-side so typing never re-hits the server.
   //
   // The text search + the attention pills, split in two so the pills can be COUNTED over the set
@@ -877,6 +910,10 @@ window.TaskBoard = {
   // business rule rather than the viewer's timezone, and a FINISHED task is never overdue — its due
   // date stopped mattering when it shipped.
   function inScope(t) {
+    // The Overview's page-wide people scope is applied FIRST and separately: it answers "WHOSE
+    // work", the search and the selects answer "WHICH work". Two different questions, so the
+    // page-level scope is layered on top of this board's own filters rather than replacing them.
+    if (!inPeopleScope(t)) return false;
     if (!search) return true;
     // Searching a person's name finds the cards they SUPPORT too, not just the ones they lead —
     // otherwise typing a colleague's name silently under-reports what they are on, which is the same
@@ -893,11 +930,15 @@ window.TaskBoard = {
 
   // The pills, their counts, and the "N of M" beside them. Counted over `inScope` — the cards the
   // selects and the search left on the board — so pressing one pill never moves another's number.
-  function renderAttention(scope, shown) {
+  //
+  // The parameter is `pool`, NOT `scope`: `scope` is the module-level PEOPLE scope that inScope,
+  // laneOrder and renderMonitor all read, and shadowing it with an array here is one edit away from
+  // a filter silently counting the wrong thing.
+  function renderAttention(pool, shown) {
     const bar = S.qs("#tb-att");
     if (bar) {
       bar.innerHTML = ATT.map((a) => {
-        const n = scope.filter(a.test).length;
+        const n = pool.filter(a.test).length;
         // "to approve" is a job; "in review" is a status. Only a seat that can actually decide a
         // review gets the verb — offering the job to somebody who cannot do it is the same lie as
         // a button that can only answer 403.
@@ -918,15 +959,33 @@ window.TaskBoard = {
     if (count) count.textContent = filtering() ? `${shown} of ${allTasks.length}` : "";
   }
 
+  /** Lane / row order. With a page scope active the board follows the Team-progress table's
+   *  ordering (fastest first, or whatever it's sorted by) so both halves of the Overview read
+   *  top-to-bottom the same way; otherwise it's alphabetical, as before. */
+  function laneOrder(a, b) {
+    if (scope.order.length) {
+      const rank = (k) => { const i = scope.order.indexOf(Number(k)); return i < 0 ? Infinity : i; };
+      const d = rank(a) - rank(b);
+      if (d) return d;
+    }
+    return (peopleById[a]?.name || "").localeCompare(peopleById[b]?.name || "");
+  }
+
   function render() {
-    S.qs("#tb-lead").textContent = LEADS[mode];
+    S.qs("#tb-lead").textContent = LEADS[mode]
+      + (scope.scoped
+        ? ` · scoped to ${scope.ids.length} ${scope.ids.length === 1 ? "person" : "people"} from Team progress`
+        : "");
     S.qsa("#view-seg button").forEach((b) => b.classList.toggle("on", b.dataset.view === mode));
     S.qs("#f-search").closest(".tb-bar").style.display = mode === "monitor" ? "none" : "";
     const board = S.qs("#board");
     board.className = mode === "board" ? "board" : "";
-    const scope = allTasks.filter(inScope);
-    const tasks = scope.filter((t) => ATT.every((a) => !att[a.key] || a.test(t)));
-    renderAttention(scope, tasks.length);
+    // `pool`, not `scope`: the module-level `scope` is the page-wide PEOPLE scope, and this
+    // function reads it three lines up for the lead text. A `const scope` here would put that
+    // read in the temporal dead zone and throw before the board ever painted.
+    const pool = allTasks.filter(inScope);
+    const tasks = pool.filter((t) => ATT.every((a) => !att[a.key] || a.test(t)));
+    renderAttention(pool, tasks.length);
     if (mode === "monitor") return renderMonitor(board);
     if (mode === "employee") return renderByEmployee(board, tasks);
     return renderBoard(board, tasks);
@@ -999,9 +1058,8 @@ window.TaskBoard = {
       if (t.assigned_to_id != null) push(t.assigned_to_id, t);
       support.forEach((uid) => { if (uid !== t.assigned_to_id) push(uid, t); });
     });
-    // Order: named people (alpha) first, Unassigned last.
-    const keys = [...byUser.keys()].filter((k) => k !== "none")
-      .sort((a, b) => (peopleById[a]?.name || "").localeCompare(peopleById[b]?.name || ""));
+    // Order: named people first (by the page scope's ranking, else alpha), Unassigned last.
+    const keys = [...byUser.keys()].filter((k) => k !== "none").sort(laneOrder);
     if (byUser.has("none")) keys.push("none");
 
     if (!keys.length) { board.innerHTML = `<div class="empty">No tasks match.</div>`; return; }
@@ -1045,7 +1103,15 @@ window.TaskBoard = {
     let rows;
     try { rows = await S.api("/api/tasks/summary?days=" + MONITOR_WINDOW_DAYS); }
     catch (err) { board.innerHTML = `<div class="empty">${S.esc(err.detail || "Couldn't load the team summary.")}</div>`; return; }
-    if (!rows.length) { board.innerHTML = `<div class="empty">No teammates to show.</div>`; return; }
+    // Narrowed by the page-wide scope, but NOT re-ordered by it: Monitor exists to rank by
+    // workload (heaviest and most overdue first), which is a different question from growth speed.
+    if (scope.scoped) rows = rows.filter((r) => scope.set.has(r.user.id));
+    if (!rows.length) {
+      board.innerHTML = `<div class="empty">${scope.scoped
+        ? "No teammates in the current Team-progress filter."
+        : "No teammates to show."}</div>`;
+      return;
+    }
     // 🔴 Derived from the live vocabulary and coloured by STAGE, never by the status LABEL. This
     // was a hardcoded four-name list, which had two failure modes that look identical to the
     // reader — a silently missing segment. (1) Renaming a column in Manage (WP 1.2 renamed Blocked
@@ -2693,5 +2759,15 @@ window.TaskBoard = {
     });
     window.addEventListener("beforeunload", () => es.close());
   }
+
+  return {
+    /** Apply the Overview's page-wide people scope. A pure re-render: the cards are already in
+     *  hand and the server has already decided which of them this viewer may see, so narrowing
+     *  is local and instant — no refetch, no flicker, no second permission decision. */
+    setScope(next) {
+      scope = normaliseScope(next);
+      render();
+    },
+  };
   },
 };

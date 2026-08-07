@@ -13,7 +13,9 @@ kiosk. Operating rules (CSP, cache bumping, `api()`-only fetches) live in
 | `static/js/app.js` | The shell every page loads: `NAV` array `:78` (roles/`min`/`hideRoles` gate visibility), `api()` (CSRF echo + FastAPI error flattening), `toast`, `skeleton`, `modal`, `esc`/`qs`/`qsa`, `ICON`, `avatar`, command palette (`initCommandPalette`), Coach FAB, `setTheme`/`engineUrl`/`themeEmbeds` (hands our light/dark to every embedded Mastery Engine) |
 | `static/js/taskboard.js` | Mountable Kanban (`TaskBoard.mount`). Optimistic DnD (native HTML5 — deliberate, see AGENTS.md §9), SSE reload, quick-add, Atrium-card editing, and the lifecycle controls: Park/Resume, Submit/Approve/Request changes, Past work. **"My work" is a client-side toggle over the card's `mine` flag, NOT the `?assignee_id=` filter** — see the gotcha below. **Support** (many people per card, since 2026-08-06): `supportOptions` builds the picker and mirrors the server's delegation rule (a non-delegator's list contains only THEM; a colleague already on the card renders `selected disabled` so the list round-trips instead of 403ing), `supportStack` draws the overlapped avatars from **`support`, now for BOTH kinds of card** — the server resolves a client card's Atrium roster emails to Sentinel users too (2026-08-06), so a supporter with a photo shows it instead of grey initials beside a lead who had one; `atrium_support_names` remains the fallback for a payload built without a resolver. **The card and the record were redesigned 2026-08-06** (`flagOf` + `card()` + `openDetail`) — see "The quiet card" below |
 | `static/js/tasks.js` | **The Task Board page** (`/tasks`) — its own page again since 2026-08-03 (decision D7); a thin shell that mounts `taskboard.js` full-width. It was embedded in the dashboard from 2026-07-26 until then, so `/dashboard?open=<id>` forwards here forever (the notifications minted in that window are permanent rows) |
-| `static/js/dashboard.js` | **The Overview** (`/dashboard`, labelled "Overview" since 2026-08-03): greeting + the day strip (attendance/gym as two buttons), then `GrowthPanel`'s rings, the **"my work"** strip (`renderMyWork` — three `.mw-tile` doors into `/tasks` + the "Up next" shortlist, **soonest deadline first**, undated last; fails silently; "mine" = the card's `mine` flag, see the gotcha below), `GrowthPanel`'s ledger, and — admins only, last — the org KPIs/chart/late list/handovers |
+| `static/js/dashboard.js` | **The Overview** (`/dashboard`, labelled "Overview" since 2026-08-03): greeting + the day strip (attendance/gym as two buttons), then `GrowthPanel`'s rings, the **"my work"** strip (`renderMyWork` — three `.mw-tile` doors into `/tasks` + the "Up next" shortlist, **soonest deadline first**, undated last; fails silently; "mine" = the card's `mine` flag, see the gotcha below), `GrowthPanel`'s ledger, and — admins only, last — `TeamGrowth` + the org KPIs/chart/late list/handovers. **Owns the page-wide people scope** (`applyScope`): TeamGrowth sets it, this re-scopes the KPIs, chart and lists from data already in hand. The board is no longer one of its consumers (it left for `/tasks` with D7), and "my work" is deliberately never scoped — it answers "what is on ME" |
+| `static/js/teamgrowth.js` | **`window.TeamGrowth`** (admin only) — everyone's four dimensions in one table from `/api/development/team`, ranked by MEASURED speed (engine points/week), **and the control that scopes the whole Overview**. Selection/sort/segment/window live in the URL (`?people=&sort=&seg=&win=`) |
+| `static/js/growthmath.js` | The dimension list + all pace/speed arithmetic (`expected`, `paceChip`, `paceNeeded`, `speedBand`). Shared by `growth.js` and `teamgrowth.js` so a worker's own ring and their row in the admin table can't drift. **Must load before both** |
 | `static/js/growth-page.js` | `/growth` = a manager's read-only view of ONE person (`?user=<id>`); without a `?user` it redirects to the Overview |
 | `static/js/attendance.js` · `approvals.js` | Time page · combined attendance+leave approvals inbox (team_lead+) |
 | `static/js/gym.js` | Calendar, no-lock day editor, saved routines (one-tap workout templates), history |
@@ -29,7 +31,7 @@ kiosk. Operating rules (CSP, cache bumping, `api()`-only fetches) live in
 | `static/css/styles.css` | The whole design system (token-driven, dark mode via overrides) |
 | `static/vendor/html5-qrcode.min.js` | The only vendored lib — CSP blocks CDNs |
 | `static/who-we-are.html` | North Star manifesto content (served statically, iframed) |
-| `sw.js` | Service worker: **`CACHE` key line 6** (currently `sentinel-v83`), `CORE` precache list, network-first assets; navigations NOT intercepted except **`/kiosk`** (`:46-53`). **Not registered on localhost** (except `/kiosk`) since 2026-08-06 — live reload needs it out of the way |
+| `sw.js` | Service worker: **`CACHE` key line 6** (currently `sentinel-v89`), `CORE` precache list, network-first assets; navigations NOT intercepted except **`/kiosk`** (`:46-53`). **Not registered on localhost** (except `/kiosk`) since 2026-08-06 — live reload needs it out of the way |
 | `manifest.json` · icons/favicons | PWA install metadata |
 | `modern_prototype.html` · `sidebar_prototype.html` | Design prototypes — not served, don't ship code in them |
 
@@ -39,6 +41,7 @@ kiosk. Operating rules (CSP, cache bumping, `api()`-only fetches) live in
 |---|---|---|
 | `taskboard.js` | `/api/tasks*` | `task_card` / `task_detail` (+ Atrium cards via `as_board_card` — string ids `atrium:<client>:<id>`) |
 | `dashboard.js` | `/api/dashboard`, `/api/insights`, `/api/attendance/self-event` | `dashboard` payload (`me`, `kpis`, `late_today_list`, `handovers`) |
+| `teamgrowth.js` | `/api/development/team` | `services/team_growth.py` rollup (`rows[].dimensions`, `overall`, `velocity`, `engine`) — **not a serializer**: it joins the Mastery Engine's batched per-person rollup to our own attendance/gym/PR rows |
 | `attendance.js`, `approvals.js` | `/api/attendance/*` | `summary_dict`, `attendance_request_dict` |
 | `gym.js` | `/api/gym/*` | `gym_log_dict`, `gym_routine_dict`, `body_metric_dict`, `personal_record_dict` |
 | `leave.js`, `approvals.js` | `/api/leave/*` | `leave_type_dict`, `leave_balance_dict`, `leave_request_dict` |
@@ -266,14 +269,23 @@ inside any comment that lives in a template literal**, never with a backtick.
   `window.GrowthPanel` only, and `/growth`'s controller is the separate `growth-page.js`.
 - **A component that queries `S.qsa` document-wide must not collide with its host's markup.**
   `GrowthPanel` keys its collapsibles off `details[data-ui]`; the task board it now shares a page
-  with uses `data-uid`. Check before adding an attribute selector.
+  with uses `data-uid`. Check before adding an attribute selector. (`TeamGrowth` scopes every
+  `S.qs`/`S.qsa` to its own `root` for the same reason — its rows carry `data-uid` too.)
 - **Never build a list of task statuses from LABEL literals** — statuses are renameable in Manage,
   and a rename ships in the deploy now (`task_config.RENAMED_STATUSES`). The Monitor's workload bar
   did exactly this (`["To Do","In Progress","Revision Needed","Blocked"]`) and the 2026-08-04
   Blocked → Parked rename took it from covering **18 of 18** open cards to **8**, with no error and
   no empty state — the parked work just stopped being drawn. Any status somebody *added* had never
   been counted either. Derive from `/api/vocab` (`STATUSES`) and switch on **`STAGE_OF[status]`**,
-  never the name; the same rule is why `isDone` asks the stage rather than comparing to "Completed". (AGENTS.md §5 has the full two-layer
+  never the name; the same rule is why `isDone` asks the stage rather than comparing to "Completed".
+- 🔴 **"—" in the growth tables means UNKNOWN, and must never be rendered or sorted as a zero.**
+  A person the Mastery Engine couldn't answer for shows a dash, sorts LAST in both directions, and
+  is excluded from the named segments. Rendering an outage as a team of 0%s reads as "nobody is
+  doing anything" — see AGENTS.md §5 on fail-soft bridges.
+- **Re-rendering a chart into the same host is fine, but `charts.js` keeps one registry seat per
+  host** (`mountChart`). The Overview redraws the clock-in trend on every scope change; without the
+  dedupe, a later theme flip would replay every stale scope into that element first.
+- Forgetting the `CACHE` bump ships stale assets to everyone (AGENTS.md §5 has the full two-layer
   cache story; the server's `Cache-Control: no-cache` half is pinned by backend tests).
 - No React, no bundler, no TypeScript — keep matching what's here.
 

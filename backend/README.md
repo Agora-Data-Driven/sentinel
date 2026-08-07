@@ -35,6 +35,8 @@ unit map + cookbook.
 | `app/services/mentor_search.py` | Per-user BM25-ish retrieval over `mentor_transcripts` (`resolve_mentor`, `DEFAULT_LIMIT`; no table of its own — deliberate) |
 | `app/services/development.py` | Holistic hub incl. `holistic_digest` (feeds the Coach) |
 | `app/services/work_digest.py` | **The task board, digested for the AI coach** (`work-digest` / `work-detail`). `work_digest` = the board as ONE viewer may see it (every card through `task_perms.can_view`; rollup on `/api/tasks/summary`'s cohort rule) · `work_detail` = full bodies, re-checking every id. Their own index is complete (open **+ finished history**), the wider board is capped with `truncated` declared, `service_charge` never crosses |
+| `app/services/engine_bridge.py` | HMAC signer for every Sentinel → Mastery Engine call (purposes `enrollment-progress`, `team-progress`). Returns `(status, json, error)` — the error is carried, never swallowed into an empty body |
+| `app/services/team_growth.py` | The admin Team-progress rollup: one BATCHED engine call for the whole roster joined to our attendance/gym/target-PR rows, plus **measured velocity** (points of mastery per week, from the engine's `progressSumThen`). 120 s TTL cache. 🔴 An unreachable engine yields `None`, never `0.0` |
 | `app/services/` (rest) | `gym.py`, `leave.py`, `payroll.py`, `notifications.py`, `settings.py`, `audit.py`, `daily.py` — one domain each. **`daily.run` also mirrors Atrium's clients** (`mirror_clients`, additive-only): boot is no longer the mirror's only automatic trigger now that `--min-instances 1` stops the service restarting — AGENTS.md §2 |
 | `app/utils/` | `time.py` (**`utcnow()` — the only clock**), `qr.py`, `csv_export.py`, `passwords.py` |
 | `alembic/versions/` | 22 revisions; head `e8b3f5c7a2d9_task_workflow_fields` |
@@ -52,6 +54,7 @@ unit map + cookbook.
 | Gym | `routers/gym.py` | `gym_log_dict`, `gym_routine_dict`, `body_metric_dict`, `personal_record_dict` | `gym.js` |
 | Leave | `routers/leave.py` | `leave_type_dict`, `leave_balance_dict`, `leave_request_dict` | `leave.js`, `approvals.js` |
 | Development | `routers/development.py` | `development_profile_dict`, `goal_dict`, `physical_goal_dict`, `development_area_dict`, `growth_item_dict`, `skill_dict`, `reading_item_dict`, `mentor_transcript_dict` | `growth.js`, `reading.js` |
+| Team growth | `routers/development.py` → `GET /api/development/team` (admin+) | `services/team_growth.py` (assembled, not serialized) | `teamgrowth.js` |
 
 ## Cookbook
 

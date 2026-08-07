@@ -17,8 +17,13 @@
   <script src="/static/js/charts.js"></script>
   <!-- taskboard.js moved to pages/tasks.html with the board itself (2026-08-03, D7). What is left
        here is the "my work" strip, which reads /api/tasks directly and needs no board component. -->
-  <!-- growth.js only defines window.GrowthPanel; dashboard.js owns window.pageInit. -->
+  <!-- growthmath.js first: growth.js and teamgrowth.js both read window.GrowthMath at mount. -->
+  <script src="/static/js/growthmath.js"></script>
+  <!-- growth.js defines window.GrowthPanel and teamgrowth.js window.TeamGrowth; only
+       dashboard.js owns window.pageInit (two files assigning it is a silent last-one-wins bug). -->
+
   <script src="/static/js/growth.js"></script>
+  <script src="/static/js/teamgrowth.js"></script>
   <script src="/static/js/dashboard.js"></script>
 </body>
 </html>

@@ -6,7 +6,7 @@ internal HMAC endpoint (see routers/internal.py).
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -64,7 +64,7 @@ from ..serializers import (
     reading_item_dict,
     skill_dict,
 )
-from ..services import atrium_watcher, development as dev_svc
+from ..services import atrium_watcher, development as dev_svc, team_growth as team_growth_svc
 from ..utils.time import today_ph, utcnow
 
 router = APIRouter(prefix="/api/development", tags=["development"])
@@ -101,6 +101,26 @@ def user_development(user_id: int, viewer: User = Depends(get_current_user), db:
     if not dev_svc.can_view(viewer, target):
         raise HTTPException(status_code=403, detail="Not allowed to view this profile")
     return dev_svc.full_profile(db, target)
+
+
+@router.get("/team")
+def team_growth(
+    days: int = Query(team_growth_svc.DEFAULT_WINDOW_DAYS, ge=1, le=180,
+                      description="Velocity measurement window, in days."),
+    refresh: bool = Query(False, description="Bypass the rollup cache and re-read the engine."),
+    viewer: User = Depends(require_min_role(ROLE_ADMIN)),
+    db: Session = Depends(get_db),
+):
+    """Everyone's growth in one payload, for the Overview's admin Team-progress panel.
+
+    Ranked on measured VELOCITY (points of engine mastery per week), not on the ahead/behind pace
+    chip — see `services/team_growth.py` for why those are different questions.
+
+    Admin+ at the dependency layer, and scoped again inside `visible_users` (a team lead reaching
+    this in future sees only their team). The panel is a management surface: it shows one person's
+    numbers to another, which no worker-facing route here does.
+    """
+    return team_growth_svc.team_rows(db, viewer, days=days, refresh=refresh)
 
 
 # --- Body metrics -----------------------------------------------------------

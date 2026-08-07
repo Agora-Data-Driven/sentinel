@@ -1,14 +1,6 @@
 """Reference data for the frontend: teams, clients, and the enum vocabularies used in dropdowns."""
 from __future__ import annotations
 
-import hashlib
-import hmac
-import json
-import time
-import urllib.error
-import urllib.parse
-import urllib.request
-
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -24,6 +16,7 @@ from ..database import get_db
 from ..models import Client, Team, User
 from ..security import get_current_user, require_roles
 from ..serializers import client_dict, team_dict
+from ..services import engine_bridge
 
 router = APIRouter(prefix="/api", tags=["meta"])
 
@@ -52,27 +45,20 @@ def academy_config(user: User = Depends(get_current_user)):
 def academy_courses(user: User = Depends(get_current_user)):
     """The signed-in worker's enrolled courses + progress, for the native Academy dashboard.
 
-    Fetched server-to-server from the mastery engine's HMAC-gated internal endpoint (shared
+    Fetched server-to-server through `services/engine_bridge` (HMAC over the shared
     platform-sso-key both apps mount). No CORS, no browser credentials. Degrades to an empty
     list (the dashboard then shows an empty state) if the engine is unreachable or unconfigured.
     """
-    base = (settings.skill_mastery_url or "").rstrip("/")
-    secret = (settings.platform_sso_secret or "").strip()
+    base = engine_bridge.base_url()
     embed = (base + "/?embed=1") if base else ""
-    if not base or not secret:
+    if not engine_bridge.enabled():
         return {"courses": [], "program": "", "engineUrl": embed, "error": "not configured"}
-    ts = str(int(time.time()))
-    sig = hmac.new(secret.encode(), f"enrollment-progress:{ts}".encode(), hashlib.sha256).hexdigest()
-    qs = urllib.parse.urlencode({"email": user.email})
-    req = urllib.request.Request(
-        f"{base}/api/internal/enrollment-progress?{qs}",
-        headers={"x-academy-ts": ts, "x-academy-sig": sig},
+    status, data, err = engine_bridge.call(
+        "enrollment-progress", "/api/internal/enrollment-progress",
+        params={"email": user.email},
     )
-    try:
-        with urllib.request.urlopen(req, timeout=8) as r:
-            data = json.loads(r.read().decode())
-    except (urllib.error.URLError, ValueError, TimeoutError) as e:
-        return {"programs": [], "engineUrl": embed, "error": str(e)[:120]}
+    if status != 200:
+        return {"programs": [], "engineUrl": embed, "error": (err or f"engine {status}")[:120]}
     return {
         "programs": data.get("programs", []),
         "engineUrl": embed,

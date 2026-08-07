@@ -68,7 +68,11 @@
       host.appendChild(renderPlot());
       if (legendHtml) host.insertAdjacentHTML("beforeend", legendHtml);
     };
-    registry.push({ host, draw });
+    // ONE entry per host. The Overview re-renders the clock-in chart into the same element every
+    // time its people scope changes, and a growing registry would then redraw that host once per
+    // scope it has ever had on the next theme flip — all but the last of them with stale data.
+    const seat = registry.findIndex((r) => r.host === host);
+    if (seat >= 0) registry[seat] = { host, draw }; else registry.push({ host, draw });
     draw();
   }
   new MutationObserver(() => registry.forEach((r) => { if (document.body.contains(r.host)) r.draw(); }))
