@@ -131,6 +131,25 @@ class Settings(BaseSettings):
     # X-Cron-Key header. Cloud Scheduler sends it. Super Admins can also trigger it while logged in.
     cron_key: str = ""
 
+    # --- Personal context report (services/personal_report + report_doc) ----
+    # The Google Doc the daily personal report is published into, and whose report it is.
+    # 🔴 The document is REPLACED WHOLESALE on every run — point this only at a file dedicated to
+    # it, never one anyone edits by hand. It must be shared with this service's runtime service
+    # account as an Editor: the doc lives in a personal @gmail.com Drive, and domain-wide
+    # delegation cannot reach a consumer account, so sharing is the only way in.
+    # Both blank (the default) = the feature is off and the daily pass skips it entirely.
+    report_doc_id: str = ""
+    report_user_email: str = ""
+    # 🔴 Required on Cloud Run. The metadata server hands the runtime service account a
+    # `cloud-platform` token, which the Drive API REFUSES — it wants the Drive scope specifically,
+    # and a metadata token cannot be widened to it. Naming the runtime account here makes
+    # services/report_doc.py exchange that token for a Drive-scoped one via the IAM Credentials API
+    # (the account impersonates itself, so it needs `roles/iam.serviceAccountTokenCreator` on
+    # itself). Leave blank locally, where ADC is a user credential and impersonation is not the
+    # right shape. Symptom if it is wrongly blank in prod: a 403/404 that looks exactly like the
+    # document never having been shared.
+    report_impersonate_sa: str = ""
+
     # --- Kiosk -------------------------------------------------------------
     # The tablet kiosk is a trusted device: attendance punches are identified by the scanned QR
     # token, not by a logged-in user. In prod, lock these routes to the LAN / a device key.
