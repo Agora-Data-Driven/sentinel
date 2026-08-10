@@ -25,7 +25,7 @@ leave, payroll, reporting, and a "holistic development" hub (learning + reading 
 | **Runs on** | Cloud Run service `sentinel`, project `agora-data-driven`, region **`asia-southeast1`** |
 | **Live URL** | `https://sentinel-585951669065.asia-southeast1.run.app` |
 | **Timezone** | Stored **UTC**, displayed/ruled in **Asia/Manila (UTC+8)** |
-| **Embeds** | The Mastery Engine, via iframe — Professional (formerly Academy) tab, Philosophical + Spiritual tabs (each pinned to one engine program via `?program=`), and the global Coach FAB. Every src is built through `S.engineUrl()`, which appends `&theme=` so the engine wears our light/dark; `setTheme` messages the running frames (§5) |
+| **Embeds** | The Mastery Engine, via iframe — Professional (formerly Academy) tab, Philosophical + Spiritual tabs (each pinned to one engine program via `?program=`), and the global Coach FAB. Every src is built through `S.engineUrl()`, which appends `&theme=` so the engine wears our light/dark; `setTheme` messages the running frames (§5). 🔴 **The Coach FAB is that same engine's study assistant in a frame — one assistant, and one door per page (§5)** |
 
 > ⚠️ **Region is `asia-southeast1`, not `us-central1`.** Every other Agora service is
 > `us-central1`. Getting this wrong makes `gcloud` commands silently target nothing.
@@ -1325,6 +1325,30 @@ KPI tiles, the clock-in chart and the late/handover lists. State is URL-backed
   purpose `team-progress`), because the engine reads its shared ~540-doc catalogue once and
   overlays each person onto it. Cached 120 s in-process; `?refresh=1` bypasses. Never loop
   `enrollment-progress` per person to rebuild this — that is ~540 doc reads each.
+
+### 🔴 The Coach FAB is not a second assistant — ONE DOOR PER PAGE
+
+Added 2026-08-10. The FAB frames the Mastery Engine at `?embed=assistant`, which is that app's own
+**study assistant** with its chrome hidden — same widget, same `/api/assistant/chat`, same thread
+store, same persona. "Coach mode" is a toggle on that same panel. There is nothing here to keep
+separate from the engine's assistant, because it *is* the engine's assistant.
+
+Which meant that on `/academy`, `/philosophical` and `/spiritual` — pages that already iframe the
+engine — **two buttons rendered in the same corner**: ours at `right:24px` and the engine's own
+`#assistantDock` at `right:20px` inside the frame, both opening the same assistant. So
+`mountAssistant` suppresses the FAB on `ENGINE_PAGES`. Three rules:
+
+- **The engine's in-frame dock is the one that wins**, and it is a strict superset: it proposes the
+  same profile edits (gated on being in a host frame — **not** on the `actions=1` the FAB's src used
+  to carry, whose reader in the engine was dead code and is now gone), *and* it can see the
+  learner's screen. Our FAB frames a blank engine and never can.
+- 🔴 **Suppress the BUTTON, never skip `mountAssistant()`.** The `agora-coach-action` listener at
+  the end of that function is what executes an Approve, and on those pages the in-frame panel is now
+  the only thing sending one. Early-returning would break profile edits exactly where they are used.
+- **It has its own class (`.on-engine-page`), not `.hidden`.** Modals toggle `.hidden` to keep the
+  FAB off their footer, and restoring it must not resurrect a button the page suppressed for good.
+
+Adding a page that embeds the engine? Add it to `ENGINE_PAGES`.
 
 ### 🟡 An embedded Mastery Engine stays light inside a dark Sentinel
 

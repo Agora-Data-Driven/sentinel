@@ -20,19 +20,29 @@ from ..services import engine_bridge
 
 router = APIRouter(prefix="/api", tags=["meta"])
 
+# Every full-engine embed we frame. `embed=1` asks the engine to drop its own header/nav since
+# Sentinel supplies the shell.
+#
+# 🔴 Deliberately NOT `&actions=1`. That param gates nothing in the engine (its reader is dead
+# code); what actually decides whether the assistant may propose profile edits is being inside a
+# host frame at all, which every one of these embeds is. So the panel in this tab already
+# proposes edits, and our `agora-coach-action` listener — mounted on every page, origin-checked,
+# op-whitelisted, Approve-gated — already executes them. Adding the param would only re-suggest a
+# gate that isn't there.
+ENGINE_EMBED_QS = "/?embed=1"
+
 
 @router.get("/academy/config")
 def academy_config(user: User = Depends(get_current_user)):
     """Where the Academy tab points its iframe (the mastery engine).
 
     Signed-in only: the URL is not a secret, but there's no reason to publish our internal
-    topology. `embed=1` asks the engine to drop its own header/nav since Sentinel supplies the
-    shell. The engine authenticates the viewer itself from the shared portal cookie, which reaches
-    it because both hosts sit under agoradatadriven.com.
+    topology. The engine authenticates the viewer itself from the shared portal cookie, which
+    reaches it because both hosts sit under agoradatadriven.com.
     """
     base = (settings.skill_mastery_url or "").rstrip("/")
     return {
-        "url": (base + "/?embed=1") if base else "",
+        "url": (base + ENGINE_EMBED_QS) if base else "",
         # The engine's assistant-only view — Sentinel iframes this as the global floating coach.
         "assistant_url": (base + "/?embed=assistant") if base else "",
         "configured": bool(base),
@@ -50,7 +60,7 @@ def academy_courses(user: User = Depends(get_current_user)):
     list (the dashboard then shows an empty state) if the engine is unreachable or unconfigured.
     """
     base = engine_bridge.base_url()
-    embed = (base + "/?embed=1") if base else ""
+    embed = (base + ENGINE_EMBED_QS) if base else ""
     if not engine_bridge.enabled():
         return {"courses": [], "program": "", "engineUrl": embed, "error": "not configured"}
     status, data, err = engine_bridge.call(
