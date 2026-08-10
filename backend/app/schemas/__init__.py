@@ -143,6 +143,12 @@ class GymSessionEditIn(BaseModel):
     done: bool | None = None
 
 
+class GymCoachVisibilityIn(BaseModel):
+    """Whether the AI coach may read this person's gym LOG. Its own body, its own endpoint —
+    deliberately NOT a field on ResumeIn, which the coach's own action protocol can write."""
+    reads_logs: bool
+
+
 class GymPlanWeekIn(BaseModel):
     """Replace the recurring weekly split (+ optional per-weekday cardio notes).
     week: {Mon..Sun -> day-type|Rest}; cardio: {Mon..Sun -> free text, e.g. '5k run'}."""

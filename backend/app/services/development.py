@@ -127,6 +127,34 @@ def _profile(db: Session, user_id: int) -> DevelopmentProfile | None:
     ).scalar_one_or_none()
 
 
+def coach_reads_gym_logs(db: Session, user_id: int) -> bool:
+    """May the AI coach see this person's gym LOG (session counts / completions)?
+
+    Defaults True — the column is only False for someone who has turned it off on the Physical
+    tab. A person can train every day and log none of it, in which case the log measures their
+    logging habit and nothing else; every surface that reports training frequency to the coach
+    (`holistic_digest` here, and the personal-context report) asks this first.
+
+    🔴 What matters is not that the numbers disappear but that their ABSENCE IS DECLARED. Going
+    quiet would leave the coach to infer "no sessions" from "no data" — which is the exact wrong
+    conclusion this setting exists to prevent, and the same failure the growth-journal index and
+    the task-board digest are each written to avoid.
+    """
+    prof = _profile(db, user_id)
+    return True if prof is None else bool(prof.coach_reads_gym_logs)
+
+
+def set_coach_reads_gym_logs(db: Session, user_id: int, value: bool) -> bool:
+    """Flip the toggle, creating the 1:1 profile row if this person has never had one."""
+    prof = _profile(db, user_id)
+    if prof is None:
+        prof = DevelopmentProfile(user_id=user_id)
+        db.add(prof)
+    prof.coach_reads_gym_logs = bool(value)
+    db.commit()
+    return bool(prof.coach_reads_gym_logs)
+
+
 def _physical_goals(db: Session, user_id: int) -> list[PhysicalGoal]:
     return list(
         db.execute(
@@ -232,15 +260,21 @@ def holistic_digest(db: Session, user: User) -> dict:
     today = today_ph()
     weekly_split = gym_svc.get_week(db, user.id)
     weekly_cardio = gym_svc.get_cardio(db, user.id)
-    since = today - timedelta(days=14)
-    sessions_14d = db.execute(
-        select(func.count(GymLog.id)).where(GymLog.user_id == user.id, GymLog.date >= since)
-    ).scalar() or 0
-    completed_14d = db.execute(
-        select(func.count(GymLog.id)).where(
-            GymLog.user_id == user.id, GymLog.date >= since, GymLog.status == GYM_COMPLETED
-        )
-    ).scalar() or 0
+    # The PLAN always ships (it is what they intend to train, and the coach reasons about study
+    # load from it). The LOG is opt-out — see coach_reads_gym_logs. Don't even count when it is
+    # off: an unshared number is not a number to be careful with, it is one not to have.
+    logs_shared = coach_reads_gym_logs(db, user.id)
+    sessions_14d = completed_14d = None
+    if logs_shared:
+        since = today - timedelta(days=14)
+        sessions_14d = db.execute(
+            select(func.count(GymLog.id)).where(GymLog.user_id == user.id, GymLog.date >= since)
+        ).scalar() or 0
+        completed_14d = db.execute(
+            select(func.count(GymLog.id)).where(
+                GymLog.user_id == user.id, GymLog.date >= since, GymLog.status == GYM_COMPLETED
+            )
+        ).scalar() or 0
 
     reading_now = [r["title"] for r in reading if r["progress"]["status"] == "reading"][:8]
     reading_done = [r["title"] for r in reading if r["progress"]["status"] == "done"][:12]
@@ -328,6 +362,10 @@ def holistic_digest(db: Session, user: User) -> dict:
             # Saved workout templates by name only — enough for the coach to talk about the week
             # ("your Monday is Push A") without paying for every set and rep.
             "routines": gym_svc.routine_summary_lines(db, user.id),
+            # 🔴 DECLARED, not omitted. False means "they chose not to share the log", which the
+            # engine renders as an explicit instruction not to reason about training frequency.
+            # A bare missing key would read as zero sessions — the very inference this prevents.
+            "logs_shared": logs_shared,
             "sessions_last_14d": sessions_14d,
             "completed_last_14d": completed_14d,
         },

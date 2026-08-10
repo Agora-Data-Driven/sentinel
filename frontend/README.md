@@ -18,7 +18,7 @@ kiosk. Operating rules (CSP, cache bumping, `api()`-only fetches) live in
 | `static/js/growthmath.js` | The dimension list + all pace/speed arithmetic (`expected`, `paceChip`, `paceNeeded`, `speedBand`). Shared by `growth.js` and `teamgrowth.js` so a worker's own ring and their row in the admin table can't drift. **Must load before both** |
 | `static/js/growth-page.js` | `/growth` = a manager's read-only view of ONE person (`?user=<id>`); without a `?user` it redirects to the Overview |
 | `static/js/attendance.js` · `approvals.js` | Time page · combined attendance+leave approvals inbox (team_lead+) |
-| `static/js/gym.js` | Calendar, no-lock day editor, saved routines (one-tap workout templates), history |
+| `static/js/gym.js` | Calendar, no-lock day editor, saved routines (one-tap workout templates), history, **coach log-visibility toggle** (`renderCoachVis` — withholds the workout log from the AI coach; see AGENTS.md §5) |
 | `static/js/growth.js` | **`window.GrowthPanel`, a component — not a page controller.** `mount(S, root, {userId, ringsHost, mast})` renders the 4-dimension compass (each ring links into its engine tab) and the ledger (pace band, per-dimension details, Mentor Library import). `ringsHost` splits the two so the Overview can put the task board between them |
 | `static/js/reading.js` | Reading canon |
 | `static/js/academy.js` | Mastery Engine iframe (Professional tab) |

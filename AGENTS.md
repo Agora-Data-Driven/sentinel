@@ -147,7 +147,7 @@ deploy/            deploy.ps1, seed-job.ps1, DEPLOY.md
 |---|---|
 | `auth.py` | Login (dev/password/Google/SSO), session, `/api/auth/me` |
 | `attendance.py` | Kiosk scan, punches, offline sync, approvals |
-| `gym.py` | Workouts, exercise library, schedule/overrides, cardio, **saved routines** |
+| `gym.py` | Workouts, exercise library, schedule/overrides, cardio, **saved routines**, **coach log-visibility** (`/coach-visibility` — §5) |
 | `tasks.py` | Kanban board (page `/tasks`), priority (AM-only), Send to Atrium, the lifecycle actions (park/resume/archive/review), **editing Atrium's own cards** |
 | `people.py` | Directory, profiles, QR badges |
 | `leave.py` | Requests, approvals, balances |
@@ -1251,6 +1251,43 @@ prefer `add_growth`. The same cap-the-index bug is documented one section down f
 Covered by `tests/test_growth_notes.py`. 🔴 The column reaches **prod** via
 `main._ensure_columns` (deploys don't run alembic); `b6d2f8a4c7e9` is the local/migrated path and is
 existence-guarded because `create_all` usually wins the race.
+
+### 🔴 The gym LOG is opt-out for the coach — and withholding it must be SAID, not just done
+
+`development_profiles.coach_reads_gym_logs` (2026-08-10), toggled on the **Physical tab**.
+
+The bug it fixes: `holistic_digest` shipped `sessions_last_14d` / `completed_last_14d`, and the
+engine rendered them with `?? 0`. Someone who trains six days a week and **logs none of it** was
+therefore told by their own coach that they had been inconsistent. A low count there is a fact
+about logging, not about training, and nothing in the prompt said so.
+
+**The setting is the easy half. This is the half that matters:**
+
+> Turning it off must make the digest say **`gym.logs_shared: false`** — never simply drop the
+> keys. An absent count is read as zero; that is how the bug got worse, not better. The engine
+> branches on the flag and prints an explicit "draw no conclusion about their training frequency"
+> instruction. Same rule as the growth-journal index and the task-board digest one section up:
+> **name the gap.**
+
+Four things hold it together:
+
+- **The counts become `None`, never `0`.** A zero is a claim. `test_withheld_counts_are_None_and_
+  never_zero` pins it, because a `0` sailing through a template turns the absence back into one.
+- **Off hides the LOG, not the person.** The weekly split, cardio, routines, PRs and target lifts
+  still ship — the split is what drives the coach's training-load advice about *studying*, and
+  losing that would be a worse regression than the bug.
+- 🔴 **The coach cannot flip it.** It has its own endpoint (`GET`/`PUT /api/gym/coach-visibility`,
+  own-caller only, no `?user=`) and is deliberately outside `ResumeIn` and the `update_resume`
+  action op — a blindfold its wearer can remove is not a setting. Don't add it to that whitelist.
+- **Every surface that reports training frequency asks first.** Today that is `holistic_digest`
+  **and** `services/personal_report`. A setting honoured in one place and not the other is not a
+  setting; add the check with any third reader.
+
+🔴 The route sits **above** `/{log_id}` in `routers/gym.py` for the reason the routines block
+documents — registered later, `GET /{log_id}` swallows it and answers 422. Pinned by
+`test_the_route_is_not_swallowed_by_the_log_id_route`. Column reaches prod via
+`main._ensure_columns` (deploys don't run alembic); `d4a9f1c8e35b` is the local/migrated path and
+is existence-guarded. Covered by `tests/test_gym_coach_visibility.py`.
 
 ### 🟡 Gym routines: two constraints that shaped the design
 

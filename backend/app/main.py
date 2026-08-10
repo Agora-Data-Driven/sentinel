@@ -141,6 +141,11 @@ def _ensure_columns() -> None:
         # rejects an integer default on a boolean.
         # 🔴 Same rule as the columns above: this list is the path it takes to production.
         ("clients", "is_active", "BOOLEAN DEFAULT true"),
+        # Coach visibility over the gym LOG (2026-08-10). `DEFAULT true` so every existing person's
+        # coach behaves exactly as it did; only someone who flips the Physical tab's toggle changes.
+        # Same POSTGRES rule as the line above — `true`, never `1`.
+        # 🔴 Same rule as the columns around it: this list is the path it takes to production.
+        ("development_profiles", "coach_reads_gym_logs", "BOOLEAN DEFAULT true"),
         # The status key/label split (2026-08-03, decision D13). `name` is a LABEL and may be
         # renamed; `vocab_key` is the stable identity and `stage` is the Atrium stage a status
         # projects onto. Without these, `STAGE_BY_STATUS` was keyed by the display string and a
