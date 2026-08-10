@@ -456,12 +456,32 @@
   // authenticates the viewer, and the engine feeds it the worker's holistic profile server-side. We
   // create the iframe lazily on first open (so no full-viewport overlay ever swallows page clicks)
   // and keep it alive after, so the conversation persists while navigating within a session.
+  //
+  // 🔴 ONE DOOR PER PAGE. There is only one assistant in the estate: this FAB, the engine's own
+  // dock and "Coach mode" are a frame, a button and a toggle over the same widget and the same
+  // `/api/assistant/chat` thread store. On a page that already embeds the engine, BOTH buttons
+  // rendered — ours at right:24px, the engine's `#assistantDock` at right:20px inside the iframe,
+  // stacked in one corner, opening the same assistant with different powers. See ENGINE_PAGES.
+  const ENGINE_PAGES = ["/academy", "/philosophical", "/spiritual"];
+
   async function mountAssistant() {
     if (qs("#coach-fab")) return;                 // already mounted this page-load
     let cfg;
     try { cfg = await api("/api/academy/config"); } catch (e) { return; }
     const base = cfg && cfg.assistant_url;
     if (!base) return;                            // engine not configured — no coach
+
+    // On an engine page the in-frame dock wins, because it is a strict SUPERSET of this FAB: it
+    // proposes the same profile edits (gated on being in a host frame, which it is — the old
+    // `actions=1` param gated nothing and is gone from both sides), AND it is the only one of the
+    // two that can SEE the learner's screen — the current question, the flashcard, the open visual
+    // guide's active tab. This FAB frames a blank engine, so it never can.
+    // So we mount everything here EXCEPT the button. 🔴 Mount, never early-return: the
+    // `agora-coach-action` listener at the bottom of this function is what EXECUTES an Approve,
+    // and those pages' in-frame panel is now the only thing sending one.
+    const onEnginePage = ENGINE_PAGES.some(
+      (p) => location.pathname === p || location.pathname.startsWith(p + "/"),
+    );
 
     const style = document.createElement("style");
     style.textContent = `
@@ -472,6 +492,9 @@
       #coach-fab:hover{transform:translateY(-2px);box-shadow:0 14px 38px rgba(92,75,208,.55)}
       #coach-fab svg{width:22px;height:22px;stroke:#fff}
       #coach-fab.hidden{display:none}
+      /* Its OWN class, not .hidden: modals toggle .hidden to keep the FAB off their footer, and
+         restoring it must not resurrect the button on a page that suppressed it for good. */
+      #coach-fab.on-engine-page{display:none}
       #coach-panel{position:fixed;right:24px;bottom:24px;z-index:91;width:min(420px,calc(100vw - 32px));
         height:min(660px,calc(100vh - 96px));background:var(--card);border:1px solid var(--line);
         border-radius:var(--radius);box-shadow:var(--shadow-lg);display:none;flex-direction:column;overflow:hidden}
@@ -490,6 +513,7 @@
     fab.id = "coach-fab";
     fab.setAttribute("aria-label", "Open your coach");
     fab.innerHTML = `${ICON.sparkle}<span>Coach</span>`;
+    if (onEnginePage) fab.classList.add("on-engine-page");
     document.body.appendChild(fab);
 
     const panel = document.createElement("div");
@@ -508,7 +532,9 @@
         const f = document.createElement("iframe");
         f.id = "coach-frame";
         f.allow = "microphone; clipboard-write";
-        f.src = engineUrl(base, "&actions=1");     // {engine}/?embed=assistant&actions=1&theme=…
+        // {engine}/?embed=assistant&theme=… — no `&actions=1`: it was inert (see the engine's
+        // app.js boot block) and reads as a gate that isn't there.
+        f.src = engineUrl(base);
         qs("#coach-frame-wrap", panel).appendChild(f);
         framed = true;
       }
