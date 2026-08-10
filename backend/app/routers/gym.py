@@ -23,6 +23,7 @@ from ..models import ExerciseLibrary, GymExercise, GymLog, GymRoutine, User
 from ..schemas import (
     GymAdminEditIn,
     GymApplyRoutineIn,
+    GymCoachVisibilityIn,
     GymDayOpenIn,
     GymExerciseIn,
     GymPlanDayIn,
@@ -33,6 +34,7 @@ from ..schemas import (
 from ..security import get_current_user, require_min_role, require_roles
 from ..serializers import gym_log_dict, gym_routine_dict
 from ..services import audit
+from ..services import development as dev_svc
 from ..services import gym as gym_svc
 from ..services import settings as settings_svc
 from ..utils.time import today_ph, utcnow
@@ -228,6 +230,34 @@ def set_plan_day(payload: GymPlanDayIn, user: User = Depends(get_current_user), 
 def clear_plan_day(on: date, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Drop a date's override — it reverts to whatever the weekly split says."""
     gym_svc.clear_override(db, user.id, on)
+
+
+# --- Coach visibility over the LOG ------------------------------------------
+# 🔴 Like /routines below, these MUST stay above the `/{log_id}` routes at the bottom of this
+# module — a later `/coach-visibility` is swallowed by `GET /{log_id}` and answers 422.
+#
+# Always the caller's OWN setting: there is no `?user=`, and no manager override. Someone else's
+# view of how consistently you train is not theirs to switch on. And it is NOT in the coach's
+# action protocol (see the model) — the coach cannot lift its own blindfold.
+@router.get("/coach-visibility")
+def get_coach_visibility(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Does the AI coach currently read this person's workout log?"""
+    return {"reads_logs": dev_svc.coach_reads_gym_logs(db, user.id)}
+
+
+@router.put("/coach-visibility")
+def set_coach_visibility(
+    payload: GymCoachVisibilityIn,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Turn the coach's view of the workout log on or off. Off does not hide the WEEKLY PLAN,
+    the PRs or the target lifts — only the session log, which for someone who trains without
+    logging says nothing true about their training."""
+    value = dev_svc.set_coach_reads_gym_logs(db, user.id, payload.reads_logs)
+    audit.record(db, actor_id=user.id, table_name="development_profiles", record_id=user.id,
+                 action="coach_reads_gym_logs", new={"reads_logs": value})
+    return {"reads_logs": value}
 
 
 # --- Routines (saved workout templates) -------------------------------------

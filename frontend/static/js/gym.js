@@ -28,6 +28,7 @@ window.pageInit = async (S) => {
       <div class="lede">Plan your week, save your usual workouts as routines you can load in one tap, and edit sets & reps whenever — nothing gets locked. Your body fat and PRs live here too.</div>
     </div><div class="dev-mast-right"><div class="dev-mast-meta">${isMgr ? "TEAM VIEW" : "PUSH · PULL · LEGS"}</div></div></div>
     <div id="gym-body"></div>
+    <div id="gym-coachvis"></div>
     <div id="gym-goals"></div>
     <div class="tabs" id="tabs">${tabs.map((t, i) => `<button class="${i ? "" : "active"}" data-tab="${t}">${t}</button>`).join("")}</div>
     <div id="tabc"></div>
@@ -52,6 +53,46 @@ window.pageInit = async (S) => {
     switchTab(state.tab);
     renderGoals();
   };
+
+  // --- Coach visibility over the workout LOG ----------------------------------
+  // For someone who trains consistently but doesn't log every session, the log measures their
+  // logging habit — and the coach was reading a low session count as "you've been inconsistent".
+  // Off withholds ONLY the log: the weekly split, PRs and target lifts still reach the coach, and
+  // so does an explicit note that the log is withheld, so it can't infer anything from the gap
+  // either (backend: dev_svc.coach_reads_gym_logs → holistic_digest's `gym.logs_shared`).
+  async function renderCoachVis() {
+    const host = S.qs("#gym-coachvis");
+    if (!host || isMgr) return;                 // a manager view shows someone else's page
+    let on = true;
+    try { on = !!(await S.api("/api/gym/coach-visibility")).reads_logs; }
+    catch (e) { host.innerHTML = ""; return; }  // fail-soft: never cost anyone their gym page
+    host.innerHTML = `<div class="card" style="padding:14px 18px;margin-bottom:16px">
+      <label class="row between" style="align-items:center;gap:14px;cursor:pointer;margin:0">
+        <span style="min-width:0">
+          <strong style="font-size:14px">Let your coach read your workout log</strong>
+          <span class="muted" style="display:block;font-size:12.5px;margin-top:3px">
+            ${on
+              ? "Your coach can see how many sessions you logged in the last 14 days."
+              : "Your coach is told the log is private and that it must not read anything into it — it won't comment on how consistent you've been. Your weekly split, PRs and targets are still shared."}
+          </span>
+        </span>
+        <input type="checkbox" id="cv-toggle" ${on ? "checked" : ""} style="flex:none;width:18px;height:18px;cursor:pointer">
+      </label>
+    </div>`;
+    S.qs("#cv-toggle").onchange = async (e) => {
+      const want = e.target.checked;
+      e.target.disabled = true;
+      try {
+        await S.api("/api/gym/coach-visibility", { method: "PUT", body: { reads_logs: want } });
+        S.toast(want ? "Coach can read your workout log" : "Coach will no longer read your workout log", "ok");
+        renderCoachVis();
+      } catch (x) {
+        e.target.checked = !want;               // the server refused — don't leave the UI lying
+        e.target.disabled = false;
+        S.toast(x.detail || "Couldn't save that", "err");
+      }
+    };
+  }
 
   // --- Physical goals (target PRs) --------------------------------------------
   // The same targets the Growth Overview's Physical ring averages: a number chased
@@ -1086,6 +1127,7 @@ window.pageInit = async (S) => {
 
   // --- boot -------------------------------------------------------------------
   renderBodyStats();
+  renderCoachVis();
   state.plan = await S.api("/api/gym/plan");
   await loadRoutines();   // every tab reads state.routines, so this lands before the first render
   setMonthFromIso(state.plan.today.date);

@@ -75,7 +75,7 @@ class PersonalRecord(Base):
 
 
 class DevelopmentProfile(Base):
-    """1:1 with a user — the career narrative (headline + resume)."""
+    """1:1 with a user — the career narrative (headline + resume) + coach visibility settings."""
 
     __tablename__ = "development_profiles"
 
@@ -84,6 +84,13 @@ class DevelopmentProfile(Base):
     headline: Mapped[str | None] = mapped_column(String(200), nullable=True)
     resume_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     resume_file_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # Whether the AI coach may read this person's GYM LOG (session counts / completions).
+    # Off = they train but don't log every session, so the log is not evidence of anything and
+    # the coach must be told so rather than left to infer. See services/development.holistic_digest
+    # and the Physical tab's toggle. Default True — everyone's coach behaves as it always has.
+    # 🔴 Deliberately NOT reachable from the coach's own action protocol: a blindfold the wearer
+    # can remove is not a setting. It has its own endpoint, outside the `update_resume` whitelist.
+    coach_reads_gym_logs: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 

@@ -605,16 +605,26 @@ def _physical_section(db: Session, user: User, profile: dict) -> str:
             extra = f" + {cardio[day]}" if cardio.get(day) else ""
             out.append(f"- **{day}:** {kind}{extra}")
 
-    today = today_ph()
-    since = today - timedelta(days=14)
-    sessions = db.execute(select(func.count(GymLog.id)).where(
-        GymLog.user_id == user.id, GymLog.date >= since)).scalar() or 0
-    completed = db.execute(select(func.count(GymLog.id)).where(
-        GymLog.user_id == user.id, GymLog.date >= since,
-        GymLog.status == GYM_COMPLETED)).scalar() or 0
+    # The gym LOG is opt-out on the Physical tab (dev_svc.coach_reads_gym_logs). This report is
+    # read the same way the coach reads the digest, so it honours the same setting — and, exactly
+    # as there, it SAYS the log is withheld rather than leaving a gap that reads as "did nothing".
     out.append(_heading("Training, last 14 days", 3))
-    out.append(_line("Sessions logged", sessions))
-    out.append(_line("Completed", completed))
+    if not dev_svc.coach_reads_gym_logs(db, user.id):
+        out.append("_Not shared._ This person has chosen not to expose their workout log. They do "
+                   "train; they simply do not log every session, so the log would measure their "
+                   "logging habit and not their training. **Draw no conclusion about training "
+                   "frequency, consistency or missed sessions from its absence** — the weekly "
+                   "split above is what they intend to train.")
+    else:
+        today = today_ph()
+        since = today - timedelta(days=14)
+        sessions = db.execute(select(func.count(GymLog.id)).where(
+            GymLog.user_id == user.id, GymLog.date >= since)).scalar() or 0
+        completed = db.execute(select(func.count(GymLog.id)).where(
+            GymLog.user_id == user.id, GymLog.date >= since,
+            GymLog.status == GYM_COMPLETED)).scalar() or 0
+        out.append(_line("Sessions logged", sessions))
+        out.append(_line("Completed", completed))
     out.append("\n> Training load bears on studying: after hard physical days, heavy new material "
                "lands worse than review does. Worth weighing when advising what to study.")
     return "\n".join(out) + "\n"
