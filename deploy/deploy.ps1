@@ -36,6 +36,21 @@ param(
   # shows up here. Omit it and the bridge falls back to PORTAL_LOGIN_URL's origin; if neither
   # resolves the board simply shows Sentinel's own rows.
   [string]$AtriumApiUrl     = "https://portal.agoradatadriven.com",
+  # 🔴 CRON_KEY had existed as a SECRET since 2026-07-04 and was never passed to the service, so
+  # `cron._authorize`'s header branch could never match and NOTHING could drive /api/cron/* — the
+  # whole daily pass was reachable only by a Super Admin clicking a button. A Cloud Scheduler job
+  # without this gets a silent 403 forever, so the two must ship together.
+  [string]$CronKeySecretName = "sentinel-cron-key",
+  # The daily personal context report (services/personal_report -> report_doc). Blank doc id or
+  # email = the feature stays off. 🔴 The Doc is REPLACED WHOLESALE on every run.
+  [string]$ReportDocId      = "1XCNoSOeD9iFWBYvKrkUsAJjjf032newyeRVPxlDJNBU",
+  [string]$ReportUserEmail  = "ianfernandezctm@gmail.com",
+  # 🔴 Required for the Drive write. The metadata server issues this service a `cloud-platform`
+  # token and the Drive API refuses it, so report_doc exchanges it for a Drive-scoped one by having
+  # the account impersonate ITSELF (needs roles/iam.serviceAccountTokenCreator on itself, granted
+  # 2026-08-09). Leaving this blank produces a 403/404 that looks exactly like the document never
+  # having been shared.
+  [string]$ReportImpersonateSa = "sentinel-run@agora-data-driven.iam.gserviceaccount.com",
   # 🔴 ONE WARM INSTANCE. Sentinel had no --min-instances, so it scaled to zero and the first person
   # to open it after any quiet spell paid a full cold start: pull the image, `alembic upgrade head`
   # (entrypoint.sh), then create_all + _ensure_columns' per-table inspect() + three seed/backfill
@@ -75,14 +90,15 @@ $deployArgs = @(
   "--memory", "512Mi",
   "--service-account", $ServiceAccount,
   "--set-secrets", "JWT_SECRET=${JwtSecretName}:latest",
-  "--set-secrets", "PLATFORM_SSO_SECRET=${SsoSecretName}:latest"   # portal SSO handoff — see note above
+  "--set-secrets", "PLATFORM_SSO_SECRET=${SsoSecretName}:latest",  # portal SSO handoff — see note above
+  "--set-secrets", "CRON_KEY=${CronKeySecretName}:latest"          # lets Cloud Scheduler drive /api/cron/*
 )
 
 # Production posture: passwordless DEV_LOGIN is OFF. Sign in with the bootstrap admin
 # (melo@agora.ph — change the password immediately) or wire Google OAuth (see
 # GOOGLE-SIGNIN-SETUP.md). If you MUST keep the dev-login dropdown temporarily, append
 # ",ALLOW_DEV_LOGIN_IN_PROD=true" below — the app will boot with a loud SECURITY warning.
-$envVars = "ENVIRONMENT=production,SECURE_COOKIES=true,DEV_LOGIN_ENABLED=false,TIMEZONE=Asia/Manila,PORTAL_LOGIN_URL=$PortalLoginUrl,SKILL_MASTERY_URL=$SkillMasteryUrl,GOOGLE_REDIRECT_URI=$GoogleRedirectUri,ATRIUM_API_URL=$AtriumApiUrl"
+$envVars = "ENVIRONMENT=production,SECURE_COOKIES=true,DEV_LOGIN_ENABLED=false,TIMEZONE=Asia/Manila,PORTAL_LOGIN_URL=$PortalLoginUrl,SKILL_MASTERY_URL=$SkillMasteryUrl,GOOGLE_REDIRECT_URI=$GoogleRedirectUri,ATRIUM_API_URL=$AtriumApiUrl,REPORT_DOC_ID=$ReportDocId,REPORT_USER_EMAIL=$ReportUserEmail,REPORT_IMPERSONATE_SA=$ReportImpersonateSa"
 
 if ($DemoSqlite) {
   Write-Host "DEMO mode: ephemeral SQLite, single instance (data resets on restart)." -ForegroundColor Yellow

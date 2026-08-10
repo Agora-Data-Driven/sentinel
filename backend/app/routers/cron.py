@@ -29,6 +29,23 @@ def _authorize(x_cron_key: str | None, user: User | None) -> None:
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to run jobs")
 
 
+@router.post("/report")
+def run_report(
+    x_cron_key: str | None = Header(None, alias="X-Cron-Key"),
+    user: User | None = Depends(get_current_user_optional),
+    db: Session = Depends(get_db),
+):
+    """Regenerate and republish the personal context report, without the rest of the daily pass.
+
+    Same authorization as `/daily` (cron key or a Super Admin session). It exists because the daily
+    pass also rebuilds attendance and mints recurring tasks — real writes nobody wants repeated
+    just to refresh a document. Safe to call repeatedly: the report is derived state and the Doc is
+    replaced wholesale each time.
+    """
+    _authorize(x_cron_key, user)
+    return daily.publish_report(db)
+
+
 @router.post("/daily")
 def run_daily(
     day: date | None = Query(None, description="Target day (YYYY-MM-DD); defaults to yesterday PH"),

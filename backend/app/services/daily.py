@@ -150,6 +150,48 @@ def mirror_clients(db: Session) -> dict:
                                        "would_deactivate") if k in report}
 
 
+def publish_report(db: Session) -> dict:
+    """Regenerate the personal context report and replace its Google Doc.
+
+    OFF unless both `report_doc_id` and `report_user_email` are set, so every other estate — and
+    every developer running the daily pass locally — is unaffected by default.
+
+    🔴 Fail-soft, like `mirror_clients`: this runs after the attendance pass has committed, and a
+    Drive outage must not take the daily job (or its already-written work) down with it. But the
+    verdict is RETURNED, not swallowed — the document is this job's only output, and a silent
+    failure leaves yesterday's text in place looking current. `report_doc.publish` is deliberately
+    not fail-soft internally for the same reason.
+    """
+    from ..config import settings
+
+    doc_id = (settings.report_doc_id or "").strip()
+    email = (settings.report_user_email or "").strip().lower()
+    if not doc_id or not email:
+        return {"ok": None, "skipped": "not configured"}
+
+    from sqlalchemy import func
+
+    from . import personal_report, report_doc
+
+    user = db.execute(select(User).where(func.lower(User.email) == email)).scalars().first()
+    if user is None:
+        return {"ok": False, "error": f"{email} is not a Sentinel user"}
+    if not user.is_active:
+        return {"ok": False, "error": f"{email} is not active"}
+
+    try:
+        built = personal_report.build(db, user)
+    except Exception as exc:                      # noqa: BLE001 — see the docstring
+        return {"ok": False, "error": f"building the report failed ({type(exc).__name__}: {exc})"}
+
+    result = report_doc.publish(built["markdown"], doc_id)
+    # `gaps` travels with the verdict so a caller can see that the document published fine while
+    # still being short of a source — "it worked" and "it was complete" are different questions.
+    return {"ok": result.get("ok"), "error": result.get("error") or "",
+            "bytes": result.get("bytes"), "chars": len(built["markdown"]),
+            "gaps": built.get("gaps") or []}
+
+
 def run(db: Session, day: date | None = None) -> dict:
     """Full daily pass. ``day`` defaults to yesterday (PH). Commits once at the end."""
     target = day or (today_ph() - timedelta(days=1))
@@ -169,5 +211,11 @@ def run(db: Session, day: date | None = None) -> dict:
     # Safe to run repeatedly: each recurrence claims its period, so a second tick creates nothing.
     from . import task_recurring
     made = task_recurring.run(db, today_ph())
+
+    # LAST, deliberately: the report reads the state every step above has just written (recurring
+    # deliverables land on the board, the client mirror renames a workspace), so publishing before
+    # them would ship a document a few minutes out of date on its own run.
+    report = publish_report(db)
+
     return {"ok": True, "attendance": att, "reminders": rem, "recurring": made,
-            "clients": clients}
+            "clients": clients, "report": report}

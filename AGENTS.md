@@ -158,7 +158,7 @@ deploy/            deploy.ps1, seed-job.ps1, DEPLOY.md
 | `manage.py` | Admin management screens |
 | `notifications.py` | Bell, unread counts |
 | `meta.py` | Enums/constants for the frontend |
-| `cron.py` | Scheduled job endpoints |
+| `cron.py` | Scheduled job endpoints — `POST /daily` (the full pass, **manual only**, see §2) and `POST /report` (regenerate the personal context Google Doc; what Cloud Scheduler actually calls) |
 | `stream.py` | SSE push to the browser |
 | `dev.py` | **Local-development live reload** (`GET /api/dev/reload`, SSE). 404s in production — §5 |
 | `internal.py` | **HMAC-signed** service-to-service (Mastery Engine ↔ Sentinel, Atrium → Sentinel). Purposes: `user-lookup`, `academy-people`, `holistic-profile`, `growth-detail`, `mentor-search`, `task-request`, `task-feedback`, **`board`**, **`work-digest`**, **`work-detail`** |
@@ -279,19 +279,29 @@ walk, because a preview that re-derives the plan is a second definition of it �
 | the **daily pass** — `services/daily.mirror_clients` | added 2026-08-07; runs before `task_recurring` so a workspace created today can still receive its recurrence on the same pass. 🔴 **Dormant in production today — see below** |
 | **Sync now** — `POST /api/manage/clients/sync` | the button in the Manage → Clients strip, plus the route for a script. **This is the only trigger you can rely on right now** |
 
-> 🔴 **`POST /api/cron/daily` DOES NOT RUN UNATTENDED. Checked against the live project 2026-08-07.**
-> The decisive fact, and the one to re-check first: **`CRON_KEY` is not set on the Cloud Run service**
-> (`deploy.ps1` never passed it, though the secret `sentinel-cron-key` has existed since 2026-07-04
-> with the runtime SA already granted accessor). With it empty, `cron._authorize`'s header branch can
-> never match, so **no** Scheduler job could authenticate even if one existed — and none was found in
-> `asia-southeast1` (where every other Agora job lives) or `us-central1`. There is no in-app scheduler
-> either. So the endpoint is reachable **only by a logged-in Super Admin**, i.e. the button in
-> `dashboard.js`. That
-> means the whole daily pass is manual: attendance day-summaries, approval reminders, recurring
-> retainer deliverables (WP 6.1) — and now this client mirror. The hook here is correct and tested;
-> it simply does not fire yet. Scheduling it needs three things together: a `CRON_KEY` secret, a
-> `--set-secrets` line in `deploy.ps1`, and a Cloud Scheduler job sending `X-Cron-Key`. Do not add
-> only the scheduler — without the key it will get a 403 forever, silently.
+> 🟡 **`CRON_KEY` IS NOW SET, BUT `POST /api/cron/daily` STILL DOES NOT RUN UNATTENDED (2026-08-10).**
+> Half of the old blocker is gone and half is a deliberate choice — read both before wiring anything.
+>
+> **What changed:** `deploy.ps1` now passes `CRON_KEY=sentinel-cron-key:latest` (it never did before,
+> though the secret has existed since 2026-07-04 with the runtime SA already granted accessor). So
+> `cron._authorize`'s header branch works, and a Scheduler job can finally authenticate.
+>
+> **What did NOT change:** the one Scheduler job that exists — `sentinel-daily` in `asia-southeast1`,
+> 23:30 Asia/Manila — deliberately targets **`POST /api/cron/report`**, NOT `/daily`. The name is a
+> historical accident; the description on the job says so. `/api/cron/report` regenerates the personal
+> context report and nothing else.
+>
+> 🔴 **Repointing that job at `/api/cron/daily` is an OPERATIONAL decision, not a config tweak.** The
+> daily pass has never once run unattended, so switching it on turns four dormant behaviours live at
+> once, estate-wide and unattended: attendance day-summaries (which write `Absent` rows), **approval
+> and overdue reminders that notify every affected staff member**, recurring retainer deliverables
+> (WP 6.1) that mint real cards, and the client mirror. Each hook is correct and tested in isolation;
+> none has ever fired on a schedule against live data with nobody watching. Turn them on
+> deliberately, in daylight, with someone reading the result — not as a side effect of wanting the
+> report on a timer.
+>
+> So the daily pass remains manual: the Super Admin button in `dashboard.js`, or a direct POST with
+> `X-Cron-Key`.
 
 🔴 **Why the daily pass exists, because it looks redundant and is not.** A client created in Atrium
 reaches the New Task picker only when this sync runs, and until 2026-08-07 boot was its only automatic
