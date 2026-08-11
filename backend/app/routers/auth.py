@@ -39,6 +39,40 @@ def _user_by_email(db: Session, email: str) -> User | None:
     return db.execute(select(User).where(User.email == email.strip().lower())).scalar_one_or_none()
 
 
+def authenticate(db: Session, email: str, password: str) -> User | None:
+    """The ACTIVE user those credentials name, or None.
+
+    The one definition of "is this a valid password login" — shared by `POST /api/auth/login` and the
+    no-JS form fallback `POST /login` (main.py). Two copies of this test is how one door ends up
+    accepting what the other refuses.
+    """
+    user = _user_by_email(db, email)
+    if not user or not user.is_active or not verify_password(password, user.password_hash):
+        return None
+    return user
+
+
+def login_failure_detail(db: Session, email: str) -> str:
+    """Why a password login failed — naming the ONE case where "wrong password" is a lie.
+
+    `password_hash` is nullable and often empty on purpose: every account the platform-owner
+    bootstrap creates is SSO-only (`main._startup_safeguards`), and People → Add Employee leaves the
+    password field optional. Those people have no password to get wrong — and with Google
+    unconfigured and the portal cookie only reaching the custom domain, on any other host they have
+    no door at all. "Invalid email or password" sent them round the retry loop until the rate limiter
+    stopped them, which is the "I can't log in and nobody can tell me why" report.
+
+    Naming that state leaks that the address exists. That is an acceptable trade on an internal tool
+    whose staff directory every employee can already open — and it stops here: a WRONG password, and
+    a DEACTIVATED account, both stay deliberately generic.
+    """
+    user = _user_by_email(db, email)
+    if user and user.is_active and not user.password_hash:
+        return ("This account has no password yet — sign in through the Agora portal, or ask an "
+                "admin to set one for you.")
+    return "Invalid email or password"
+
+
 def _sso_reachable(request: Request) -> bool:
     """True only when the portal's cookie can actually reach THIS host.
 
@@ -103,9 +137,10 @@ def sso_exchange(request: Request, response: Response, db: Session = Depends(get
 # --- Password login --------------------------------------------------------
 @router.post("/login")
 def login(payload: LoginIn, response: Response, db: Session = Depends(get_db)):
-    user = _user_by_email(db, payload.email)
-    if not user or not user.is_active or not verify_password(payload.password, user.password_hash):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password")
+    user = authenticate(db, payload.email, payload.password)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail=login_failure_detail(db, payload.email))
     _set_cookie(response, user.id)
     team = db.get(Team, user.team_id) if user.team_id else None
     return {"ok": True, "user": user_full(user, team)}

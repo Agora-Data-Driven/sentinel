@@ -159,7 +159,14 @@ class Settings(BaseSettings):
     # In-memory per-IP rate limiting for sensitive endpoints (login brute-force, QR-token
     # guessing). Per-instance on Cloud Run — a basic abuse brake, not a distributed quota.
     rate_limit_enabled: bool = True
-    rate_limit_login_per_min: int = 10   # /api/auth/login + /dev-login, per IP
+    # /api/auth/login + /dev-login, per IP per minute.
+    # 🔴 PER IP, AND THE OFFICE IS ONE IP. Behind NAT this is a whole-team budget, not a per-person
+    # one: at the old value of 10, a Monday morning of everyone signing in at once — with the ordinary
+    # share of typos and retries — could spend it in seconds and answer real staff "Too many
+    # requests", which reads as being locked out. 30 is still a hard brake on scripted guessing
+    # (passwords are PBKDF2-SHA256 at 200k iterations, so an attacker gets ~43k attempts a day
+    # against a single address), and the limiter is per-process anyway (see middleware.py).
+    rate_limit_login_per_min: int = 30
     rate_limit_scan_per_min: int = 120   # /api/attendance/scan + /event, per IP (busy kiosk-friendly)
     # Send HSTS only when actually behind HTTPS. Defaults to follow secure_cookies.
     hsts_enabled: bool | None = None

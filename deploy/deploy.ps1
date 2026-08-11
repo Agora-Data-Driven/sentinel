@@ -30,7 +30,21 @@ param(
   [string]$SsoSecretName    = "platform-sso-key",       # Secret Manager secret (portal ag_sso HMAC key)
   [string]$PortalLoginUrl   = "https://portal.agoradatadriven.com/login",
   [string]$SkillMasteryUrl  = "https://mastery.agoradatadriven.com",
-  [string]$GoogleRedirectUri = "https://sentinel-585951669065.asia-southeast1.run.app/api/auth/google/callback",
+  # 🔴 THE HOST SENTINEL IS MEANT TO BE REACHED ON. Both hosts serve this service, and they behave
+  # DIFFERENTLY: `ag_sso` is scoped to `.agoradatadriven.com`, so on the raw *.run.app URL the portal
+  # cookie is never sent, SSO is silently inert (`auth._sso_reachable`) and the password form is the
+  # only door — while on the custom domain the portal IS the front door. So which URL somebody
+  # happened to bookmark decided whether single sign-on worked for them at all, and an SSO-only
+  # account (no password_hash) reaching the run.app host had NO way in. `config.canonical_host` was
+  # written for exactly this and this script never passed it, so it has been empty in production the
+  # whole time. The redirect is narrow by construction — GET + Accept: text/html + a *.run.app host
+  # only, so APIs, probes and the run.app fallback are untouched (main._canonical_host_redirect).
+  [string]$CanonicalHost    = "sentinel.agoradatadriven.com",
+  # Must match a redirect URI registered on the OAuth client. Points at the canonical host because a
+  # browser hitting the run.app callback is now redirected there, and `g_oauth_state` was set on
+  # whichever host started the flow — split them and every Google sign-in fails its state check.
+  # (Google is unconfigured in production today: GOOGLE_CLIENT_ID is not set, so the button is hidden.)
+  [string]$GoogleRedirectUri = "https://sentinel.agoradatadriven.com/api/auth/google/callback",
   # The portal origin the ATRIUM TASK BRIDGE calls (services/atrium_tasks.py). Atrium owns the
   # client-facing tasks; the board reads them over HMAC so a card typed into a client's Atrium
   # shows up here. Omit it and the bridge falls back to PORTAL_LOGIN_URL's origin; if neither
@@ -98,7 +112,7 @@ $deployArgs = @(
 # (melo@agora.ph — change the password immediately) or wire Google OAuth (see
 # GOOGLE-SIGNIN-SETUP.md). If you MUST keep the dev-login dropdown temporarily, append
 # ",ALLOW_DEV_LOGIN_IN_PROD=true" below — the app will boot with a loud SECURITY warning.
-$envVars = "ENVIRONMENT=production,SECURE_COOKIES=true,DEV_LOGIN_ENABLED=false,TIMEZONE=Asia/Manila,PORTAL_LOGIN_URL=$PortalLoginUrl,SKILL_MASTERY_URL=$SkillMasteryUrl,GOOGLE_REDIRECT_URI=$GoogleRedirectUri,ATRIUM_API_URL=$AtriumApiUrl,REPORT_DOC_ID=$ReportDocId,REPORT_USER_EMAIL=$ReportUserEmail,REPORT_IMPERSONATE_SA=$ReportImpersonateSa"
+$envVars = "ENVIRONMENT=production,SECURE_COOKIES=true,DEV_LOGIN_ENABLED=false,TIMEZONE=Asia/Manila,PORTAL_LOGIN_URL=$PortalLoginUrl,CANONICAL_HOST=$CanonicalHost,SKILL_MASTERY_URL=$SkillMasteryUrl,GOOGLE_REDIRECT_URI=$GoogleRedirectUri,ATRIUM_API_URL=$AtriumApiUrl,REPORT_DOC_ID=$ReportDocId,REPORT_USER_EMAIL=$ReportUserEmail,REPORT_IMPERSONATE_SA=$ReportImpersonateSa"
 
 if ($DemoSqlite) {
   Write-Host "DEMO mode: ephemeral SQLite, single instance (data resets on restart)." -ForegroundColor Yellow

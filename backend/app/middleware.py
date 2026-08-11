@@ -160,6 +160,12 @@ _CSRF_EXEMPT_PREFIXES = (
     "/api/attendance/scan",
     "/api/attendance/event",
     "/api/attendance/offline-sync",
+    # The login page's own <form> (POST /login, the no-JS fallback in main.py). A native form post
+    # cannot send an X-CSRF-Token header, and the page is a static file with no way to render a token
+    # into it — so that route does its own Origin/Referer check instead (`main._is_same_origin`).
+    # Without this exemption a STALE session cookie would make the check fire and 403 the one path
+    # that exists to recover from a broken session.
+    "/login",
 )
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
 
@@ -198,10 +204,14 @@ class CSRFMiddleware(BaseHTTPMiddleware):
             header_tok = request.headers.get(settings.csrf_header_name)
             if not cookie_tok or not header_tok or not hmac.compare_digest(cookie_tok, header_tok):
                 rejected = JSONResponse(status_code=403, content={"detail": "CSRF token missing or invalid"})
-                # Reseed on rejection so a desynced client (e.g. a persistent session cookie whose
-                # token cookie was dropped) recovers on the next attempt instead of looping on 403.
-                if not cookie_tok:
-                    self._issue_token(rejected)
+                # Reseed on EVERY rejection so a desynced client (e.g. a persistent session cookie
+                # whose token cookie was dropped, or a stale token left by an earlier deploy)
+                # recovers on the next attempt instead of looping on 403. This used to reseed only
+                # when the cookie was ABSENT, which left the mismatch case — a cookie present but not
+                # matching the header — permanently stuck, the one shape a client cannot fix itself.
+                # Handing a fresh token to a genuine cross-site attacker costs nothing: they cannot
+                # read the cookie back to echo it.
+                self._issue_token(rejected)
                 return rejected
 
         response: Response = await call_next(request)

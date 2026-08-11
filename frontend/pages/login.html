@@ -61,9 +61,18 @@
 
         <div class="err" id="err"></div>
 
-        <form id="login-form">
-          <label class="field"><span>Email</span><input type="email" id="email" autocomplete="username" placeholder="you@agora.ph" required></label>
-          <label class="field"><span>Password</span><input type="password" id="password" autocomplete="current-password" placeholder="Your password" required></label>
+        <!-- 🔴 A REAL <form>: method + action + name= on both inputs, so signing in NEVER depends on
+             JavaScript running. login.js calls preventDefault() and posts /api/auth/login when it is
+             alive; when it is not, the browser posts this form to `POST /login` (main.py) and you
+             still get in. Before that, a login.js that failed to load left the button wired to
+             nothing — and because the form had no action and the inputs had no name, clicking
+             "Sign in" silently re-GET'd /login with the fields cleared: the page LOOKED fine and was
+             simply dead, with no error anywhere. (Same lesson as Atrium's quick-add composer, which
+             died silently inside another block's guard: filing the request must not need JS.)
+             Do not remove the name attributes to "tidy up" — they ARE the fallback. -->
+        <form id="login-form" method="post" action="/login">
+          <label class="field"><span>Email</span><input type="email" id="email" name="email" autocomplete="username" placeholder="you@agora.ph" required></label>
+          <label class="field"><span>Password</span><input type="password" id="password" name="password" autocomplete="current-password" placeholder="Your password" required></label>
           <button class="btn primary block" id="signin" type="submit">Sign in</button>
         </form>
 

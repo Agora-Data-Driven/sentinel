@@ -441,6 +441,79 @@ what enforces it.
 `/login` short-circuits: arriving with a valid `ag_sso` cookie *and* an active user lands you
 straight on the dashboard, minting a normal session on the way ([main.py:358](backend/app/main.py#L358)).
 
+### 🔴 Sentinel answers on TWO hosts and they behave differently — that is where lockouts come from
+
+| Host | `sso_enabled` | The only way in |
+|---|---|---|
+| `sentinel.agoradatadriven.com` (canonical) | **true** | the portal. `/login` redirects there before showing a form |
+| `sentinel-…run.app` | **false** | the password form — `ag_sso` is scoped to `.agoradatadriven.com`, so on `*.run.app` the cookie is never sent and SSO is silently inert (`auth._sso_reachable`, by design) |
+
+So which URL somebody bookmarked decided whether single sign-on worked for them, and an **SSO-only
+account** (`password_hash` NULL — what the platform-owner bootstrap and a blank password field both
+create) reaching the run.app host had **no door at all**. `CANONICAL_HOST` was written for exactly
+this and `deploy.ps1` never passed it; it does now (**2026-08-11**), so browsers on the run.app host
+are forwarded to the canonical one. **Keep the two in step**: `GOOGLE_REDIRECT_URI` must name the
+same host, or the `g_oauth_state` cookie is set on one host and checked on the other and every Google
+sign-in fails its state test.
+
+⚠️ **A service worker cache is per ORIGIN**, so anything bookmarked on the run.app host — the
+attendance **kiosk** tablet above all — lands on a different origin after this and has to re-prime its
+cache. Open the kiosk **once while online** after deploying, or its offline boot has nothing to boot
+from. The run.app URL still answers everything else (the redirect is GET + `text/html` only), so it
+remains a working fallback for curl, probes and the health check.
+
+### 🔴 The portal ↔ Sentinel login LOOP, and the three things that now stop it (2026-08-11)
+
+The report was "sometimes I'm stuck on the login page and can't get in". It was a real infinite loop,
+and the reason it came and went is that it needs `ag_sso` to have expired while the portal still
+thinks you are signed in:
+
+```
+/dashboard → /api/auth/me 401 → /login → POST /api/auth/sso 401 → portal/login?next=…
+          → portal is authed, redirects back → 401 → /login → portal → … forever
+```
+
+`ag_sso` has a **12h** TTL and is minted **only** by a real portal login; the portal's own Flask
+session is a browser-session cookie that Chrome's session-restore keeps alive for days. So the portal
+kept answering "you're already signed in, off you go" with a redirect and **no cookie**, and Sentinel
+kept bouncing back for one. `location.replace` meant the Back button could not escape either. Three
+independent fixes, and **none of them is redundant**:
+
+| # | Fix | Why it alone is not enough |
+|---|---|---|
+| 1 | **the portal re-mints `ag_sso`** on that already-authed redirect (atrium `main.login()`) | it is the actual bug, but it lives in the OTHER repo — Sentinel can ship without it |
+| 2 | **`?next=` points at `/login`, not `/dashboard`** ([login.js](frontend/static/js/login.js)) | only `/login` mints a Sentinel session from the portal cookie; `/dashboard` merely authenticates per request, so the whole company rode the 12h cookie and came back every time it expired |
+| 3 | **the one-bounce guard** — a bounce that follows a bounce within 20s is suppressed and the password form is shown with an explanation | turns any future variant (an unset `SSO_SECRET`, a portal outage, a third app in the chain) into one wasted round trip instead of a lockout |
+
+The guard is a **timestamp, not a flag**, so a legitimate bounce hours later in the same tab still
+works. The manual escape hatch **`/login?local=1`** still exists and still skips the SSO branch.
+
+### 🔴 The login form works with NO JavaScript — `POST /login` is the floor
+
+The form posts `/api/auth/login` from `login.js` normally. It also carries `method="post"
+action="/login"` and `name=` on both inputs, because when that script does not run the button used to
+be wired to nothing: the click silently re-GET'd `/login` with the fields cleared, so the page looked
+perfect and could not admit anyone — no error on screen, no failed request in the logs. (The same
+lesson Atrium learned when its quick-add composer died inside another block's guard.)
+
+- **Don't remove the `name=` attributes or the `action`** — they ARE the fallback.
+- Its CSRF defence is an **Origin/Referer check** (`main._is_same_origin`), not a token: the page is
+  a static file and the CSP forbids inline script, so there is nowhere to render a token into. It
+  **fails open when neither header is present**, deliberately — this route is for degraded
+  conditions. `/login` is therefore in `_CSRF_EXEMPT_PREFIXES`, which is also what stops a **stale**
+  session cookie from 403-ing the one path that recovers a broken session.
+- It shares `auth.authenticate` with the API, so a second door can never accept what the first
+  refuses. Pinned by `tests/test_login_fallback.py`.
+
+### 🟡 "Invalid email or password" was a lie for accounts with no password
+
+`password_hash` is nullable **on purpose** (SSO-only accounts; People → Add Employee leaves the
+password optional). Those users have nothing to get wrong, so the generic message sent them round the
+retry loop until the rate limiter stopped them. `auth.login_failure_detail` now names that one state
+and tells them to use the portal. It stops there: a **wrong** password and a **deactivated** account
+both stay generic. The enumeration trade-off is deliberate — every employee can already open the
+staff directory.
+
 ---
 
 ## 4. Recipes
@@ -789,6 +862,68 @@ Two rules if you extend this:
 
 Covered by `tests/test_task_analytics.py`.
 
+### 🔴 `campaign` is a grouping KEY, and `campaignOf` is the only thing allowed to read it
+
+2026-08-11, driven by the **Sentinel task-placement guidelines** (the operator doc for who files what
+and how a task is named). Full record + the table of what changed:
+[docs/TASKBOARD_REBUILD.md](docs/TASKBOARD_REBUILD.md) §7a.
+
+Two things about this field will otherwise be re-broken:
+
+- 🔴 **Never read `t.campaign` in the frontend — ask `campaignOf(t)`.** Every task created before
+  2026-08-04 really does have `campaign == title` (one input used to write both, §7), and those rows
+  were **deliberately never backfilled**. `campaignOf` returns `""` for them, which is what stops a
+  legacy card printing its own name twice and stops the filter offering one bogus campaign per legacy
+  task. Four surfaces read it — the card, the search, the filter's option list, the drawer — through
+  that one function, because this is precisely the shape of duplication that made the card and the
+  drawer disagree about an Atrium owner (§2). **The API still reports the duplicate honestly**; the
+  suppression is a display rule, so it stays reversible and no data is rewritten.
+- 🔴 **The field is offered on EVERY task, and re-hiding it breaks §4 of those guidelines.** It used to
+  appear only when `content_type == "Campaign"` — i.e. only for the one campaign-shaped service — which
+  made it unreachable for exactly the cards that need it: work raised *after* a campaign launches is
+  deliberately a separate one-line task with no template and no campaign content type. So grouping
+  could only ever cover campaign-BUILD cards, of which there is one per campaign. `isCampaignType` and
+  `syncCampaign` were deleted with the condition.
+
+Two smaller rules that go with it: the filter (`#f-campaign`) is **client-side and deliberately not a
+member of `filters`** — everything in that object is sent to the server by `load()`, and these values
+are just whatever the fetched cards carry; and the form offers a **`<datalist>`** of existing campaign
+names, because a grouping key compared with `===` drifts silently the first time somebody retypes it.
+
+Both card mappers publish the field (`serializers.task_card`, `atrium_tasks.as_board_card`) and
+**neither DETAIL mapper re-derives it** — the drawers build on the card mappers. Pinned by
+`tests/test_task_campaign.py`.
+
+### 🟡 `Task.origin` — planned ahead vs added during the day, and why it may be wrong
+
+2026-08-11. `Task.origin` is `planned` | `added` | **NULL**, classified once at create by
+`services/task_origin.classify` and never a form field on create. It exists because the
+task-placement guidelines split the board's work in two (§1 the Team Lead plans ahead, §3 the worker
+adds what comes up) and stake a claim on it — "so Sentinel accurately reflects the actual work
+completed during the day" — which nothing here could answer: every task looked equally planned, so a
+team's reactive load was invisible. Surfaced as the Monitor's **`added`** sub-line under Open, and as
+the drawer's **Raised** row.
+
+| Rule | Why |
+|---|---|
+| The rule is **"may they plan"**, not "did they delegate" | An employee may route a card to a department without owning it (D10) and that *looks* like delegation. It is §3's "a new task came up", filed by whoever it came up in front of — keying off delegation files every one of those as planned |
+| A planner raising their **own** work is `added` | §1 is about placing work FOR a worker |
+| 🔴 **NULL stays NULL** | Every task predating the column is genuinely unclassified. A `DEFAULT 'planned'` would assert that about thousands of rows, and the migration + `_ensure_columns` both deliberately omit one. Unknown counts toward **neither** side, so **Open − Added is not "planned"** — the Monitor legend says so |
+| 🔴 **Stored, never re-derived** | The creator's role changes on promotion and `assigned_to_id` changes on the first reassignment, so a read-time rule would silently re-answer for tasks that never moved |
+| Correcting it is **`can_reassign`** | It feeds the reactive-load number; leaving it to whoever can *edit* lets anyone rewrite how much unplanned work their team absorbed. **Dropped, not 403'd** — no UI offers it to them, so a request carrying it is a script, not a lost edit |
+| An **Atrium card** is `origin: None`, present not absent | Its answer comes from a *Sentinel* creator's authority to plan, and it has none. Present-and-None because a missing key is falsy — that is how `mine` answered "not yours" for every client card until 2026-08-06 |
+
+🔴 **The derivation is known to be wrong in one case, and that is why it is correctable.** An account
+manager logging a client's urgent 4pm request and assigning it out is doing §3's job through §1's
+motion, and this rule answers `planned`. The only signals that would catch it are clock-based, and each
+is wrong in the opposite direction (a lead planning tomorrow's build at 4pm today would read as
+`added`). Two fuzzy signals do not make a sharp one — so it takes the rule the doc states and lets a
+manager fix the exceptions. **Do not "improve" this with a time heuristic** without deciding what
+happens to the lead planning tomorrow's work this afternoon.
+
+Pinned by `tests/test_task_origin.py`. Migration `a3f7c2e9d4b6` (existence-guarded) **and**
+`main._ensure_columns` — the second is the path it takes to production.
+
 ### 🔴 An employee's board = their own work **plus their team's unowned queue**
 
 Changed 2026-08-03 (§2.4c). Read `task_perms._team_queue` before touching `can_view`: the condition
@@ -897,6 +1032,18 @@ What survived from the panel attempt, and is worth keeping:
 Caused by the service worker serving a **cached** `/login` over the server's 302. Fixed by not
 intercepting navigations ([sw.js:41](frontend/sw.js#L41)). Don't reintroduce navigation caching —
 the `/kiosk` exception is deliberate (it must boot offline).
+
+### 🔴 The SW's asset miss FAILS — it must never fall back to `/kiosk` (fixed 2026-08-11)
+
+The static-asset handler used to end `|| caches.match("/kiosk")`, so an offline request for an
+**uncached asset** was answered with the kiosk's **HTML document**. A `<script>` then received
+`text/html`, which `X-Content-Type-Options: nosniff` blocks outright — so on `/login`, `login.js`
+never defined `pageInit` and the form was never wired: a page that rendered perfectly and could not
+sign anyone in, with the "Continue with Google" button still visible because the config branch never
+ran (that visible button is the **tell** — in production `google_enabled` is false, so a healthy page
+hides it). It answers `Response.error()` now, so the fetch fails as what it is and the browser reports
+it. Two rules: **never return a wrong-type body**, and **never an empty 200 either** — a blank script
+is worse, it fails silently. `login.js` also joined `CORE` (nobody can sign in without it).
 
 ### 🔴 Microphone dead in the embedded Academy iframe
 

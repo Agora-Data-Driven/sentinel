@@ -3,10 +3,13 @@
    always win when online, while the kiosk still works offline from cache. API calls are never
    cached — attendance punches queue in IndexedDB (see kiosk.js) instead.
    Bump CACHE on each meaningful change so old caches are purged on activate. */
-const CACHE = "sentinel-v90";
+const CACHE = "sentinel-v92";
 const CORE = [
   "/static/css/styles.css",
   "/static/js/app.js",
+  // Precached because the login page cannot be signed into without it, and it is the one page every
+  // person hits before they have anything else cached.
+  "/static/js/login.js",
   "/static/js/charts.js",
   "/static/js/kiosk.js",
   "/static/vendor/html5-qrcode.min.js",
@@ -60,9 +63,16 @@ self.addEventListener("fetch", (e) => {
   // before a deploy (the 2026-07-27 "undefined KPIs" incident) — server 304s make it cheap.
   // (Navigations above can't take a RequestInit — fetch(navigate-mode request, init) throws —
   // but they're covered by the server's Cache-Control: no-cache header instead.)
+  // 🔴 A MISS FAILS, it does NOT fall back to /kiosk. This used to end
+  // `|| caches.match("/kiosk")`, so an offline request for an uncached ASSET was answered with the
+  // kiosk's HTML DOCUMENT — a script tag then received `text/html`, which `X-Content-Type-Options:
+  // nosniff` blocks outright. On /login that meant login.js never defined pageInit, so the form was
+  // never wired: a page that rendered perfectly and could not sign anyone in. Response.error() makes
+  // the fetch fail as what it is, so the browser reports it in the console. Never return a
+  // wrong-type body (and never an EMPTY 200 either — a blank script is worse, it fails silently).
   e.respondWith(
     fetch(e.request, { cache: "no-cache" })
       .then((res) => { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(e.request, copy)); return res; })
-      .catch(() => caches.match(e.request).then((hit) => hit || caches.match("/kiosk")))
+      .catch(() => caches.match(e.request).then((hit) => hit || Response.error()))
   );
 });
