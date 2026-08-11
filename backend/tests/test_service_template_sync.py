@@ -35,10 +35,44 @@ def test_the_three_standalone_ad_services_are_in_code():
 
 
 def test_standalone_ads_are_not_campaign_shaped():
-    """Their content_type is the ad FORMAT, which is what keeps the Campaign field hidden (§7)."""
+    """Their content_type is the ad FORMAT, not "Campaign".
+
+    🔴 This no longer governs whether the Campaign FIELD is offered — since 2026-08-11 that field is
+    on every task, because §4 of the task-placement guidelines makes post-launch one-line work the
+    main thing needing a campaign, and none of it is campaign-shaped (see taskboard.js). The content
+    type still has to stay honest about what each recipe IS.
+    """
     for key in ("standalone_video", "standalone_static", "standalone_carousel"):
         assert task_templates.SEED_TEMPLATES[key]["content_type"] != "Campaign"
     assert task_templates.SEED_TEMPLATES["google_meta_campaign"]["content_type"] == "Campaign"
+
+
+def test_the_meta_campaign_recipe_keeps_content_creation_inside_the_campaign_card():
+    """🔴 §2 of the task-placement guidelines: "all work required to build and launch that campaign
+    should stay inside that campaign card." `google_meta_campaign` stops at Launch & verify, so the
+    ads themselves had to be raised as separate standalone_* cards — the exact split those guidelines
+    forbid. This recipe is the one that carries both phases."""
+    tpl = task_templates.SEED_TEMPLATES["meta_campaign"]
+    assert tpl["dept"] == "Acquisition"
+    assert tpl["content_type"] == "Campaign"
+    phases = [title for title, _ in tpl["groups"]]
+    assert phases == ["Campaign build", "Content creation"], phases
+    build, content = (subs for _, subs in tpl["groups"])
+    # The launch step is what closes the card (§2: "once the campaign is launched, the Campaign Build
+    # Task is considered complete") — it has to be IN the build phase, not a follow-up card.
+    assert "Campaign launch" in build
+    assert "Strategize content" in content
+
+
+def test_the_two_campaign_recipes_are_distinct_keys():
+    """🔴 `meta_campaign` is a NEW key rather than an edit to `google_meta_campaign`, and it has to
+    stay one. `sync_seed` is insert-only, so rewriting the older recipe would reach no existing
+    board — production included — and would live only in this file. Retiring the older one is a
+    Manage → Services decision (a soft delete this sync respects forever), not a code change."""
+    assert "google_meta_campaign" in task_templates.SEED_TEMPLATES
+    assert "meta_campaign" in task_templates.SEED_TEMPLATES
+    assert (task_templates.SEED_TEMPLATES["meta_campaign"]["groups"]
+            != task_templates.SEED_TEMPLATES["google_meta_campaign"]["groups"])
 
 
 def test_every_shipped_recipe_has_at_least_one_step():

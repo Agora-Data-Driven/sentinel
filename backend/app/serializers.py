@@ -330,11 +330,22 @@ def task_card(t: Task, db: Session, viewer: User | None = None,
         "labels": _loads(t.labels_json, []),
         "client_id": t.client_id,
         "client_name": client.name if client else None,
+        # 🔴 ON THE CARD, not just the drawer (2026-08-11). `campaign` is the optional grouping field
+        # (docs/TASKBOARD_REBUILD.md §7), and per §4 of the task-placement guidelines it is the ONLY
+        # thing that still connects work raised after a campaign launched: each of those is its own
+        # one-line card by design. It reached `task_detail` alone, so the board could neither search
+        # nor group by it — a grouping field only the drawer receives groups nothing.
+        "campaign": t.campaign,
         "assigned_to_id": t.assigned_to_id,
         "assignee": user_public(assignee),
         "assigned_team_id": t.assigned_team_id,
         "created_by_id": getattr(t, "created_by_id", None),
         "created_by": user_public(creator),  # automatic creator tag (internal; never crosses to Atrium)
+        # Planned ahead vs added during the day (services/task_origin). 🔴 `None` for the rows that
+        # predate the column — genuinely unclassified, and the UI must print "—" rather than guess.
+        # Internal, like every other field on this line: it says how the AGENCY works, not what the
+        # client asked for, so it is not in `task_bridge.SAFE`.
+        "origin": getattr(t, "origin", None),
         "comment_count": comment_count,
         "attachment_count": attach_count,
         "checklist_total": total,
@@ -380,7 +391,9 @@ def task_detail(t: Task, db: Session) -> dict:
             "reviewer_id": getattr(t, "reviewer_id", None),
             "reviewer": user_public(reviewer),
             "description": t.description,
-            "campaign": t.campaign,
+            # 🔴 `campaign` is NOT re-mapped here — `task_card` above already carries it (2026-08-11).
+            # Two derivations of one field is exactly how this board's card and drawer disagreed about
+            # an Atrium lead (AGENTS.md §2), and the drawer is fed by `task_card`'s output.
             "content_type": t.content_type,
             "service_charge": t.service_charge,               # internal-only; raw value for the edit form
             "service_charge_label": _money(t.service_charge),  # internal-only; "$4,200" for display

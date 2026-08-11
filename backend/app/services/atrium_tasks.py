@@ -466,7 +466,9 @@ def as_task_detail(envelope: dict, client: object = None, owner: dict | None = N
         # Atrium has no `description`; its client-facing prose is client_note (mapped below) and its
         # internal prose is internal_notes -- both already have a home on the drawer.
         "description": "",
-        "campaign": t.get("campaign") or "",
+        # 🔴 `campaign` is NOT re-mapped here — `as_board_card` above already carries it (2026-08-11).
+        # Re-deriving a field this function's own base already sets is how the card and the drawer
+        # ended up disagreeing about an Atrium card's owner; the same rule now covers this field.
         "content_type": t.get("content_type") or "",
         "service_charge": t.get("service_charge") or "",
         "service_charge_label": t.get("service_charge_label") or "",
@@ -660,6 +662,12 @@ def as_board_card(t: dict, client: object = None, owner: dict | None = None,
         "client_id": getattr(client, "id", None),
         "client_name": (getattr(client, "name", None)
                         or t.get("client_name") or t.get("client_key") or ""),
+        # 🔴 The grouping field, on BOTH kinds of card (2026-08-11). `serializers.task_card` publishes
+        # it for a Sentinel row, so a client card has to publish it here or the board's campaign filter
+        # and its search would silently answer for only half the work on screen — the same
+        # one-surface-disagrees split `mine` was missing until 2026-08-06 (AGENTS.md §5). Mapped here
+        # and NOT in `as_task_detail`, which builds on this function.
+        "campaign": t.get("campaign") or "",
         # 🔴 Set ONLY when the lead resolved to a real Sentinel user. That is what puts the card in
         # that person's **By Employee** lane and stops the board calling owned client work
         # "Unassigned" — grouping there is keyed on this field. It stays None for an unresolved lead,
@@ -671,6 +679,13 @@ def as_board_card(t: dict, client: object = None, owner: dict | None = None,
         "assigned_team_id": None,
         "created_by_id": None,
         "created_by": None,
+        # 🔴 An Atrium card can NEVER be classified planned/added: that answer is derived from the
+        # SENTINEL creator's authority to plan (services/task_origin), and this card was raised in
+        # another system by somebody who is a roster email here. `None` is the same "unknown" a
+        # pre-column Sentinel row reports, so one renderer prints "—" for both.
+        # Present-and-None rather than absent on purpose: a MISSING key is falsy, which is exactly how
+        # `mine` silently answered "not yours" for every client card until 2026-08-06 (AGENTS.md §5).
+        "origin": None,
         # Atrium's own ownership vocabulary, `atrium_`-prefixed so nothing mistakes it for a Sentinel
         # column. On the CARD as well as the drawer now: the drawer's "Lead" field reads these, and
         # the board needs the same values to stop rendering owned client work as "Unassigned".

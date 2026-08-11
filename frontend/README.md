@@ -251,9 +251,14 @@ inside any comment that lives in a template literal**, never with a backtick.
   author rule that sets `display` silently disarms the attribute and every `el.hidden = …` becomes a
   no-op with no error. It bit three times before the global rule went in (2026-08-06): `#tb-bulkbar`
   (`.row`) showed an empty white strip under the board filters; `#t-campaign-wrap` (`label.field`)
-  put the Campaign field on **every** task, defeating the whole "only offer it for campaign-shaped
-  services" change; `#tb-req-n` (`.pill`) rendered a violet **0** on an empty Requests queue. Do not
-  remove it, and do not use `hidden` for something that should stay laid out — use a class.
+  put the Campaign field on **every** task, defeating the "only offer it for campaign-shaped services"
+  change of the day before; `#tb-req-n` (`.pill`) rendered a violet **0** on an empty Requests queue.
+  Do not remove it, and do not use `hidden` for something that should stay laid out — use a class.
+  (🔴 Historical example only: `#t-campaign-wrap` no longer exists. The Campaign field is now offered
+  on **every** task deliberately — the reveal rule made it unreachable for exactly the post-launch
+  one-line work that needs it, see [docs/TASKBOARD_REBUILD.md](../docs/TASKBOARD_REBUILD.md) §7. What
+  the field looks like today is the same thing that 2026-08-06 bug looked like; the `[hidden]` rule
+  it motivated is still load-bearing for `#tb-bulkbar`, `#tb-req-n` and `#f-campaign`.)
 - **A KPI class only styles inside `.kpi`** — `.k-val`, `.k-label`, `.k-ic` and `.k-sub` are all
   written as `.kpi .k-val` descendants, so a `<div class="k-val">` in a plain `.card` is styled by
   **nothing** and looks "unfinished" for no visible reason. The Overview's "my work" strip did this
