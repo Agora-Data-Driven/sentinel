@@ -181,6 +181,46 @@ inside any comment that lives in a template literal**, never with a backtick.
   - **A shared Sentinel row's "✓ Shared with the client" chip is gone.** A state does not belong in
     an actions menu, and the record says it twice already (the kicker ends "· shared with the
     client"; the internal list carries "Client card · Published").
+- 🔴 **The create/edit form is PROPERTY ROWS, and nothing routing-related is collapsed** (2026-08-11;
+  prototype: `scratchpad/new-task-modal-prototype.html`, option 2 of three). It was a two-column grid
+  of boxed fields with **every** routing field — client, department, lead, support, priority, campaign,
+  service type — behind a collapsed "More options". "Simple by default" (2026-07-27) was right that
+  filing must need a **name and nothing else**; the cost was that the eleven fields deciding where a
+  card *goes* were both one click away **and, being collapsed, unread**, so work reached the board
+  unrouted because the form never asked. Now: name and description lead as **plain text with no box**
+  (the modal head already says this is a task), then one labelled **row per field**, then the
+  client-safe note in its own block, then a `<details>` holding only the four genuinely rare fields.
+  Filing still needs a name only — every row is optional and a labelled row reads as skippable in a
+  way a boxed field does not. Five things not to undo:
+  - **Controls sit flush** — transparent ground and border — **until hovered or focused**, written as
+    `:not(:focus)` so the app's own focus ring (violet in light, green in dark) stays the one that
+    paints. Nine boxed selects in a column read as a wall of chrome, and the row's label already says
+    what the control is. A `select[multiple]` is the exception and stays boxed: it is a list, not a
+    value.
+  - 🔴 **`.tf-row[hidden]{display:none}` is load-bearing.** The UA's `[hidden]` rule loses to **any**
+    author `display` declaration regardless of specificity, so `.tf-row{display:grid}` alone leaves a
+    hidden row on screen — which is exactly how the prototype rendered "Client sees it" on a card with
+    **no client**. Same trap as the collapsed hold form. Any new conditional row needs the same guard.
+  - **The naming rule is now live feedback** — the three `Campaign | Action | Detail` chips fill in as
+    their pipes are typed (`syncPattern`) — and is **still not a validator**. A blank name still saves
+    as "Untitled task": §3 of the placement guidelines is entirely about capturing unplanned work the
+    moment it appears, and a form that refuses a badly-shaped title loses it. `NAME_HINT` stays printed
+    in full because the chips cannot carry the "anything else" and "leave the client out" halves of it.
+  - **Priority stays a `<select>`,** deliberately, though the prototype drew a four-way segmented
+    control. `vocab.priorities` is DB-driven and renameable, so a fixed four buttons with colour-coded
+    dots would be both a status-label literal (AGENTS.md §5, D13) and a hardcoded count — and it would
+    be the fourth priority control on this board rendered unlike the other three (drawer, bulk bar,
+    Atrium form).
+  - **`Ctrl`/`Cmd`+`Enter` submits, bound to `m.root` and not the document** — this form can sit under
+    a confirm, and a document-level handler fires for whichever modal is on top. Plain Enter is
+    deliberately not it (three of the fields are textareas). It is also why `save()` now has an
+    **in-flight guard**: a shortcut is easy to fire twice, and on create a second POST is a duplicate
+    card, not a repeated edit. The guard releases in the `catch`, because the modal stays open on
+    failure so the typed work survives a 403.
+  `extrasOpen` shrank with the block it opens — it tests only the five fields still inside it, so
+  adding one that has moved out to a row does nothing at all. The five row-label icons (`building`,
+  `eye`, `briefcase`, `user`, `list`) went into **`S.ICON` in `app.js`**, not inline here: this file
+  deliberately holds no SVG of its own.
 - 🔴 **The toolbar: three rows of chrome became two** (2026-08-06, reported as "too many filters and
   not all usable"). It was **fourteen controls** above a board whose whole job is to be scanned — and
   the three questions a Monday morning starts with (what is late · what has a client asked for · what

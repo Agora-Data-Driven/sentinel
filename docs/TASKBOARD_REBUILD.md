@@ -616,7 +616,8 @@ sign-in). On the Atrium side: `tools/_validate_dash_js.py`, `_atrium_smoketest.p
   **both** `title` and `campaign`, so the detail modal's Campaign row echoed the title back on every
   task — which is how it was spotted.
   **Built without the flag column:** no `ServiceTemplate` migration was needed. The name input is
-  `#t-name`, the campaign input is `#t-campaign` inside More options. The save payload sends
+  `#t-name`, the campaign input is `#t-campaign` — inside More options as built, on a **visible row**
+  since the form became property rows (2026-08-11, §7c). The save payload sends
   `campaign: null` when blank; `update_task` uses `exclude_unset`, so an explicit null really clears
   it. The detail modal renders the Campaign row **only when set**.
   🔴 **Existing rows were deliberately NOT backfilled** — every task created before 2026-08-04 still
@@ -634,7 +635,7 @@ sign-in). On the Atrium side: `tools/_validate_dash_js.py`, `_atrium_smoketest.p
   | Was | Now | Why it mattered |
   |---|---|---|
   | serialized in `task_detail` / `as_task_detail` only | **on the CARD** — `serializers.task_card` + `atrium_tasks.as_board_card` | The board could neither search nor group by it. A grouping field only the drawer receives groups nothing |
-  | offered only when `content_type == "Campaign"` (`isCampaignType` / `syncCampaign`, both **deleted**) | offered on **every** task, inside More options | 🔴 **The reveal rule hid the field from exactly the cards that need it.** A §4 one-line task has no service template and no campaign content type, so campaign grouping could only ever cover campaign-BUILD cards — of which there is one per campaign, i.e. the ones least needing to be grouped |
+  | offered only when `content_type == "Campaign"` (`isCampaignType` / `syncCampaign`, both **deleted**) | offered on **every** task — inside More options as built, on a visible row since §7c | 🔴 **The reveal rule hid the field from exactly the cards that need it.** A §4 one-line task has no service template and no campaign content type, so campaign grouping could only ever cover campaign-BUILD cards — of which there is one per campaign, i.e. the ones least needing to be grouped |
   | free text, no list | `<datalist>` of the campaigns already on the board (`campaignNames`) | It is a grouping KEY compared with `===`. "Stratos" and "stratos " are two campaigns, and nothing would have told anybody |
   | no filter | a **client-side** `#f-campaign` select, hidden until the board has one | Deliberately not in `filters` (which `load()` sends to the server): the values are whatever the fetched cards carry, so there is nothing to validate against and no reason to re-fetch |
 
@@ -682,6 +683,56 @@ sign-in). On the Atrium side: `tools/_validate_dash_js.py`, `_atrium_smoketest.p
   Migration `a3f7c2e9d4b6`, existence-guarded, **plus** `main._ensure_columns` — that list is the path
   the column takes to production. Neither adds a server default, on purpose. Pinned by
   `tests/test_task_origin.py`.
+
+  ### 7c. The create/edit form became property rows — 2026-08-11
+
+  A UI change with no backend half, and the last piece of the two sections above: §7a made `campaign`
+  a real grouping key and §7b made `origin` a real fact, and **both landed inside a collapsed block
+  nobody opened**. Prototyped as three options in
+  `scratchpad/new-task-modal-prototype.html`; the owner picked **option 2, property rows**.
+
+  The form was a two-column grid: name, description and the two dates on show, and **every routing
+  field** — client, department, lead, support, priority, campaign, service type, plus the
+  share-on-create toggle — behind `<details>` "More options". That was a deliberate 2026-07-27
+  decision ("filing a task should need a NAME and nothing else") and the first half of it was right.
+  The second half was not: the eleven fields that decide where a card **goes** were one click away
+  **and, being collapsed, unread**, so work arrived on the board unrouted — and the two fields those
+  sections had just made load-bearing were among the ones nobody saw.
+
+  | Was | Now |
+  |---|---|
+  | boxed `label.field` for the name, with the naming rule as a grey `.form-hint` paragraph under it | borderless 21px name, and the rule as **live chips** — `Campaign \| Action \| Detail` fill in as their pipes are typed (`syncPattern`) |
+  | 7 routing fields + share toggle behind "More options" | **9 labelled rows**, nothing collapsed; controls flush until hovered/focused |
+  | dates as two separate boxed fields | one **Dates** row, `Starts` / `Due` side by side, each a real `<label>` |
+  | client note as a plain field among the rest | its own **sunken block** — it is the client's entire card, and the only field in this form they ever see |
+  | "More options — client, department, lead, priority…" | "Rarely needed — charge, content type, deliverable link, internal notes" (plus **Raised as**) |
+  | plain `New task` head | **`TASK BOARD` kicker** above it, matching the record's own head |
+  | click Save only | `Ctrl`/`Cmd`+`Enter`, with an **in-flight guard** — a shortcut is easy to fire twice and on create a second POST is a duplicate card |
+
+  Four things that are decisions, not styling, and are documented at their call sites in
+  `frontend/README.md`:
+
+  - 🔴 **`.tf-row[hidden]{display:none}`** — the UA's `[hidden]` rule loses to any author `display`
+    declaration regardless of specificity, so `.tf-row{display:grid}` alone leaves a hidden row on
+    screen. That is precisely how the prototype rendered "Client sees it" on a card with **no
+    client**, and it is the same trap the collapsed hold form hit in July. Every new conditional row
+    needs the guard.
+  - **The naming chips are still not a validator.** Nothing gates Save and a blank name still saves
+    as "Untitled task" — §3 of the placement guidelines is entirely about capturing unplanned work
+    the moment it appears (§7a's note above says the same thing about `NAME_HINT`, which is still
+    printed in full because chips cannot carry its "anything else" and "leave the client out" halves).
+  - **Priority stayed a `<select>`** although the prototype drew a four-way segmented control:
+    `vocab.priorities` is DB-driven and renameable, so fixed buttons with colour-coded dots would be
+    both a status-label literal (D13) and a hardcoded count — and the fourth priority control on this
+    board rendered unlike the other three.
+  - **`Ctrl+Enter` binds to `m.root`, not `document`** — this form can sit under a confirm, and a
+    document-level handler fires for whichever modal is on top.
+
+  Verified by rendering the real template against the real stylesheet in four permission shapes
+  (new/manager, new/employee, edit/manager, edit/no-reassign) before deploying: `node --check` cannot
+  see the template-literal backtick fault this file has hit before, and neither can it see a `${}`
+  that resolves to `undefined`. Five row-label icons (`building`, `eye`, `briefcase`, `user`, `list`)
+  were added to **`S.ICON` in `app.js`** — `taskboard.js` deliberately holds no SVG of its own.
 - ~~**Labels**~~ — **resolved 2026-08-03 (D14).** Derived from the department, like Atrium. Drop the
   Design/Copy/Ads/SEO/Dev vocabulary and the half-retired `labels_json` free list with it.
 - **Attachments**: wire GCS (the pattern exists — Atrium's creatives are private objects + an authed

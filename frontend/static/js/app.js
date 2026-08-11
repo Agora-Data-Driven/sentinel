@@ -62,6 +62,16 @@
     heart: P('<path d="M12 20s-7-4.6-9.2-9A4.7 4.7 0 0 1 12 6a4.7 4.7 0 0 1 9.2 5C19 15.4 12 20 12 20z"/>'),
     lock: P('<rect x="4.5" y="10.5" width="15" height="10" rx="2.2"/><path d="M8 10.5V7a4 4 0 0 1 8 0v3.5"/><path d="M12 14.5v2.5"/>'),
     run: P('<circle cx="14" cy="4.8" r="1.8"/><path d="M13 8.5l-3.2 2 1.6 3.2M11.4 13.7L9.5 20M11.4 13.7l3 1.4.9 4.9M13 8.5l3.2 1.4 1 2.8 2.3.6M13 8.5l-4.5 1"/>'),
+    // The task form's property rows (taskboard.js `taskForm`) label each row with one of these.
+    // They live HERE rather than inline in that file because this object is the icon registry and
+    // taskboard.js deliberately holds no SVG of its own — every icon on the board comes from S.ICON.
+    // `user` is the singular of `users`: one Lead vs many Support, which is the whole distinction
+    // those two rows draw.
+    building: P('<path d="M3 21V6.5L11 3v18"/><path d="M11 9.5l8 3V21"/><path d="M6.5 9h1M6.5 13h1M6.5 17h1M14.5 14h1M14.5 17.5h1"/>'),
+    eye: P('<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="2.7"/>'),
+    briefcase: P('<rect x="3" y="7.5" width="18" height="12.5" rx="2"/><path d="M8.5 7.5V5.5a2 2 0 0 1 2-2h3a2 2 0 0 1 2 2v2M3 12.5h18"/>'),
+    user: P('<circle cx="12" cy="8" r="3.6"/><path d="M4.8 20a7.2 7.2 0 0 1 14.4 0"/>'),
+    list: P('<path d="M4 6h16M4 12h10M4 18h6"/>'),
   };
 
   const AGORA_LOGO =

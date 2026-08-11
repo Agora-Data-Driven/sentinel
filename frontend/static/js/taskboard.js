@@ -426,7 +426,123 @@ window.TaskBoard = {
       .tp-n{font-size:11px;color:var(--muted)}
       .tp-clients{list-style:none;margin:0;padding:0;max-width:420px}
       .tp-clients li{display:flex;justify-content:space-between;gap:12px;padding:7px 0;
-        border-bottom:1px solid var(--line-soft);font-size:13px}`;
+        border-bottom:1px solid var(--line-soft);font-size:13px}
+
+      /* ======================================================================
+         THE CREATE / EDIT FORM -- PROPERTY ROWS (2026-08-11).
+
+         It was a two-column grid of boxed fields with EVERY routing field --
+         client, department, lead, support, priority, service type, campaign --
+         behind a collapsed 'More options'. Filing needed a name and nothing
+         else, which was the point; the cost was that the eleven fields
+         deciding where a card GOES were both one click away and, being
+         collapsed, unread. Work arrived unrouted because the form never asked.
+
+         So: the name and description LEAD as plain text (no box -- the modal
+         title already says this is a task, and a bordered field around the
+         loudest thing in the dialog only competes with it), and every other
+         field is one labelled ROW. Nothing routing-related is hidden any more;
+         only the genuinely rare fields still collapse.
+
+         Controls sit FLUSH -- transparent ground, transparent border -- until
+         hovered or focused. Nine boxed selects in a column read as a wall of
+         chrome, and the row's own label already says what the control is.
+         Written as ':not(:focus)' rather than a focus override on purpose: the
+         app's own focus ring (violet in light, green in dark, styles.css)
+         stays the one that paints, so this form cannot drift from every other
+         input in the product.
+
+         🔴 '.tf-row[hidden]' IS LOAD-BEARING. The UA's own '[hidden]' rule is
+         beaten by ANY author 'display' declaration regardless of specificity,
+         so '.tf-row{display:grid}' alone would leave a hidden row on screen --
+         which is exactly how the share row rendered 'Client sees it' on a card
+         with no client. Same trap the collapsed hold form hit in July.
+         (NO BACKTICKS IN THIS COMMENT -- it lives inside a template literal;
+         see the note at the top of this block.) */
+      /* THE HEAD gets a kicker above the title -- 'TASK BOARD' over 'New task'. A lone 16px 'New
+         task' on a 920px dialog is a lot of white space carrying one line, and the kicker is the
+         same device the RECORD's head already uses (.tb-detail turns its h3 into one), so the two
+         dialogs on this board now open the same way. It is a real element inside the h3 rather than
+         a CSS 'content' string: the heading a screen reader announces should be the heading that is
+         on screen, and generated content is announced inconsistently. */
+      .tf-modal .modal-head h3{display:flex;flex-direction:column;gap:2px;
+        font-size:17px;letter-spacing:-.25px}
+      .tf-kicker{font-size:10.5px;font-weight:800;letter-spacing:.11em;text-transform:uppercase;
+        color:var(--muted)}
+      .tf-name{width:100%;background:transparent;border:0;padding:0;font-size:21px;font-weight:700;
+        color:var(--ink);letter-spacing:-.3px;line-height:1.3}
+      .tf-name::placeholder{color:var(--line-strong)}
+      .tf-name:focus{outline:none;box-shadow:none;background:transparent}
+      .tf-desc{width:100%;background:transparent;border:0;padding:0;margin-top:9px;min-height:46px;
+        font-size:13.5px;line-height:1.55;color:var(--text);resize:vertical}
+      .tf-desc:focus{outline:none;box-shadow:none;background:transparent}
+      .tf-desc::placeholder{color:var(--muted)}
+      /* The naming rule as LIVE FEEDBACK rather than only a paragraph: each part of
+         'Campaign | Action | Detail' fills in as you type its pipe. Still a HINT, never a
+         validator -- a blank name saves as 'Untitled task' exactly as before, because §3 of the
+         placement guidelines is about workers logging unplanned work the moment it appears. */
+      .tf-pat{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:9px;
+        font-size:11.5px;color:var(--muted)}
+      .tf-pat .seg{padding:2px 9px;border-radius:var(--pill);background:var(--sunken);
+        border:1px solid var(--line);font-weight:600;
+        transition:background .15s,border-color .15s,color .15s}
+      .tf-pat .seg.on{background:var(--green-bg);border-color:var(--green-line);color:var(--green-strong)}
+      .tf-pat .sep{color:var(--line-strong);font-weight:700}
+      .tf-pat .why{flex:1 1 100%;line-height:1.5;margin-top:2px}
+      .tf-pat .why b{color:var(--sub);font-weight:700}
+      .tf-rows{margin-top:18px;border-top:1px solid var(--line)}
+      .tf-row{display:grid;grid-template-columns:152px 1fr;align-items:center;gap:12px;
+        padding:7px 0;border-bottom:1px solid var(--line-soft)}
+      .tf-row[hidden]{display:none}
+      .tf-row>.k{display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:600;color:var(--sub)}
+      .tf-row>.k .svg-ic{width:14px;height:14px;color:var(--muted)}
+      .tf-row>.v{min-width:0}
+      .tf-row>.v input,.tf-row>.v select{font-size:13px;padding:6px 8px}
+      .tf-row>.v input:not(:focus),.tf-row>.v select:not([multiple]):not(:focus){
+        background:transparent;border-color:transparent}
+      .tf-row>.v input:hover:not(:focus),.tf-row>.v select:hover:not(:focus){
+        background:var(--input);border-color:var(--line)}
+      /* A multi-select stays boxed at rest: it is a LIST, not a value, so there is nothing for a
+         flush single line to show and the rows either side would run into it. */
+      .tf-row>.v select[multiple]{padding:5px 7px;font-size:12.5px}
+      /* A row whose control carries a sentence under it (the locked Lead picker, Support, Raised as)
+         must sit its label with the FIRST line, not halfway down the block. */
+      .tf-row.tall{align-items:start;padding:11px 0}
+      .tf-row.tall>.k{padding-top:7px}
+      .tf-row .rh{font-size:11.5px;color:var(--muted);line-height:1.5;margin-top:5px}
+      .tf-row .rh[hidden]{display:none}
+      /* Start and Due share one row -- they are one question, and two date inputs are narrow enough
+         to sit side by side. Each caption is a real label wrapping its own input. */
+      .tf-dates{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+      .tf-mini{display:flex;align-items:center;gap:8px;min-width:0}
+      .tf-mini>span{font-size:11.5px;color:var(--muted);flex:0 0 auto}
+      .tf-check{display:flex;align-items:center;gap:9px;font-size:12.5px;color:var(--text);cursor:pointer}
+      .tf-check input{width:auto;flex:0 0 auto}
+      /* WHAT THE CLIENT WILL READ gets its own sunken block instead of a tenth identical row: it is
+         the entire content of the client's card, and the only field in this form they ever see. */
+      .tf-cs{margin-top:18px;background:var(--sunken);border:1px solid var(--line);
+        border-radius:var(--radius-sm);padding:13px 14px}
+      .tf-cs .lb{font-size:12px;font-weight:700;color:var(--violet-d);display:flex;align-items:center;
+        gap:7px;margin-bottom:8px}
+      .tf-cs .lb .svg-ic{width:13px;height:13px}
+      .tf-cs .lb i{font-weight:400;font-style:normal;color:var(--muted);font-size:11.5px}
+      .tf-cs textarea{min-height:58px;font-size:13px}
+      /* The keyboard shortcut sits at the far LEFT of the footer, pushing Cancel/Save right -- the
+         footer is 'justify-content:flex-end', so the auto margin is what holds that split. */
+      .tf-kbd{margin-right:auto;font-size:11.5px;color:var(--muted);white-space:nowrap}
+      .tf-kbd kbd{font:inherit;font-size:11px;font-weight:700;color:var(--sub);background:var(--input);
+        border:1px solid var(--line-strong);border-radius:4px;padding:0 5px}
+      @media (max-width:560px){.tf-kbd{display:none}}
+      .tf-more{margin-top:18px}
+      .tf-more .two{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:12px}
+      .tf-more .two > .field{margin-bottom:0}
+      /* One column once the label gutter stops earning its width -- below this the value has ~120px,
+         which turns every select into an ellipsis. */
+      @media (max-width:680px){
+        .tf-row,.tf-row.tall{grid-template-columns:1fr;gap:5px;align-items:start;padding:9px 0}
+        .tf-row.tall>.k{padding-top:0}
+        .tf-more .two{grid-template-columns:1fr}
+      }`;
     document.head.appendChild(st);
   }
 
@@ -2645,12 +2761,15 @@ window.TaskBoard = {
     // it is still made: the column's own "Add card" passes `presetStatus`, and the New Task button
     // means the first column. Editing a card no longer sends `status` at all.
     const newStatus = presetStatus || (STATUSES.length ? STATUSES[0] : "To Do");
-    // Only spring the advanced block open when an EXISTING task already carries one of those
+    // Only spring the rare-fields block open when an EXISTING task already carries one of those
     // values -- otherwise editing would silently hide something the user themselves set. A new
     // task always starts collapsed.
-    const extrasOpen = !!existing && !!(e.client_id || e.assigned_team_id || e.assigned_to_id
-      || e.service_charge || e.content_type || e.deliverable_url || e.internal_notes || e.campaign
-      || (e.priority && e.priority !== "Medium"));
+    // 🔴 The list is SHORT now because the block is short now: client, department, lead, support,
+    // priority, campaign and service type moved OUT of it onto visible rows (see the .tf-* styles),
+    // so only the four rare fields and the origin correction are left to spring open. Adding a
+    // field to this test that is no longer inside the block does nothing at all.
+    const extrasOpen = !!existing && !!(e.service_charge || e.content_type || e.deliverable_url
+      || e.internal_notes || e.origin);
     // 🔴 Campaign is a GROUPING field, not the name (§7 of docs/TASKBOARD_REBUILD.md, built
     // 2026-08-04). Until then ONE input wrote into both `title` and `campaign`, so the detail
     // modal's Campaign row just echoed the title back on every task. The name field is now the
@@ -2708,91 +2827,149 @@ window.TaskBoard = {
     const m = S.modal({
       title: existing ? "Edit task" : "New task",
       wide: true,
-      // SIMPLE BY DEFAULT (2026-07-27): filing a task should need a NAME and nothing else. Only
-      // name / description / due date are on show; every other field still exists, one click away
-      // under "More options". Atrium's board renders the same three-then-collapse form, so the two
-      // surfaces feel identical. The collapsed block auto-opens when editing a task that already
-      // uses those fields, so nothing is ever hidden from the person who set it.
-      body: `<div class="grid" style="grid-template-columns:1fr 1fr;gap:16px">
-        <label class="field" style="grid-column:1/-1"><span>Task name</span>
-          <input id="t-name" value="${S.esc(e.title || "")}" placeholder="${S.esc(NAME_PLACEHOLDER)}" autofocus>
-          <div class="form-hint">${NAME_HINT}</div></label>
-        <label class="field" style="grid-column:1/-1"><span>Description</span><textarea id="t-desc" rows="3" placeholder="Optional — a sentence of context">${S.esc(e.description || "")}</textarea></label>
-        <label class="field"><span>Due date</span><input type="date" id="t-due" value="${e.due_date || ""}"></label>
-        <label class="field"><span>Start date</span><input type="date" id="t-start" value="${e.start_date || ""}"></label>
-        <label class="field" style="grid-column:1/-1"><span>What the client will read</span>
-          <textarea id="t-cnote" rows="2" placeholder="Optional — plain language, no internal detail. Only ever seen if this task is shared with the client.">${S.esc(e.client_facing_notes || "")}</textarea></label>
-        <div class="field" style="grid-column:1/-1">
-          <details class="tk-extra"${extrasOpen ? " open" : ""}>
-            <summary>More options${extrasOpen ? "" : " — client, department, lead, priority…"}</summary>
-            <div class="grid" style="grid-template-columns:1fr 1fr;gap:16px;margin-top:12px">
-              <label class="field" style="grid-column:1/-1"><span>Client</span><select id="t-client"><option value="">—</option>${clients.map((c) => `<option value="${c.id}" ${c.id === e.client_id ? "selected" : ""}>${S.esc(c.name)}</option>`).join("")}</select></label>
-              ${!existing && canManage ? `<div class="field" style="grid-column:1/-1" id="t-share-wrap"${e.client_id ? "" : " hidden"}>
-                <label class="chip" style="cursor:pointer;align-self:start"><input type="checkbox" id="t-share" style="width:auto" checked> Share with the client straight away</label>
-                <div class="form-hint">On by default (D6) — the client watches the work cross their board from day one instead of meeting it finished. Untick to keep this one internal; you can share it later from the card.</div>
-              </div>` : ""}
-              <label class="field"><span>Department</span><select id="t-team"><option value="">—</option>${teams.map((t) => `<option value="${t.id}" ${t.id === e.assigned_team_id ? "selected" : ""}>${S.esc(t.name)}</option>`).join("")}</select></label>
-              <label class="field"><span>Lead (main)</span>
-                <select id="t-assignee"${mayNamePerson(e.assigned_team_id) ? "" : " disabled"} title="${mayNamePerson(e.assigned_team_id) ? "" : S.esc(LEAD_LOCKED)}"><option value="">Unassigned</option>${people.map((p) => `<option value="${p.id}" ${p.id === e.assigned_to_id ? "selected" : ""}>${S.esc(p.name)}</option>`).join("")}</select>
-                <div class="form-hint" id="t-assignee-hint"${mayNamePerson(e.assigned_team_id) ? " hidden" : ""}>${LEAD_LOCKED}</div></label>
-              ${/* SUPPORT — many people, none accountable. The same control the Atrium client-card
-                    form has always had; a Sentinel task had no equivalent, so the only way to put a
-                    second name on one was to invent a checklist step for them — which moved the
-                    progress bar, because that bar is done-steps ÷ total-steps. Staffing a card
-                    changed how finished it looked.
-                    A non-delegator still gets the picker (it lists only THEM, exactly like the
-                    breakdown's step owners) because joining and leaving work yourself has to stay
-                    open or the field is unusable by the people who pick work up. */""}
-              <label class="field" style="grid-column:1/-1"><span>Support — anyone helping, as many as you need</span>
-                <select id="t-support" multiple size="4">${supportOptions(e).join("")}</select>
-                <div class="form-hint">${mayNamePerson(e.assigned_team_id)
-                  ? "They see the card on their board and it counts toward their workload. The Lead stays accountable for it."
-                  : "You can add or remove yourself. Naming a colleague is a lead or manager call."}</div></label>
-              ${!existing ? `<label class="field" style="grid-column:1/-1"><span>Service type</span><select id="t-svc"><option value="">Custom (blank)</option></select></label>
-              <div class="field" style="grid-column:1/-1"><div class="form-hint">Pick a department, then a service type. The phases, steps, and labels are created for you. Choose Custom (blank) to start empty.</div></div>
-              <div class="field" style="grid-column:1/-1" id="t-svc-preview" hidden></div>` : ""}
-              ${canPrioritizeOnForm ? `<label class="field"><span>Priority</span><select id="t-priority">${vocab.priorities.map((p) => `<option ${p === (e.priority || "Medium") ? "selected" : ""}>${p}</option>`).join("")}</select></label>` : ""}
-              <label class="field"><span>Content type</span><input id="t-ctype" value="${S.esc(e.content_type || "")}"></label>
-              <label class="field"><span>Campaign</span>
-                <input id="t-campaign" value="${S.esc(e.campaign || "")}" placeholder="e.g. Stratos"
-                  list="t-campaign-list" autocomplete="off">
-                <datalist id="t-campaign-list">${campaignNames(allTasks)
-                  .map((n) => `<option value="${S.esc(n)}"></option>`).join("")}</datalist>
-                <div class="form-hint">Optional. Groups every card for one campaign — including the
-                  one-line jobs raised after it launched, which is all that still connects them.
-                  Pick an existing name rather than retyping it.</div></label>
-              <label class="field"><span>Service charge ($)</span><input id="t-charge" inputmode="decimal" value="${S.esc(e.service_charge || "")}" placeholder="0" pattern="[0-9]*[.]?[0-9]*" title="Optional — numbers only (e.g. 4200 or 4200.50)"></label>
-              ${/* 🔴 A CORRECTION, on an EXISTING card only, and only for somebody who could reassign
-                    it — the same gate the server applies (`can_reassign`), because this feeds the
-                    Monitor's reactive-load number. It is deliberately absent on CREATE: the server
-                    classifies from who is filing for whom (services/task_origin), and offering the
-                    answer as a form field on a new task would turn a derived fact into a guess
-                    somebody has to make while capturing an urgent job.
-                    "Not set" is a real option: it is what every pre-column task holds, and a manager
-                    must be able to put a card back to unclassified rather than pick a side. */""}
-              ${existing && canReassign(existing) ? `<label class="field"><span>Raised as</span>
-                <select id="t-origin">
-                  <option value=""${e.origin ? "" : " selected"}>Not set</option>
-                  ${Object.keys(ORIGIN_LABEL).map((k) => `<option value="${k}"${e.origin === k ? " selected" : ""}>${ORIGIN_LABEL[k]}</option>`).join("")}
-                </select>
-                <div class="form-hint">Planned before the day started, or added once it came up. Set
-                  automatically when the card is created; change it here if that was wrong.</div></label>` : ""}
-              <label class="field" style="grid-column:1/-1"><span>Deliverable URL (client-safe)</span><input id="t-deliv" value="${S.esc(e.deliverable_url || "")}"></label>
-              <label class="field" style="grid-column:1/-1"><span>${S.ICON.lock}Internal notes</span><textarea id="t-inotes">${S.esc(e.internal_notes || "")}</textarea></label>
-            </div>
-          </details>
-        </div>`,
-      footer: `<button class="btn ghost" id="t-cancel">Cancel</button><button class="btn primary" id="t-save">${existing ? "Save changes" : "Create task"}</button>`,
+      // 🔴 NOTHING ROUTING-RELATED IS COLLAPSED (2026-08-11). "Simple by default" (2026-07-27) put
+      // name / description / dates on show and everything else behind "More options", which kept
+      // filing to one field — and made the eleven fields that decide where a card GOES both one
+      // click away and, being collapsed, unread. Work reached the board unrouted because the form
+      // never asked. Client, department, lead, support, priority, campaign and service type are
+      // visible rows now; only the four genuinely rare fields (and the origin correction) collapse.
+      // Filing still needs a NAME and nothing else — every row below it is optional and every one
+      // reads as skippable, which is what a labelled row buys that a boxed field does not.
+      body: `<div class="tf">
+        ${/* The name and description carry no box: the modal head already says this is a task, and a
+              border around the loudest thing in the dialog only competes with it. `aria-label`
+              rather than a visible label for the same reason — the placeholder and the pattern
+              chips below say what it is, and a screen reader still gets a name. */""}
+        <input id="t-name" class="tf-name" value="${S.esc(e.title || "")}" aria-label="Task name"
+          placeholder="${S.esc(NAME_PLACEHOLDER)}" autocomplete="off">
+        <div class="tf-pat" id="t-pat">
+          <span class="seg">Campaign</span><span class="sep">|</span>
+          <span class="seg">Action</span><span class="sep">|</span>
+          <span class="seg">Detail</span>
+          <span class="why">${NAME_HINT}</span>
+        </div>
+        <textarea id="t-desc" class="tf-desc" rows="2" aria-label="Description"
+          placeholder="Add a sentence of context — optional">${S.esc(e.description || "")}</textarea>
+
+        <div class="tf-rows">
+          <div class="tf-row"><div class="k">${S.ICON.building}Client</div>
+            <div class="v"><select id="t-client"><option value="">No client — internal work</option>${clients.map((c) => `<option value="${c.id}" ${c.id === e.client_id ? "selected" : ""}>${S.esc(c.name)}</option>`).join("")}</select></div></div>
+          ${!existing && canManage ? `<div class="tf-row tall" id="t-share-wrap"${e.client_id ? "" : " hidden"}>
+            <div class="k">${S.ICON.eye}Client sees it</div>
+            <div class="v"><label class="tf-check"><input type="checkbox" id="t-share" checked> From day one, not once it is finished</label>
+              <div class="rh">On by default (D6) — the client watches the work cross their board instead of meeting it finished. Untick to keep this one internal; you can share it later from the card.</div></div></div>` : ""}
+          <div class="tf-row"><div class="k">${S.ICON.briefcase}Department</div>
+            <div class="v"><select id="t-team"><option value="">Not routed yet</option>${teams.map((t) => `<option value="${t.id}" ${t.id === e.assigned_team_id ? "selected" : ""}>${S.esc(t.name)}</option>`).join("")}</select></div></div>
+          <div class="tf-row" id="t-lead-row"><div class="k">${S.ICON.user}Lead</div>
+            <div class="v">
+              <select id="t-assignee"${mayNamePerson(e.assigned_team_id) ? "" : " disabled"} title="${mayNamePerson(e.assigned_team_id) ? "" : S.esc(LEAD_LOCKED)}"><option value="">Unassigned</option>${people.map((p) => `<option value="${p.id}" ${p.id === e.assigned_to_id ? "selected" : ""}>${S.esc(p.name)}</option>`).join("")}</select>
+              <div class="rh" id="t-assignee-hint"${mayNamePerson(e.assigned_team_id) ? " hidden" : ""}>${LEAD_LOCKED}</div></div></div>
+          ${/* SUPPORT — many people, none accountable. The same control the Atrium client-card
+                form has always had; a Sentinel task had no equivalent, so the only way to put a
+                second name on one was to invent a checklist step for them — which moved the
+                progress bar, because that bar is done-steps ÷ total-steps. Staffing a card
+                changed how finished it looked.
+                A non-delegator still gets the picker (it lists only THEM, exactly like the
+                breakdown's step owners) because joining and leaving work yourself has to stay
+                open or the field is unusable by the people who pick work up. */""}
+          <div class="tf-row tall"><div class="k">${S.ICON.users}Support</div>
+            <div class="v"><select id="t-support" multiple size="3">${supportOptions(e).join("")}</select>
+              <div class="rh">${mayNamePerson(e.assigned_team_id)
+                ? "Anyone helping, as many as you need. They see the card and it counts toward their workload; the Lead stays accountable."
+                : "You can add or remove yourself. Naming a colleague is a lead or manager call."}</div></div></div>
+          ${canPrioritizeOnForm ? `<div class="tf-row"><div class="k">${S.ICON.target}Priority</div>
+            <div class="v"><select id="t-priority">${vocab.priorities.map((p) => `<option ${p === (e.priority || "Medium") ? "selected" : ""}>${S.esc(p)}</option>`).join("")}</select></div></div>` : ""}
+          ${/* Start and Due are ONE question, so they share a row. Each caption is a real <label>
+                wrapping its own input — a bare `aria-label` would leave the two boxes unlabelled
+                for everyone who can see them. */""}
+          <div class="tf-row"><div class="k">${S.ICON.calendar}Dates</div>
+            <div class="v tf-dates">
+              <label class="tf-mini"><span>Starts</span><input type="date" id="t-start" value="${e.start_date || ""}"></label>
+              <label class="tf-mini"><span>Due</span><input type="date" id="t-due" value="${e.due_date || ""}"></label></div></div>
+          <div class="tf-row tall"><div class="k">${S.ICON.list}Campaign</div>
+            <div class="v">
+              <input id="t-campaign" value="${S.esc(e.campaign || "")}" placeholder="Groups cards — e.g. Stratos"
+                list="t-campaign-list" autocomplete="off">
+              <datalist id="t-campaign-list">${campaignNames(allTasks)
+                .map((n) => `<option value="${S.esc(n)}"></option>`).join("")}</datalist>
+              <div class="rh">Optional. Groups every card for one campaign — including the one-line
+                jobs raised after it launched, which is all that still connects them. Pick an
+                existing name rather than retyping it.</div></div></div>
+          ${!existing ? `<div class="tf-row tall"><div class="k">${S.ICON.doc}Service type</div>
+            <div class="v"><select id="t-svc"><option value="">Custom — start empty</option></select>
+              <div class="rh">Pick a department first. The phases, steps and labels are created for you.</div></div></div>` : ""}
+        </div>
+        ${!existing ? `<div id="t-svc-preview" style="margin-top:13px" hidden></div>` : ""}
+
+        ${/* 🔴 "What the client will read" sits UP FRONT, in its own block, not behind anything: it
+              is the entire content of the client's card. It had no field ANYWHERE in this form until
+              2026-08-03, so every task published by Send to Atrium reached the client's board with an
+              empty note — the bridge sends `client_facing_notes`, and nothing here could set it. It
+              is one block rather than a tenth row because it is the only field in this form the
+              client ever sees, and because the internal Description above it is the other half of
+              the pair: what we tell ourselves vs what they read. */""}
+        <div class="tf-cs">
+          <div class="lb">${S.ICON.eye}What the client will read <i>— this is their whole card</i></div>
+          <textarea id="t-cnote" rows="2" placeholder="Plain language, no internal detail. Blank means they see a title and nothing else.">${S.esc(e.client_facing_notes || "")}</textarea>
+        </div>
+
+        <details class="tk-extra tf-more"${extrasOpen ? " open" : ""}>
+          <summary>Rarely needed — charge, content type, deliverable link, internal notes</summary>
+          <div class="two">
+            <label class="field"><span>Service charge ($)</span><input id="t-charge" inputmode="decimal" value="${S.esc(e.service_charge || "")}" placeholder="0" pattern="[0-9]*[.]?[0-9]*" title="Optional — numbers only (e.g. 4200 or 4200.50)"></label>
+            <label class="field"><span>Content type</span><input id="t-ctype" value="${S.esc(e.content_type || "")}"></label>
+          </div>
+          ${/* 🔴 A CORRECTION, on an EXISTING card only, and only for somebody who could reassign
+                it — the same gate the server applies (`can_reassign`), because this feeds the
+                Monitor's reactive-load number. It is deliberately absent on CREATE: the server
+                classifies from who is filing for whom (services/task_origin), and offering the
+                answer as a form field on a new task would turn a derived fact into a guess
+                somebody has to make while capturing an urgent job.
+                "Not set" is a real option: it is what every pre-column task holds, and a manager
+                must be able to put a card back to unclassified rather than pick a side. */""}
+          ${existing && canReassign(existing) ? `<label class="field"><span>Raised as</span>
+            <select id="t-origin">
+              <option value=""${e.origin ? "" : " selected"}>Not set</option>
+              ${Object.keys(ORIGIN_LABEL).map((k) => `<option value="${k}"${e.origin === k ? " selected" : ""}>${ORIGIN_LABEL[k]}</option>`).join("")}
+            </select>
+            <div class="form-hint">Planned before the day started, or added once it came up. Set
+              automatically when the card is created; change it here if that was wrong.</div></label>` : ""}
+          <label class="field"><span>Deliverable URL (client-safe)</span><input id="t-deliv" value="${S.esc(e.deliverable_url || "")}"></label>
+          <label class="field" style="margin-bottom:0"><span>${S.ICON.lock}Internal notes</span><textarea id="t-inotes" rows="3">${S.esc(e.internal_notes || "")}</textarea></label>
+        </details>
+      </div>`,
+      footer: `<span class="tf-kbd"><kbd>Ctrl</kbd>+<kbd>Enter</kbd> to ${existing ? "save" : "create"}</span>`
+        + `<button class="btn ghost" id="t-cancel">Cancel</button>`
+        + `<button class="btn primary" id="t-save">${existing ? "Save changes" : "Create task"}</button>`,
     });
     S.qs("#t-cancel").onclick = m.close;
+    // The kicker is added AFTER the fact because `S.modal` escapes its `title` — deliberately, since
+    // that is the one string a caller may build from data — so there is no way to pass markup in.
+    // Prepending it to the h3 (which the .tf-modal rule turns into a two-line column) keeps the
+    // dialog's accessible name intact: "Task board / New task", one heading, in reading order.
+    const tfHead = m.root.querySelector(".modal");
+    if (tfHead) {
+      tfHead.classList.add("tf-modal");
+      const h = tfHead.querySelector(".modal-head h3");
+      if (h) h.insertAdjacentHTML("afterbegin", `<span class="tf-kicker">Task board</span>`);
+    }
     // `autofocus` is unreliable on a node injected after load, so put the caret in the name field
-    // explicitly -- with the form this short, you can now type a task and hit save immediately.
+    // explicitly. The name is still the only field filing REQUIRES, so this plus Ctrl+Enter is the
+    // whole fast path — type a task and submit without touching the mouse or the nine rows below.
     const nameBox = S.qs("#t-name");
     if (nameBox) nameBox.focus();
 
-    // Campaign follows the content type, which the service picker fills in but a human may also
-    // type over — so watch the field itself rather than only the picker. Never hide a campaign
-    // somebody already typed: that would silently drop it on save.
+    // The naming rule, shown as it is followed: each part of "Campaign | Action | Detail" fills in
+    // as its pipe is typed. 🔴 STILL NOT A VALIDATOR — see NAME_HINT. Nothing here gates Save, and a
+    // blank name still saves as "Untitled task", because a form that refuses a badly-shaped title
+    // loses the unplanned work §3 of the guidelines is entirely about capturing.
+    const patSegs = S.qsa("#t-pat .seg");
+    const syncPattern = () => {
+      const parts = (nameBox.value || "").split("|");
+      patSegs.forEach((el, i) => el.classList.toggle("on", !!(parts[i] || "").trim()));
+    };
+    if (nameBox && patSegs.length) { nameBox.addEventListener("input", syncPattern); syncPattern(); }
+
     // Share-on-create only means anything once there is a client to share WITH, so the control
     // follows the Client select rather than sitting there greyed out.
     const clientBox = S.qs("#t-client");
@@ -2850,7 +3027,20 @@ window.TaskBoard = {
       fillServices();
     }
 
-    S.qs("#t-save").onclick = async () => {
+    // 🔴 Ctrl/Cmd+Enter SUBMITS, and it has to be bound to the OVERLAY rather than the document:
+    // this form can be open under a confirm (Delete from the drawer), and a document-level handler
+    // would fire for whichever modal is on top. `m.root` is this dialog's own overlay.
+    // Deliberately Ctrl/Cmd+Enter and not plain Enter: the description, client note and internal
+    // notes are textareas, where Enter means a new line.
+    m.root.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); save(); }
+    });
+    S.qs("#t-save").onclick = save;
+    // A shortcut is easy to fire twice, and on CREATE a second POST is a duplicate card rather than
+    // a repeated edit — so the in-flight guard is not optional now that there are two ways to submit.
+    let saving = false;
+    async function save() {
+      if (saving) return;
       // The name field is the NAME. `campaign` is a separate, optional grouping field and is sent
       // as null when blank — writing the title into both is the bug this replaced (§7 of
       // docs/TASKBOARD_REBUILD.md). Labels aren't sent (the server seeds them from the service
@@ -2887,12 +3077,19 @@ window.TaskBoard = {
       // field is not the same as false and must not be forged into one.
       const shareBox = S.qs("#t-share");
       if (!existing && shareBox) payload.share_with_client = shareBox.checked;
+      const btn = S.qs("#t-save");
+      saving = true; btn.disabled = true;
       try {
         if (existing) await S.api("/api/tasks/" + existing.id, { method: "PATCH", body: payload });
         else await S.api("/api/tasks", { method: "POST", body: payload });
         S.toast(existing ? "Task updated" : "Task created", "ok"); m.close(); load();
-      } catch (err) { S.toast(err.detail, "err"); }
-    };
+      } catch (err) {
+        // The modal stays OPEN on failure — the whole point of not closing first is that the typed
+        // work survives a 403 or a dropped connection — so the guard has to be released here.
+        saving = false; btn.disabled = false;
+        S.toast(err.detail, "err");
+      }
+    }
     function val(id) { return S.qs("#" + id).value || null; }
     function numOrNull(id) { const v = S.qs("#" + id).value; return v ? Number(v) : null; }
   }
