@@ -230,6 +230,17 @@ window.TaskBoard = {
       .tcard .t-disc{width:6px;height:6px;border-radius:50%;flex:none}
       .tcard .t-client{font-size:10px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;
         color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+      /* The campaign is a SUB-grouping under the client, so it is one more segment of that same
+         line rather than a chip. A pill was not tried and rejected here -- the label above it
+         already lost that argument (see .t-disc): on a board where nearly every card in a column
+         shares a value, a filled pill is the loudest thing on screen and says the least.
+         Lowercase and lighter than the client, because the reading order is client -> campaign ->
+         name. The '/' is generated content, so it disappears with the value instead of leaving a
+         stranded separator. It shrinks BEFORE the client does: whose work this is outranks which
+         campaign it belongs to when there is not room for both. */
+      .tcard .t-camp{font-size:10px;font-weight:600;letter-spacing:.2px;color:var(--muted);
+        white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex-shrink:2;opacity:.9}
+      .tcard .t-camp::before{content:"/";margin-right:5px;opacity:.55}
       /* Right-aligned, and the ONLY coloured word on a healthy board. */
       .tcard .t-flag{margin-left:auto;flex:none;font-size:10px;font-weight:800;letter-spacing:.5px;
         text-transform:uppercase;color:var(--muted);white-space:nowrap}
@@ -440,6 +451,46 @@ window.TaskBoard = {
   // Nothing sets it any more: the Priority select became the `urgent` attention pill (see ATT).
   let filters = { client_id: "", team_id: "", priority: "", assignee_id: "" };
   let search = "";
+  // 🔴 CAMPAIGN IS CLIENT-SIDE, and deliberately NOT a member of `filters` (2026-08-11). Everything
+  // in that object is sent to the server by `load()`, and `campaign` is free TEXT with no vocabulary
+  // behind it — its options are whatever the loaded cards happen to carry, so there is nothing for a
+  // server filter to validate against and no reason to re-fetch the board to apply one. It behaves
+  // like `search` and like the attention pills: counted and applied over the cards already fetched,
+  // so toggling it can never change another control's number.
+  let campaign = "";
+  // 🔴 ONE derivation of "which campaign is this card part of", read by all four surfaces that ask
+  // (the card, the search, the filter's option list and the drawer). It cannot simply be `t.campaign`:
+  // every task created before 2026-08-04 has `campaign === title`, because one input used to write
+  // both fields (docs/TASKBOARD_REBUILD.md §7), and those rows were deliberately never backfilled.
+  // So a legacy card would print its own name twice — once as the campaign, once as the title — and
+  // the filter would offer one bogus "campaign" per legacy task. Suppressed here rather than in each
+  // reader, which is how two of them would drift.
+  const campaignOf = (t) => {
+    const c = (t.campaign || "").trim();
+    return c && c !== (t.title || "").trim() ? c : "";
+  };
+
+  // The task-placement guidelines' naming rule, stated where the name is actually typed — and shown
+  // on BOTH task forms (a Sentinel row and an Atrium client card), because the rule is about the
+  // board they share, not about which system stores the row.
+  //
+  // 🔴 A HINT, NEVER A VALIDATOR. The rule exists so a title reads at a glance; §3 of those same
+  // guidelines is entirely about workers logging unplanned work the moment it appears, and a form
+  // that rejects a title is a form that loses that work instead of recording it imperfectly. The
+  // client name is left out because the card already prints it ABOVE the title (the .t-client span in
+  // `card()`), which is also the one part of this rule the UI can enforce for free: there is nowhere
+  // in this form to type a client name, only a picker.
+  const NAME_HINT = "Campaign work: <b>Campaign | Action | Detail</b> — e.g. Stratos | Increase daily "
+    + "budget. Anything else: <b>Subject | Action | Detail</b> — e.g. Monthly Performance Report. "
+    + "Leave the client out: the card shows it above the title.";
+  const NAME_PLACEHOLDER = "Stratos | Increase daily budget";
+
+  // Planned ahead vs added during the day — §1 vs §3 of the task-placement guidelines, classified by
+  // the server (`services/task_origin`). 🔴 An UNKNOWN origin has no entry, so every reader falls
+  // through to "don't print it": the rows created before the column existed, and every Atrium card
+  // (no Sentinel creator to judge), are genuinely unclassified, and labelling them "Planned" would
+  // assert something nobody knows — the same mistake as rendering a missing on-time rate as 0%.
+  const ORIGIN_LABEL = { planned: "Planned ahead", added: "Added during the day" };
   // 🔴 THE ATTENTION PILLS — one live count each, independently toggleable (2026-08-06).
   //
   // They replace the Overdue checkbox, the My work button and the "All Priority" select, and they
@@ -508,6 +559,10 @@ window.TaskBoard = {
       <input id="f-search" class="tb-search" type="search" placeholder="Search tasks, clients, people…" autocomplete="off">
       <select id="f-client"><option value="">All clients</option>${clients.map((c) => `<option value="${c.id}">${S.esc(c.name)}</option>`).join("")}</select>
       <select id="f-team"><option value="">All departments</option>${teams.map((t) => `<option value="${t.id}">${S.esc(t.name)}</option>`).join("")}</select>
+      ${/* Options are filled by refreshCampaignList from the cards actually on the board, and it
+            stays hidden until there is one — the same rule as the saved-views picker below, for the
+            same reason: a dropdown whose only entry is its own placeholder cannot do anything. */""}
+      <select id="f-campaign" title="Campaign" hidden><option value="">All campaigns</option></select>
       ${canMonitor ? `<select id="f-assignee"><option value="">Anyone</option><option value="none">Unassigned</option>${people.map((p) => `<option value="${p.id}">${S.esc(p.name)}</option>`).join("")}</select>` : ""}
       <span class="tb-sep"></span>
       <span class="tb-att" id="tb-att"></span>
@@ -541,12 +596,15 @@ window.TaskBoard = {
   const writeViews = (v) => {
     try { localStorage.setItem(VIEWS_KEY, JSON.stringify(v)); } catch (e) { /* private mode */ }
   };
-  const currentView = () => ({ filters: { ...filters }, search, att: { ...att }, mode });
+  const currentView = () => ({ filters: { ...filters }, search, campaign, att: { ...att }, mode });
 
   function applyView(v) {
     if (!v) return;
     filters = { client_id: "", team_id: "", priority: "", assignee_id: "", ...(v.filters || {}) };
     search = v.search || "";
+    // A view saved before the campaign filter existed simply has no campaign — "" is the right
+    // answer for it, so no compatibility branch is needed here (unlike `att` below).
+    campaign = v.campaign || "";
     // 🔴 A view saved BEFORE the pills existed carries `overdueOnly`/`mineOnly` booleans instead of
     // `att`. These live in each person's localStorage, so dropping the old keys would quietly change
     // what somebody's saved view shows — read both, write the new one.
@@ -554,7 +612,8 @@ window.TaskBoard = {
     if (v.mode && (v.mode !== "monitor" || canMonitor)) mode = v.mode;
     // Push the restored state back into the controls, or the board would filter by values the
     // filter bar is not showing — which reads as a bug, not a view. (The pills are re-rendered from
-    // `att` on every render, so they need no line here.)
+    // `att` on every render, so they need no line here. Nor does #f-campaign: refreshCampaignList
+    // rebuilds its options from the loaded cards on every render and marks `campaign` selected.)
     S.qs("#f-client").value = filters.client_id;
     S.qs("#f-team").value = filters.team_id;
     if (S.qs("#f-assignee")) S.qs("#f-assignee").value = filters.assignee_id;
@@ -565,6 +624,8 @@ window.TaskBoard = {
   S.qs("#f-search").oninput = (e) => { search = e.target.value.trim().toLowerCase(); render(); };
   S.qs("#f-client").onchange = (e) => { filters.client_id = e.target.value; load(); };
   S.qs("#f-team").onchange = (e) => { filters.team_id = e.target.value; load(); };
+  // `render`, not `load` — the campaign filter narrows the cards already fetched (see `campaign`).
+  S.qs("#f-campaign").onchange = (e) => { campaign = e.target.value; render(); };
   if (S.qs("#f-assignee")) S.qs("#f-assignee").onchange = (e) => { filters.assignee_id = e.target.value; load(); };
   if (canCreate) S.qs("#new-task").onclick = () => taskForm(null);
   S.qs("#past-work").onclick = () => showPastWork();
@@ -578,10 +639,12 @@ window.TaskBoard = {
   S.qs("#f-clear").onclick = () => {
     filters = { client_id: "", team_id: "", priority: "", assignee_id: "" };
     search = "";
+    campaign = "";
     att = {};
     S.qs("#f-search").value = "";
     S.qs("#f-client").value = "";
     S.qs("#f-team").value = "";
+    S.qs("#f-campaign").value = "";
     if (S.qs("#f-assignee")) S.qs("#f-assignee").value = "";
     load();
   };
@@ -914,19 +977,48 @@ window.TaskBoard = {
     // work", the search and the selects answer "WHICH work". Two different questions, so the
     // page-level scope is layered on top of this board's own filters rather than replacing them.
     if (!inPeopleScope(t)) return false;
+    // Campaign before the search, because it is the coarser question ("which campaign") and a card
+    // outside the picked one is off the board however its text reads.
+    if (campaign && campaignOf(t) !== campaign) return false;
     if (!search) return true;
     // Searching a person's name finds the cards they SUPPORT too, not just the ones they lead —
     // otherwise typing a colleague's name silently under-reports what they are on, which is the same
     // class of half-answer the "My work" button used to give.
-    return [t.title, t.assignee && t.assignee.name, t.client_name]
+    // The campaign is searchable too (2026-08-11): per §4 of the task-placement guidelines, work
+    // raised after a campaign launches is a separate one-line card, so typing "Stratos" has to find
+    // every card in that campaign — not only the ones whose title happens to repeat its name.
+    return [t.title, t.assignee && t.assignee.name, t.client_name, campaignOf(t)]
       .concat((t.support || []).map((p) => p.name))
       .concat(t.atrium_support_names || [])
       .some((s) => (s || "").toLowerCase().includes(search));
   }
 
   const matches = (t) => inScope(t) && ATT.every((a) => !att[a.key] || a.test(t));
-  const filtering = () => !!(search || att.overdue || att.changes || att.review || att.urgent
-    || att.mine || filters.client_id || filters.team_id || filters.assignee_id);
+  const filtering = () => !!(search || campaign || att.overdue || att.changes || att.review
+    || att.urgent || att.mine || filters.client_id || filters.team_id || filters.assignee_id);
+
+  // The campaign options, rebuilt on every render because campaigns are free TEXT and not a
+  // vocabulary: they are whatever the loaded cards carry. Built over the FETCHED set, not the
+  // filtered one, so picking a campaign never removes its own option from the list.
+  // The campaigns the board can actually see, in one place: the filter's options below and the New
+  // Task form's autocomplete both read it. 🔴 A free-text grouping key drifts without a list to pick
+  // from — "Stratos" and "stratos " are two campaigns to every `===` in this file — so offering the
+  // existing names is what keeps the field usable as a key at all.
+  const campaignNames = (pool) => [...new Set(pool.map(campaignOf).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b));
+
+  function refreshCampaignList(pool) {
+    const sel = S.qs("#f-campaign");
+    if (!sel) return;
+    const names = campaignNames(pool);
+    // 🔴 A selection that is no longer on the board is DROPPED. Without this, changing the client
+    // filter can leave a campaign selected that none of the new cards belong to — an empty board
+    // with its cause hidden in a control that is showing a value the board no longer contains.
+    if (campaign && names.indexOf(campaign) < 0) campaign = "";
+    sel.hidden = !names.length;
+    sel.innerHTML = `<option value="">All campaigns</option>`
+      + names.map((n) => `<option value="${S.esc(n)}"${n === campaign ? " selected" : ""}>${S.esc(n)}</option>`).join("");
+  }
 
   // The pills, their counts, and the "N of M" beside them. Counted over `inScope` — the cards the
   // selects and the search left on the board — so pressing one pill never moves another's number.
@@ -980,6 +1072,10 @@ window.TaskBoard = {
     S.qs("#f-search").closest(".tb-bar").style.display = mode === "monitor" ? "none" : "";
     const board = S.qs("#board");
     board.className = mode === "board" ? "board" : "";
+    // 🔴 STRICTLY BEFORE the filter below, because it can CLEAR a stale `campaign` (see its own
+    // comment) and `inScope` reads that variable. Run it afterwards and the board would spend one
+    // whole render filtered by a campaign the select had already stopped offering.
+    refreshCampaignList(allTasks);
     // `pool`, not `scope`: the module-level `scope` is the page-wide PEOPLE scope, and this
     // function reads it three lines up for the lead text. A `const scope` here would put that
     // read in the temporal dead zone and throw before the board ever painted.
@@ -1177,11 +1273,17 @@ window.TaskBoard = {
         // 🔴 OPEN client cards, like both sub-lines above it (2026-08-06). The server sent a TOTAL
         // until then, so this line could be bigger than the Open count it hangs under.
         const clientNote = r.client_cards ? `<span class="mon-sub" title="Open client cards Atrium owns, led by this person. Atrium sends no completion date, so these are NOT in Cycle or On time.">${r.client_cards} client</span>` : "";
+        // 🔴 The reactive half of the plate (2026-08-11) — §1 vs §3 of the task-placement guidelines.
+        // OPEN-scoped like the three sub-lines above it, because this cell is a breakdown of the Open
+        // number beside it; `client_cards` shipped as a total once and produced "8 open · 19 client".
+        // Unclassified work (every task predating the column, and every Atrium card) is in NEITHER
+        // side, so this line can be smaller than Open without the difference being planned work.
+        const addedNote = r.added_open ? `<span class="mon-sub" title="Open work that was ADDED during the day rather than planned in — an unexpected revision, a budget change, a report suddenly needed. Tasks raised before this was tracked count as neither.">${r.added_open} added</span>` : "";
         return `<tr data-uid="${u.id}" tabindex="0">
           <td class="who">${S.avatar(u, "sm")}<div><div class="n">${S.esc(u.name)} ${capacity(r)}</div><div class="r">${S.esc(u.role_label || u.role || "")}</div></div></td>
           <td>${bandPill(r)}</td>
           <td class="wl"><div class="wl-bar">${segs || '<i class="s-none" style="flex:1" title="No open tasks"></i>'}</div></td>
-          <td class="num">${open}${stepNote}${supportNote}${clientNote}</td>
+          <td class="num">${open}${stepNote}${supportNote}${clientNote}${addedNote}</td>
           <td class="num ${r.overdue ? "bad" : ""}">${r.overdue || 0}</td>
           <td class="num ${r.stale_open ? "warn" : ""}">${r.stale_open || 0}</td>
           <td class="num">${num(r.median_cycle_days, "d")}</td>
@@ -1199,6 +1301,9 @@ window.TaskBoard = {
         A person can appear on a card they don't lead — as <b>support</b>, or holding a phase or step
         of it — so these rows do not add up to the board's total. That is shared work, counted on
         every plate it is really on.
+        <b>Added</b> is open work raised during the day rather than planned in ahead of it. Work
+        created before this was tracked — and every client card, which has no Sentinel creator to
+        judge — counts as neither planned nor added, so Open minus Added is not "planned".
       </p>`;
     const jump = (uid) => { setMode("employee"); requestAnimationFrame(() => focusLane(uid)); };
     S.qsa(".mon-tbl tbody tr").forEach((tr) => {
@@ -1414,11 +1519,16 @@ window.TaskBoard = {
             dueCls === "over" ? ` · ${daysLate(t.due_date)}d late` : ""}</span>`
         : "");
     const pct = t.checklist_total ? Math.round(100 * t.checklist_done / t.checklist_total) : 0;
+    const camp = campaignOf(t);
     return `<div class="tcard${t.on_hold ? " quiet" : ""}" draggable="true" data-id="${t.id}">
       <div class="t-top">
         ${pickable ? `<input type="checkbox" class="t-pick" aria-label="Select ${S.esc(t.title)}">` : ""}
         ${label ? `<span class="t-disc" style="background:${S.esc(S.colors.labels[label] || "#6B7280")}" title="${S.esc(t.labels.join(", "))}"></span>` : ""}
         <span class="t-client">${S.esc(t.client_name || "Internal")}</span>
+        ${/* Client / campaign reads as one line, which is also the naming rule the form now states:
+              the client is printed HERE, above the title, so it does not belong in the title, and the
+              campaign is printed here so it does not have to be repeated in the title either. */
+          camp ? `<span class="t-camp" title="Campaign — ${S.esc(camp)}">${S.esc(camp)}</span>` : ""}
         ${laneSupports ? `<span class="t-hat" title="Supporting — ${S.esc((t.assignee && t.assignee.name) || "somebody else")} leads this card">supporting</span>` : ""}
         ${flag ? `<span class="t-flag ${flag.c}">${flag.t}</span>` : ""}
         ${canDelete(t) ? `<button class="t-del" data-del="${t.id}" title="Delete task" aria-label="Delete task">✕</button>` : ""}
@@ -1763,8 +1873,15 @@ window.TaskBoard = {
           <dt>Client</dt><dd>${S.esc(t.client_name || "—")}</dd>
           <dt>Started</dt><dd>${t.start_date ? S.fmtDateFull(t.start_date + "T00:00:00+08:00") : "—"}</dd>
           ${/* Optional grouping field — shown only when set, so a task that is not part of a
-                campaign does not carry an empty row (it used to echo the title back). */
-            t.campaign ? `<dt>Campaign</dt><dd>${S.esc(t.campaign)}</dd>` : ""}
+                campaign does not carry an empty row. Through `campaignOf` since 2026-08-11, which is
+                also what stops a pre-2026-08-04 task echoing its own title back into this row: those
+                rows really do hold `campaign === title` and were deliberately never backfilled. */
+            campaignOf(t) ? `<dt>Campaign</dt><dd>${S.esc(campaignOf(t))}</dd>` : ""}
+          ${/* 🔴 Shown ONLY when classified. A task raised before this column existed, and every
+                Atrium card (no Sentinel creator to judge), genuinely has no answer — and printing
+                "Planned" on those would be the on-time-rate-as-0 mistake in another field. */
+            ORIGIN_LABEL[t.origin]
+              ? `<dt>Raised</dt><dd>${ORIGIN_LABEL[t.origin]}</dd>` : ""}
           ${t.content_type ? `<dt>Content type</dt><dd>${S.esc(t.content_type)}</dd>` : ""}
           ${t.deliverable_url ? `<dt>Deliverable</dt><dd><a href="${S.esc(t.deliverable_url)}" target="_blank">Open →</a></dd>` : ""}
         </dl>
@@ -2438,14 +2555,16 @@ window.TaskBoard = {
     const roster = t.atrium_roster || [];
     const support = t.atrium_support_ids || [];
     const extrasOpen = !!(t.atrium_department || t.atrium_lead_id || support.length || t.content_type
-      || t.service_charge || t.deliverable_url || t.internal_notes || t.on_hold
+      || t.service_charge || t.deliverable_url || t.internal_notes || t.on_hold || campaignOf(t)
       || (t.priority && t.priority !== "Medium"));
     const m = S.modal({
       title: "Edit client card",
       wide: true,
       body: `<div class="grid" style="grid-template-columns:1fr 1fr;gap:16px">
         <div class="form-hint" style="grid-column:1/-1">This card lives in ${S.esc(t.client_name || "Atrium")}'s workspace — saving writes straight back to Atrium.</div>
-        <label class="field" style="grid-column:1/-1"><span>Task name</span><input id="a-title" value="${S.esc(t.title || "")}" placeholder="What needs doing?"></label>
+        <label class="field" style="grid-column:1/-1"><span>Task name</span>
+          <input id="a-title" value="${S.esc(t.title || "")}" placeholder="${S.esc(NAME_PLACEHOLDER)}">
+          <div class="form-hint">${NAME_HINT}</div></label>
         <label class="field" style="grid-column:1/-1"><span>Client note — the client reads this</span><textarea id="a-cnote" rows="3" placeholder="Optional">${S.esc(t.client_facing_notes || "")}</textarea></label>
         <label class="field"><span>Launch date</span><input type="date" id="a-due" value="${t.due_date || ""}"></label>
         <label class="field"><span>Start date</span><input type="date" id="a-start" value="${t.start_date || ""}"></label>
@@ -2458,6 +2577,17 @@ window.TaskBoard = {
               <label class="field" style="grid-column:1/-1"><span>Support — pick as many as you need</span><select id="a-support" multiple size="4">${roster.map((p) => `<option value="${S.esc(p.id)}" ${support.indexOf(p.id) >= 0 ? "selected" : ""}>${S.esc(p.name)}</option>`).join("")}</select></label>
               ${isAM ? `<label class="field"><span>Priority</span><select id="a-priority">${vocab.priorities.map((p) => `<option ${p === (t.priority || "Medium") ? "selected" : ""}>${p}</option>`).join("")}</select></label>` : ""}
               <label class="field"><span>Content type</span><input id="a-ctype" value="${S.esc(t.content_type || "")}"></label>
+              ${/* 🔴 Editable here since 2026-08-11, and it was a real gap rather than a deliberate
+                    omission: `FIELD_MAP` has always mapped `campaign`, and this board's campaign
+                    filter and search now read it on BOTH kinds of card — so a client card could be
+                    grouped by a campaign nobody could set from the only surface that edits it.
+                    Same datalist as the Sentinel form: the names come off this board, and a grouping
+                    key retyped by hand is a second campaign. */""}
+              <label class="field"><span>Campaign</span>
+                <input id="a-campaign" value="${S.esc(t.campaign || "")}" placeholder="e.g. Stratos"
+                  list="a-campaign-list" autocomplete="off">
+                <datalist id="a-campaign-list">${campaignNames(allTasks)
+                  .map((n) => `<option value="${S.esc(n)}"></option>`).join("")}</datalist></label>
               <label class="field"><span>Service charge ($)</span><input id="a-charge" inputmode="decimal" value="${S.esc(t.service_charge || "")}" placeholder="0" pattern="[0-9]*[.]?[0-9]*" title="Optional — numbers only (e.g. 4200 or 4200.50)"></label>
               <label class="field" style="grid-column:1/-1"><span>Deliverable URL (client-safe)</span><input id="a-deliv" value="${S.esc(t.deliverable_url || "")}"></label>
               <label class="field" style="grid-column:1/-1"><span>${S.ICON.lock}Internal notes</span><textarea id="a-inotes">${S.esc(t.internal_notes || "")}</textarea></label>
@@ -2482,6 +2612,10 @@ window.TaskBoard = {
         atrium_lead_id: S.qs("#a-lead").value,
         atrium_support_ids: Array.from(S.qs("#a-support").options).filter((o) => o.selected).map((o) => o.value),
         content_type: S.qs("#a-ctype").value,
+        // `null` when blank, not "" — `update_task` uses `exclude_unset`, so an explicit null is what
+        // actually CLEARS a campaign; "" would store an empty string that every `if (campaign)` on
+        // this board then treats as set-but-blank.
+        campaign: S.qs("#a-campaign").value.trim() || null,
         service_charge: S.qs("#a-charge").value || null,
         deliverable_url: S.qs("#a-deliv").value,
         internal_notes: S.qs("#a-inotes").value,
@@ -2520,10 +2654,19 @@ window.TaskBoard = {
     // 🔴 Campaign is a GROUPING field, not the name (§7 of docs/TASKBOARD_REBUILD.md, built
     // 2026-08-04). Until then ONE input wrote into both `title` and `campaign`, so the detail
     // modal's Campaign row just echoed the title back on every task. The name field is now the
-    // name; Campaign is optional and only OFFERED when the service is campaign-shaped, which is
-    // derived from the template's content type — no flag column, no migration (the alternative
-    // the doc floated). Existing rows keep their duplicated value until someone edits them.
-    const isCampaignType = (ct) => (ct || "").trim().toLowerCase() === "campaign";
+    // name. Existing rows keep their duplicated value until someone edits them — `campaignOf` is
+    // what stops that duplicate being displayed anywhere.
+    //
+    // 🔴 IT IS NOW OFFERED ON EVERY TASK, not only a campaign-shaped one (2026-08-11). It used to be
+    // revealed by `content_type === "Campaign"` — i.e. by picking the one campaign service template —
+    // and that made the field unreachable for exactly the cards that need it most. Per §4 of the
+    // task-placement guidelines, work raised AFTER a campaign launches is deliberately a separate
+    // one-line task with no service template and no campaign content type, so the field it needed to
+    // fill was hidden by the very rule meant to keep the form tidy: campaign grouping could only ever
+    // cover campaign-BUILD cards, which are the ones least in need of grouping (there is one).
+    // It lives inside More options, which is collapsed by default, so always showing it costs a
+    // closed row. `isCampaignType` and `syncCampaign` were deleted with the condition — a reveal rule
+    // for a field that is never hidden is dead code that reads as though it still governs something.
     // 🔴 WHO MAY NAME A PERSON — mirrors the server, and the server is what enforces it:
     // an existing card asks `task_perms.can_reassign` (AM+ anywhere, a team lead while the card is
     // routed to their OWN department); a new one asks `create_task`'s `may_delegate`, which is the
@@ -2571,7 +2714,9 @@ window.TaskBoard = {
       // surfaces feel identical. The collapsed block auto-opens when editing a task that already
       // uses those fields, so nothing is ever hidden from the person who set it.
       body: `<div class="grid" style="grid-template-columns:1fr 1fr;gap:16px">
-        <label class="field" style="grid-column:1/-1"><span>Task name</span><input id="t-name" value="${S.esc(e.title || "")}" placeholder="What needs doing?" autofocus></label>
+        <label class="field" style="grid-column:1/-1"><span>Task name</span>
+          <input id="t-name" value="${S.esc(e.title || "")}" placeholder="${S.esc(NAME_PLACEHOLDER)}" autofocus>
+          <div class="form-hint">${NAME_HINT}</div></label>
         <label class="field" style="grid-column:1/-1"><span>Description</span><textarea id="t-desc" rows="3" placeholder="Optional — a sentence of context">${S.esc(e.description || "")}</textarea></label>
         <label class="field"><span>Due date</span><input type="date" id="t-due" value="${e.due_date || ""}"></label>
         <label class="field"><span>Start date</span><input type="date" id="t-start" value="${e.start_date || ""}"></label>
@@ -2608,9 +2753,30 @@ window.TaskBoard = {
               <div class="field" style="grid-column:1/-1" id="t-svc-preview" hidden></div>` : ""}
               ${canPrioritizeOnForm ? `<label class="field"><span>Priority</span><select id="t-priority">${vocab.priorities.map((p) => `<option ${p === (e.priority || "Medium") ? "selected" : ""}>${p}</option>`).join("")}</select></label>` : ""}
               <label class="field"><span>Content type</span><input id="t-ctype" value="${S.esc(e.content_type || "")}"></label>
-              <label class="field" id="t-campaign-wrap"${isCampaignType(e.content_type) || e.campaign ? "" : " hidden"}><span>Campaign</span>
-                <input id="t-campaign" value="${S.esc(e.campaign || "")}" placeholder="Optional — the campaign this belongs to"></label>
+              <label class="field"><span>Campaign</span>
+                <input id="t-campaign" value="${S.esc(e.campaign || "")}" placeholder="e.g. Stratos"
+                  list="t-campaign-list" autocomplete="off">
+                <datalist id="t-campaign-list">${campaignNames(allTasks)
+                  .map((n) => `<option value="${S.esc(n)}"></option>`).join("")}</datalist>
+                <div class="form-hint">Optional. Groups every card for one campaign — including the
+                  one-line jobs raised after it launched, which is all that still connects them.
+                  Pick an existing name rather than retyping it.</div></label>
               <label class="field"><span>Service charge ($)</span><input id="t-charge" inputmode="decimal" value="${S.esc(e.service_charge || "")}" placeholder="0" pattern="[0-9]*[.]?[0-9]*" title="Optional — numbers only (e.g. 4200 or 4200.50)"></label>
+              ${/* 🔴 A CORRECTION, on an EXISTING card only, and only for somebody who could reassign
+                    it — the same gate the server applies (`can_reassign`), because this feeds the
+                    Monitor's reactive-load number. It is deliberately absent on CREATE: the server
+                    classifies from who is filing for whom (services/task_origin), and offering the
+                    answer as a form field on a new task would turn a derived fact into a guess
+                    somebody has to make while capturing an urgent job.
+                    "Not set" is a real option: it is what every pre-column task holds, and a manager
+                    must be able to put a card back to unclassified rather than pick a side. */""}
+              ${existing && canReassign(existing) ? `<label class="field"><span>Raised as</span>
+                <select id="t-origin">
+                  <option value=""${e.origin ? "" : " selected"}>Not set</option>
+                  ${Object.keys(ORIGIN_LABEL).map((k) => `<option value="${k}"${e.origin === k ? " selected" : ""}>${ORIGIN_LABEL[k]}</option>`).join("")}
+                </select>
+                <div class="form-hint">Planned before the day started, or added once it came up. Set
+                  automatically when the card is created; change it here if that was wrong.</div></label>` : ""}
               <label class="field" style="grid-column:1/-1"><span>Deliverable URL (client-safe)</span><input id="t-deliv" value="${S.esc(e.deliverable_url || "")}"></label>
               <label class="field" style="grid-column:1/-1"><span>${S.ICON.lock}Internal notes</span><textarea id="t-inotes">${S.esc(e.internal_notes || "")}</textarea></label>
             </div>
@@ -2654,15 +2820,6 @@ window.TaskBoard = {
     };
     if (!existing) S.qs("#t-team").addEventListener("change", syncAssignee);
 
-    const ctypeBox = S.qs("#t-ctype");
-    const syncCampaign = () => {
-      const wrap = S.qs("#t-campaign-wrap");
-      if (!wrap) return;
-      const typed = (S.qs("#t-campaign").value || "").trim();
-      wrap.hidden = !isCampaignType(ctypeBox ? ctypeBox.value : "") && !typed;
-    };
-    if (ctypeBox) ctypeBox.addEventListener("input", syncCampaign);
-
     // Service-type picker (new tasks only): filter recipes by the chosen department, preview the
     // checklist it will seed, and prefill the content type. The server does the actual seeding.
     const svcSel = S.qs("#t-svc");
@@ -2680,8 +2837,6 @@ window.TaskBoard = {
         const ct = S.qs("#t-ctype"); if (ct && !ct.value) ct.value = tpl.content_type || "";
         const prio = S.qs("#t-priority"); if (prio && tpl.default_priority && prio.value === "Medium") prio.value = tpl.default_priority;
         const desc = S.qs("#t-desc"); if (desc && !desc.value.trim() && tpl.default_description) desc.value = tpl.default_description;
-        // Picking a campaign-shaped service is what reveals the Campaign field (see isCampaignType).
-        syncCampaign();
       };
       const fillServices = () => {
         const opts = templatesForTeam(numOrNull("t-team"));
@@ -2723,6 +2878,10 @@ window.TaskBoard = {
       if (!existing) payload.status = newStatus;
       if (!existing && svcSel) payload.service_key = svcSel.value || null;
       if (canPrioritizeOnForm) payload.priority = S.qs("#t-priority").value;
+      // Only when the control is on the form (an existing card, a manager). `null` for "Not set" —
+      // `update_task` uses `exclude_unset`, so an explicit null is what actually clears it back to
+      // unclassified, whereas "" would be normalized away and silently leave the old value.
+      if (S.qs("#t-origin")) payload.origin = S.qs("#t-origin").value || null;
       // Share-on-create (D6). Sent ONLY on create, and only when the control exists — the server
       // treats an absent value as "decide for me" (share when there is a client), so an omitted
       // field is not the same as false and must not be forged into one.

@@ -29,6 +29,22 @@ class Task(Base):
     # "own tasks" visibility rule: an employee always keeps sight of tasks they made, even
     # while unassigned or after a manager reassigns them. Nullable: tasks predating the column.
     created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    # 🔴 PLANNED AHEAD, or RAISED DURING THE DAY (2026-08-11) — `constants.ORIGIN_*`.
+    #
+    # The one fact the task-placement guidelines need that this board could not report: §1 makes the
+    # Team Lead responsible for placing planned work before the day starts, §3 makes the worker
+    # responsible for adding whatever comes up afterwards, and the stated reason is that Sentinel must
+    # "accurately reflect the actual work completed during the day". Every task looked equally planned,
+    # so a team's reactive load was invisible on every surface.
+    #
+    # 🔴 NULLABLE, and it stays null for the rows that predate it. A default of "planned" would assert
+    # that thousands of historical tasks were planned, which nobody knows — `None` reports as unknown
+    # and is excluded from both counts, the same contract `on_time_rate` follows for undated work.
+    #
+    # Set ONCE at create time by `services/task_origin.classify` (never a form field, like
+    # `created_by_id`) and correctable afterwards by whoever could reassign the card — see that
+    # module for why a derived answer needs a correction path.
+    origin: Mapped[str | None] = mapped_column(String(12), nullable=True)
     priority: Mapped[str] = mapped_column(String(16), default=PRIORITY_MEDIUM)  # AM-only to change
     status: Mapped[str] = mapped_column(String(32), default=TASK_TODO, index=True)
     due_date: Mapped[date | None] = mapped_column(Date, nullable=True)

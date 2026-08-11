@@ -71,7 +71,7 @@ This is the most important defect in scope, and Stage 0 is nothing but fixing it
 | `Task.checklist_json` | [task.py:39](../backend/app/models/task.py#L39) | Legacy flat list, superseded by `maintasks_json`, not written since the two-level breakdown shipped ([tasks.py:288](../backend/app/routers/tasks.py#L288) says so). Keep the read-migration in `maintasks.normalize`; drop it from `task_detail`'s output ([serializers.py:214](../backend/app/serializers.py#L214)), which ships a second copy of the breakdown to every API consumer. |
 | `AtriumApproval`'s three response columns | [task.py:135-137](../backend/app/models/task.py#L135) | Never written. Replaced by the real reverse channel (D4). |
 | `POST /{id}/attachments` | [tasks.py:515](../backend/app/routers/tasks.py#L515) | Records a filename + byte count as a comment and **throws the bytes away** ("MVP: no blob store wired"). It looks like file upload and is not. |
-| `Task.campaign` as a second field | [task.py:21](../backend/app/models/task.py#L21) | The form writes the same string to `title` **and** `campaign` ([taskboard.js:750](../frontend/static/js/taskboard.js#L750)). Two columns, one value, guaranteed to diverge the first time anything edits one via the API. |
+| ~~`Task.campaign` as a second field~~ | [task.py:21](../backend/app/models/task.py#L21) | The form wrote the same string to `title` **and** `campaign`. Two columns, one value, guaranteed to diverge the first time anything edited one via the API. **KEPT, not retired** — §7 split the two inputs (2026-08-04) and §7a made it a real grouping field (2026-08-11). The rows written before the split still hold the duplicate; `campaignOf` suppresses it on read. |
 | The "✓ In Atrium" pill on unpublished rows | [taskboard.js:417](../frontend/static/js/taskboard.js#L417) | Reports a share that never happened (§1.2). |
 
 Kept, contrary to my first read: **both manager views stay** (§2.4j).
@@ -615,18 +615,73 @@ sign-in). On the Atrium side: `tools/_validate_dash_js.py`, `_atrium_smoketest.p
   campaign-shaped. Until this was built, ONE input (`#t-campaign`, labelled "Task name") wrote into
   **both** `title` and `campaign`, so the detail modal's Campaign row echoed the title back on every
   task — which is how it was spotted.
-  **Built without the flag column:** campaign-shaped is derived from `content_type == "Campaign"`
-  (`isCampaignType` in `taskboard.js`), so no `ServiceTemplate` migration was needed. Today exactly
-  one seeded template qualifies (`google_meta_campaign`); the three standalone ad services
-  (Video/Static/Carousel Ad) deliberately do **not**. The name input is `#t-name`, the campaign input
-  is `#t-campaign` inside More options, and it is revealed by the service picker OR by typing
-  "Campaign" into Content type (`syncCampaign` watches the field, not just the picker, and never
-  hides a value somebody already typed — that would silently drop it on save). The save payload sends
+  **Built without the flag column:** no `ServiceTemplate` migration was needed. The name input is
+  `#t-name`, the campaign input is `#t-campaign` inside More options. The save payload sends
   `campaign: null` when blank; `update_task` uses `exclude_unset`, so an explicit null really clears
   it. The detail modal renders the Campaign row **only when set**.
   🔴 **Existing rows were deliberately NOT backfilled** — every task created before 2026-08-04 still
   has `campaign == title` and will keep showing it until someone edits that task. Verified live:
   create-without-campaign → `None`, create-with → stored, PATCH null → cleared.
+
+  ### 7a. `campaign` became a real grouping field — 2026-08-11
+
+  Driven by the **Sentinel task-placement guidelines** (the operator doc: who files what, and how a
+  task is named). Its §4 is the part with teeth: *once a campaign has launched, new work must not go
+  back into the Campaign Build card — each request becomes its own one-line task.* That makes
+  `campaign` the ONLY thing connecting those cards, and as built on 2026-08-04 it could not do the
+  job. Four changes, each closing a way the field was decorative:
+
+  | Was | Now | Why it mattered |
+  |---|---|---|
+  | serialized in `task_detail` / `as_task_detail` only | **on the CARD** — `serializers.task_card` + `atrium_tasks.as_board_card` | The board could neither search nor group by it. A grouping field only the drawer receives groups nothing |
+  | offered only when `content_type == "Campaign"` (`isCampaignType` / `syncCampaign`, both **deleted**) | offered on **every** task, inside More options | 🔴 **The reveal rule hid the field from exactly the cards that need it.** A §4 one-line task has no service template and no campaign content type, so campaign grouping could only ever cover campaign-BUILD cards — of which there is one per campaign, i.e. the ones least needing to be grouped |
+  | free text, no list | `<datalist>` of the campaigns already on the board (`campaignNames`) | It is a grouping KEY compared with `===`. "Stratos" and "stratos " are two campaigns, and nothing would have told anybody |
+  | no filter | a **client-side** `#f-campaign` select, hidden until the board has one | Deliberately not in `filters` (which `load()` sends to the server): the values are whatever the fetched cards carry, so there is nothing to validate against and no reason to re-fetch |
+
+  🔴 **`campaignOf(t)` in `taskboard.js` is the ONE reader**, used by the card, the search, the filter's
+  option list and the drawer. It exists because the pre-2026-08-04 rows above are real: it returns ""
+  when `campaign === title`, so a legacy card does not print its own name twice and the filter does not
+  offer one bogus campaign per legacy task. **The API keeps reporting the duplicate honestly** — the
+  suppression is a display rule, not a backfill, and it stays reversible.
+
+  Also: the naming rule from §5 of those guidelines is now stated **on both task forms** (`NAME_HINT`,
+  shown under `#t-name` and `#a-title`) — 🔴 as a hint, never a validator. §3 of the same doc is about
+  workers logging unplanned work the second it appears, and a form that rejects a title loses that work
+  rather than recording it imperfectly. The "no client name in the title" half needs no enforcement:
+  the card already prints the client **above** the title, and the form has a picker, not a text box.
+
+  Backend pinned by `tests/test_task_campaign.py` (both card mappers, and that neither DETAIL mapper
+  re-derives the field); the recipe by `tests/test_service_template_sync.py`.
+
+  Client cards became editable on this field on the same day: `FIELD_MAP` had always mapped `campaign`,
+  but the Atrium form offered no input — so a client card could be *grouped* by a campaign nobody could
+  *set* from the only surface that edits it.
+
+  ### 7b. `Task.origin` — planned ahead vs added during the day, 2026-08-11
+
+  The other half of the same guidelines, and the one that needed a column. §1 makes the Team Lead
+  responsible for placing PLANNED work before the workday starts; §3 makes the worker responsible for
+  ADDING whatever comes up afterwards, "so Sentinel accurately reflects the actual work completed
+  during the day". That sentence was unanswerable: every task looked equally planned, so the reactive
+  load a team absorbs — the unexpected revision, the budget change, the suddenly-needed report — was
+  invisible, and a person buried in it read as simply holding a lot of cards.
+
+  `planned` | `added` | NULL, classified once at create by `services/task_origin.classify`, never a
+  form field on create. Full rule table, the honest limitation, and the six rules that hold it
+  together: **[AGENTS.md](../AGENTS.md) §5, "`Task.origin`"** — read that before changing the rule. In
+  short: it classifies on **who may plan** (not on "who delegated", which files D10's
+  employee-routes-to-a-department case as planned); a planner raising their own work is `added`; NULL
+  stays NULL so unknown counts toward neither side; it is stored rather than re-derived; and correcting
+  it is `can_reassign` because it feeds the Monitor's number.
+
+  Surfaced in two places, both deliberately modest: the Monitor's **`added`** sub-line under Open
+  (open-scoped, like `stepped` / `supporting` / `client_cards` — the cell is a breakdown of that one
+  number) with a legend line stating that **Open − Added is not "planned"**, and the drawer's
+  **Raised** row, shown only when classified.
+
+  Migration `a3f7c2e9d4b6`, existence-guarded, **plus** `main._ensure_columns` — that list is the path
+  the column takes to production. Neither adds a server default, on purpose. Pinned by
+  `tests/test_task_origin.py`.
 - ~~**Labels**~~ — **resolved 2026-08-03 (D14).** Derived from the department, like Atrium. Drop the
   Design/Copy/Ads/SEO/Dev vocabulary and the half-retired `labels_json` free list with it.
 - **Attachments**: wire GCS (the pattern exists — Atrium's creatives are private objects + an authed

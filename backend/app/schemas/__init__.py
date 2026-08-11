@@ -483,6 +483,10 @@ class TaskUpdateIn(BaseModel):
     # breakdown's owner-diff guard exists to prevent.
     support_ids: list[int] | None = None
     priority: str | None = None   # honored only for roles that can_prioritize; ignored otherwise
+    # planned | added (constants.ORIGIN_*). A CORRECTION to what task_origin.classify derived at
+    # create time — honored only for `can_reassign`, dropped otherwise, and never offered on create
+    # (the classification is the server's, exactly like the creator tag and the label).
+    origin: str | None = None
     due_date: date | None = None
     start_date: date | None = None   # a real Sentinel column since 2026-08-03 (was Atrium-only)
     service_charge: MoneyStr = None

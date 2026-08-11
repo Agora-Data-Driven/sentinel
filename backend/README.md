@@ -32,6 +32,7 @@ unit map + cookbook.
 | `app/services/task_config.py` · `task_templates.py` · `maintasks.py` | Board vocab (task_vocab: `stage_for` / `status_for_stage` / `is_completed` — **never key off a status label**), service templates, two-level work breakdown — **ask `maintasks.normalized(task)`, not `normalize(task.maintasks_json, …)`**: it memoizes per row, and the un-memoized form was being called 3× per card |
 | `app/services/task_bridge.py` | **The Atrium projection.** `client_safe_fields` (the bridge's field-exposure boundary), `publish` / `push` / `push_stage`, `stale_shares` (the D15 report) |
 | `app/services/task_workflow.py` | The task lifecycle: `review_blocks` (the one enforced gate), `on_status_change` (the `completed_at` stamp), `park` / `resume`, `archive` |
+| `app/services/task_origin.py` | **Planned ahead vs added during the day** (`Task.origin`) — the two halves of the task-placement guidelines. `classify` runs ONCE at create; the answer is stored, never re-derived, and NULL means genuinely unclassified. 🔴 It classifies on **who may plan**, not on "who delegated" — read AGENTS.md §5 before changing the rule, including the one case it is knowingly wrong about |
 | `app/services/mentor_search.py` | Per-user BM25-ish retrieval over `mentor_transcripts` (`resolve_mentor`, `DEFAULT_LIMIT`; no table of its own — deliberate) |
 | `app/services/development.py` | Holistic hub incl. `holistic_digest` (feeds the Coach) |
 | `app/services/work_digest.py` | **The task board, digested for the AI coach** (`work-digest` / `work-detail`). `work_digest` = the board as ONE viewer may see it (every card through `task_perms.can_view`; rollup on `/api/tasks/summary`'s cohort rule) · `work_detail` = full bodies, re-checking every id. Their own index is complete (open **+ finished history**), the wider board is capped with `truncated` declared, `service_charge` never crosses |
@@ -39,7 +40,7 @@ unit map + cookbook.
 | `app/services/team_growth.py` | The admin Team-progress rollup: one BATCHED engine call for the whole roster joined to our attendance/gym/target-PR rows, plus **measured velocity** (points of mastery per week, from the engine's `progressSumThen`). 120 s TTL cache. 🔴 An unreachable engine yields `None`, never `0.0` |
 | `app/services/` (rest) | `gym.py`, `leave.py`, `payroll.py`, `notifications.py`, `settings.py`, `audit.py`, `daily.py` — one domain each. **`daily.run` also mirrors Atrium's clients** (`mirror_clients`, additive-only): boot is no longer the mirror's only automatic trigger now that `--min-instances 1` stops the service restarting — AGENTS.md §2 |
 | `app/utils/` | `time.py` (**`utcnow()` — the only clock**), `qr.py`, `csv_export.py`, `passwords.py` |
-| `alembic/versions/` | 22 revisions; head `e8b3f5c7a2d9_task_workflow_fields` |
+| `alembic/versions/` | 31 revisions; head `a3f7c2e9d4b6_task_origin` |
 | `entrypoint.sh` → `migrate.py` | Boot: `alembic upgrade head` (or `stamp head` to adopt a create_all schema), then uvicorn |
 | `seed.py` · `make_badges.py` | Demo data · printable QR badges |
 | `tests/` (28 files) | pytest suite — `conftest.py` builds a throwaway SQLite per test |

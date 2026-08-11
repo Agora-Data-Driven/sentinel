@@ -44,6 +44,37 @@ SEED_TEMPLATES: dict[str, dict] = {
         ],
     },
 
+    # 🔴 The FIRST campaign recipe that carries its own CONTENT CREATION phase (2026-08-11), per the
+    # Sentinel task-placement guidelines: "all work required to build and launch that campaign should
+    # stay inside that campaign card." `google_meta_campaign` above stops at Launch & verify, so the
+    # ads themselves had to be raised as separate `standalone_*` cards — which is exactly the split
+    # those guidelines forbid, and it is why campaign work showed up on the board as three unrelated
+    # rows nobody could roll up.
+    #
+    # 🔴 A NEW KEY, deliberately, rather than an edit to the recipe above. `sync_seed` is
+    # INSERT-ONLY by contract (it must never revert a board's own Manage edits), so a changed recipe
+    # would reach no existing board — production included — and would exist only in this file. Two
+    # campaign services now appear in the picker; deactivate whichever you don't want in
+    # Manage → Services, which is a soft delete `sync_seed` respects forever.
+    "meta_campaign": {
+        "dept": "Acquisition", "label": "Meta Campaign (build + content)", "content_type": "Campaign",
+        "groups": [
+            ("Campaign build", [
+                "Identify objectives",
+                "Identify materials",
+                "Angle research",
+                "Ads manager setup",
+                "Campaign re-evaluation",
+                "Campaign launch",
+            ]),
+            ("Content creation", [
+                "Strategize content",
+                "Identify quantity of ads",
+                "Content re-evaluation",
+            ]),
+        ],
+    },
+
     # --- Lifecycle -----------------------------------------------------------
     "email_automation": {
         "dept": "Lifecycle", "label": "Email Automation / Sequence Build", "content_type": "Email Automation",

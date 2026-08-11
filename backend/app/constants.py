@@ -161,6 +161,21 @@ PRIORITY_MEDIUM = "Medium"
 PRIORITY_LOW = "Low"
 PRIORITIES = [PRIORITY_URGENT, PRIORITY_MEDIUM, PRIORITY_LOW]
 
+# --- Where a task CAME FROM: planned ahead, or raised during the day (2026-08-11) -------------
+#
+# The two halves of the Sentinel task-placement guidelines. §1 gives the Team Lead the duty of
+# placing PLANNED work before or at the start of the workday; §3 says anything that comes up
+# afterwards is ADDED by whoever has to do it, "so Sentinel accurately reflects the actual work
+# completed during the day". Without this field that sentence is unanswerable — every task looks
+# identically planned, and the reactive load a team actually carries is invisible.
+#
+# 🔴 These are STAGE-style keys, not renameable labels. Unlike a status (`TaskVocabItem`, which is
+# editable in Manage precisely because it is a label) this is a fixed pair the rollups count by —
+# see task_vocab's docstring for what keying off a display string cost this board.
+ORIGIN_PLANNED = "planned"
+ORIGIN_ADDED = "added"
+TASK_ORIGINS = [ORIGIN_PLANNED, ORIGIN_ADDED]
+
 # --- Task labels: DERIVED from the department, never chosen (decision D14) -------------------
 #
 # 🔴 A task carries exactly ONE label and nobody picks it. It is computed from the assigned

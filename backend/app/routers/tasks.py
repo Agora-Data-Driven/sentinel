@@ -18,6 +18,7 @@ from ..events import broker
 
 from ..constants import (
     NOTIF_TASK_ASSIGNED,
+    ORIGIN_ADDED,
     ROLE_TEAM_LEAD,
     label_for_department,
 )
@@ -47,8 +48,8 @@ from ..services import task_analytics
 from ..services import maintasks as maintasks_svc
 from ..services import notifications as notif
 from ..services import atrium_identity
-from ..services import (task_adoption, task_bridge, task_config, task_perms, task_recurring,
-                        task_templates, task_workflow)
+from ..services import (task_adoption, task_bridge, task_config, task_origin, task_perms,
+                        task_recurring, task_templates, task_workflow)
 from ..utils.time import today_ph, to_ph, utcnow
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
@@ -374,7 +375,7 @@ def _aggregate(pts: list[Task], today, week_start, all_statuses, done_statuses: 
     it shipped, which is what excluding archived rows outright would do.
     """
     counts = dict.fromkeys(all_statuses, 0)
-    overdue = completed_week = live = stepped = supporting = 0
+    overdue = completed_week = live = stepped = supporting = added_open = 0
     for t in pts:
         if t.status in done_statuses:
             done_on = getattr(t, "completed_at", None)
@@ -399,12 +400,27 @@ def _aggregate(pts: list[Task], today, week_start, all_statuses, done_statuses: 
                     supporting += 1
                 else:
                     stepped += 1
+            # 🔴 HOW MUCH OF THIS PLATE WAS NOT PLANNED (2026-08-11). The reason the task-placement
+            # guidelines separate §1 from §3 in the first place: a person absorbing eight unexpected
+            # requests is having a completely different week from one working eight planned cards, and
+            # the two read identically here until this existed.
+            #
+            # 🔴 OPEN-SCOPED, like `stepped`, `supporting` and `client_cards` — it renders as another
+            # sub-line under the Open count, and AGENTS.md §5 states the rule this obeys: the cell is a
+            # breakdown of ONE number, so a total placed in it is wrong however it is labelled.
+            # (`client_cards` shipped as `len(rows)` and produced the live nonsense "8 open · 19
+            # client".) It sits inside the `not in done_statuses` branch for exactly that reason.
+            #
+            # An UNCLASSIFIED row (origin None — every task predating the column, and every Atrium
+            # card) counts toward neither side. It is not evidence of planning.
+            if getattr(t, "origin", None) == ORIGIN_ADDED:
+                added_open += 1
             if t.due_date and t.due_date < today:
                 overdue += 1
     open_total = sum(n for st, n in counts.items() if st not in done_statuses)
     return {"counts": counts, "overdue": overdue, "open_total": open_total,
             "completed_week": completed_week, "total": live, "stepped": stepped,
-            "supporting": supporting}
+            "supporting": supporting, "added_open": added_open}
 
 
 @router.get("/summary")
@@ -1093,6 +1109,13 @@ def create_task(payload: TaskCreateIn, background: BackgroundTasks,
         assigned_team_id=payload.assigned_team_id,
         assigned_to_id=assigned_to_id,
         created_by_id=user.id,  # automatic creator tag — never a form field
+        # 🔴 PLANNED vs ADDED, classified once and never a form field either (services/task_origin).
+        # `may_delegate` is handed over rather than recomputed — it already encodes the team-scoping a
+        # lead is held to above, and re-deriving that rule is how the delegation guard has been walked
+        # past twice on this board. `assigned_to_id` is the RESOLVED one (a non-delegator's card may
+        # have just been pointed at themselves), which is what makes "raised my own work" answer
+        # `added` rather than depending on whether the form sent the field.
+        origin=task_origin.classify(user, assigned_to_id, may_delegate=may_delegate),
 
         priority=priority,
         status=payload.status,
@@ -1221,6 +1244,23 @@ def update_task(task_id: str, payload: TaskUpdateIn, user: User = Depends(get_cu
                    "You can add or remove yourself.")
     if "priority" in data and not (task_perms.can_prioritize(user, task) and data["priority"] in task_config.priorities(db)):
         data.pop("priority")
+    # 🔴 RECLASSIFYING planned/added IS A MANAGER'S CALL (2026-08-11, `services/task_origin`). The
+    # value is derived at create time and the derivation can be wrong — an AM logging a client's 4pm
+    # request answers `planned` — so it has to be correctable. But it feeds the Monitor's reactive-load
+    # numbers, so leaving it open to whoever can edit would let anyone rewrite the one figure that says
+    # how much unplanned work their team absorbed. Same gate as reassignment: `can_reassign`.
+    #
+    # DROPPED, not a 403, and deliberately unlike the assignee guard two blocks up: nothing in the UI
+    # offers this field to a non-manager, so a request carrying it is a script or a stale client rather
+    # than somebody's lost edit — and failing their whole PATCH over a field they did not knowingly
+    # send is the "save dies on a field you cannot reach" complaint the assignee gate exists to avoid.
+    # `normalize` also drops a third value, which would otherwise sit in the column looking like an
+    # answer while every count excluded it.
+    if "origin" in data:
+        if task_perms.can_reassign(user, task):
+            data["origin"] = task_origin.normalize(data["origin"])
+        else:
+            data.pop("origin")
     # 🔴 STEP-LEVEL ASSIGNMENT IS DELEGATION TOO (§2.4e). Until 2026-08-03 the two guards above
     # covered `assigned_to_id`/`assigned_team_id` only, while `maintasks` went through its own branch
     # below with NO assignee check — so an employee who cannot reassign a task could still put any
