@@ -7,9 +7,10 @@ from __future__ import annotations
 
 import threading
 from pathlib import Path
+from urllib.parse import urlsplit
 
-from fastapi import Depends, FastAPI, Request
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi import Depends, FastAPI, Form, Request
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 
@@ -134,6 +135,12 @@ def _ensure_columns() -> None:
         # 🔴 Same rule as the growth column above: this list is the path these take to production.
         ("tasks", "atrium_task_id", "VARCHAR(64)"),
         ("tasks", "atrium_sync_error", "TEXT"),
+        # Planned ahead vs added during the day (2026-08-11) — the two halves of the task-placement
+        # guidelines (§1 / §3). 🔴 NO DEFAULT, on purpose: every existing task is genuinely
+        # unclassified, and `DEFAULT 'planned'` would assert that thousands of historical rows were
+        # planned. NULL reads as unknown and is excluded from both counts (services/task_origin.py).
+        # 🔴 Same rule as the columns above: this list is the path it takes to production.
+        ("tasks", "origin", "VARCHAR(12)"),
         # Atrium owns the CLIENT list now (2026-08-05, `services/client_sync`); a client it stops
         # listing is DEACTIVATED here rather than deleted, because deleting nulls `Task.client_id` on
         # every past task and blanks that client's history. `BOOLEAN DEFAULT true` — existing rows
@@ -541,13 +548,81 @@ def login_page(request: Request, db: Session = Depends(get_db)):
     user = user_from_sso(request, db)
     if user:
         resp = RedirectResponse(url="/dashboard", status_code=302)
-        resp.set_cookie(
-            key=settings.cookie_name, value=create_access_token(user.id), httponly=True,
-            secure=settings.secure_cookies, samesite="lax",
-            max_age=settings.jwt_expire_minutes * 60, path="/",
-        )
+        _set_session_cookie(resp, user.id)
         return resp
     return _page("login.html")
+
+
+def _set_session_cookie(response, user_id: int) -> None:
+    """The session cookie, set exactly as routers/auth._set_cookie sets it."""
+    response.set_cookie(
+        key=settings.cookie_name, value=create_access_token(user_id), httponly=True,
+        secure=settings.secure_cookies, samesite="lax",
+        max_age=settings.jwt_expire_minutes * 60, path="/",
+    )
+
+
+def _is_same_origin(request: Request) -> bool:
+    """True unless a PRESENT Origin/Referer says the post came from another site.
+
+    This is the CSRF defence for the form fallback below, in place of a double-submit token: the login
+    page is served as a STATIC file and the CSP forbids inline script, so there is nowhere to render a
+    token into and nothing allowed to write one in — a header check needs neither.
+
+    It fails OPEN when a browser sends neither header, deliberately. This route exists FOR degraded
+    conditions; refusing a login because a client omits an optional header would make the fallback
+    fail exactly when it is needed, and login-CSRF (being signed in as somebody else) is a far smaller
+    harm than being unable to sign in at all. Every current browser sends Origin on a cross-site POST,
+    which is the case that actually matters.
+    """
+    host = (request.headers.get("host") or "").strip().lower()
+    for header in ("origin", "referer"):
+        raw = request.headers.get(header)
+        if not raw:
+            continue
+        netloc = urlsplit(raw).netloc.strip().lower()
+        if netloc:
+            return netloc == host
+    return True
+
+
+_LOGIN_RETRY_PAGE = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Sign in · Sentinel</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/static/css/styles.css"></head>
+<body style="display:grid;place-items:center;min-height:100vh;margin:0;background:#0B120E">
+  <div style="max-width:380px;padding:30px;background:#fff;border-radius:18px">
+    <h2 style="margin:0 0 8px">Couldn't sign you in</h2>
+    <p style="margin:0 0 18px;font-size:14px">%s</p>
+    <a class="btn primary block" href="/login" style="text-decoration:none;text-align:center">Try again</a>
+  </div>
+</body></html>"""
+
+
+@app.post("/login", include_in_schema=False)
+def login_form_post(request: Request, email: str = Form(""), password: str = Form(""),
+                    db: Session = Depends(get_db)):
+    """Sign in from the login page's own <form>, with NO JavaScript involved.
+
+    The page normally posts `/api/auth/login` from login.js. When that script does not run — it 404s,
+    the service worker hands back the wrong body, a parse error kills it — the button used to be wired
+    to nothing: the form had no action and its inputs no name, so "Sign in" silently re-GET'd /login
+    with the fields cleared. The page looked perfect and simply could not let anyone in, with no error
+    on screen and no failed request in the logs. This is the floor under that.
+
+    It shares `auth.authenticate`, so it can never accept what the API refuses, and it answers in
+    plain HTML because a JSON body is not an answer to somebody whose JavaScript is broken.
+    """
+    if not _is_same_origin(request):
+        return HTMLResponse(_LOGIN_RETRY_PAGE % "That sign-in request didn't come from Sentinel.",
+                            status_code=403)
+    user = auth.authenticate(db, email, password)
+    if not user:
+        return HTMLResponse(_LOGIN_RETRY_PAGE % auth.login_failure_detail(db, email), status_code=401)
+    # 303, so the browser follows with GET and a refresh can never re-post the password.
+    resp = RedirectResponse(url="/dashboard", status_code=303)
+    _set_session_cookie(resp, user.id)
+    return resp
 
 
 _PAGES = {
