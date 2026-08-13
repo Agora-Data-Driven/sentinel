@@ -10,14 +10,20 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, Form, Request
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 
+from .assets import Assets
 from .config import settings
 from .database import create_all, get_db
 from .security import create_access_token, user_from_sso
-from .middleware import CSRFMiddleware, RateLimitMiddleware, SecurityHeadersMiddleware
+from .middleware import (
+    ConditionalGZipMiddleware,
+    CSRFMiddleware,
+    RateLimitMiddleware,
+    SecurityHeadersMiddleware,
+)
 from .observability import ExceptionLoggingMiddleware, configure_observability, get_logger
 from .routers import (
     admin,
@@ -55,13 +61,19 @@ app = FastAPI(
 
 # Hardening middleware. The last-added runs outermost, so SecurityHeaders wraps everything and
 # decorates every response — including the 403/429s produced by the guards it wraps.
-# Effective order (outer -> inner): SecurityHeaders -> RateLimit -> CSRF -> ExceptionLogging -> app.
+# Effective order (outer -> inner):
+#   ConditionalGZip -> SecurityHeaders -> RateLimit -> CSRF -> ExceptionLogging -> app.
 # ExceptionLogging is innermost so a route's 500 is caught, logged with a traceback, and still
 # flows back out through the header/CSRF middleware.
+# 🔴 Compression is OUTERMOST, and the order is load-bearing: it must see the final bytes and the
+# final headers, so that a 403 from CSRF and a 429 from the rate limiter are compressed too, and so
+# that the Content-Length it writes is the one the client actually receives. Putting it inside
+# SecurityHeaders would let a later layer rewrite a body it had already sized.
 app.add_middleware(ExceptionLoggingMiddleware)
 app.add_middleware(CSRFMiddleware)
 app.add_middleware(RateLimitMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(ConditionalGZipMiddleware)
 
 
 @app.middleware("http")
@@ -510,11 +522,43 @@ def health():
 # --- Static assets ---------------------------------------------------------
 # check_dir=False so the API can boot even before the frontend assets are built.
 (FRONTEND_DIR / "static").mkdir(parents=True, exist_ok=True)
-app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR / "static"), check_dir=False), name="static")
 
 
-def _page(name: str) -> FileResponse:
-    return FileResponse(str(PAGES_DIR / name))
+class _VersionedStaticFiles(StaticFiles):
+    """`StaticFiles`, plus a year-long `immutable` cache for URLs carrying the CURRENT build id.
+
+    🔴 The default stays `no-cache` (set by `SecurityHeadersMiddleware`, which uses `setdefault` and
+    therefore never overrides what we set here). Only a request whose `?v=` names the build we are
+    actually serving is granted `immutable` — see `assets.py`, property 2. A stale `?v=` from a page
+    a browser held across a deploy gets the ordinary revalidating behaviour instead of being told to
+    trust today's bytes under yesterday's name for a year.
+
+    `immutable` is what removes the request entirely: the browser serves the file from disk without
+    even a conditional round trip, and `sw.js`'s network-first `fetch()` is satisfied from that same
+    HTTP cache. This is safe here — and ONLY here — because the URL names the content.
+    """
+
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        if response.status_code == 200 and ASSETS.is_current(scope.get("query_string", b"")):
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
+
+
+ASSETS = Assets(FRONTEND_DIR)
+app.mount("/static", _VersionedStaticFiles(directory=str(FRONTEND_DIR / "static"), check_dir=False),
+          name="static")
+log.info("static asset build id: %s", ASSETS.build_id)
+
+
+def _page(name: str) -> Response:
+    """A page shell with its CSS/JS references content-versioned (`assets.py`).
+
+    Returns a `Response` rather than a `FileResponse` because the body is rewritten in memory. The
+    shell itself keeps `Cache-Control: no-cache` from the middleware, which is what makes the scheme
+    work: the one document that is always revalidated is the one that hands out the versioned URLs.
+    """
+    return Response(content=ASSETS.page(name), media_type="text/html")
 
 
 # PWA files must be served from the root scope.

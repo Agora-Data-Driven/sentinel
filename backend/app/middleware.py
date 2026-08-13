@@ -18,8 +18,10 @@ from threading import Lock
 from urllib.parse import urlsplit
 
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from .config import settings
 
@@ -93,6 +95,55 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         if not request.url.path.startswith("/api/"):
             h.setdefault("Cache-Control", "no-cache")
         return response
+
+
+# 🔴 THE SSE STREAMS MUST NEVER BE COMPRESSED. This is the whole reason there is a wrapper here
+# instead of a bare `app.add_middleware(GZipMiddleware)`.
+#
+# Starlette's `GZipResponder` handles a streaming response by writing each chunk into a `GzipFile`
+# and sending whatever lands in the buffer. gzip's deflate stage BUFFERS — a 40-byte SSE frame
+# produces zero output bytes — so the browser's EventSource would receive nothing until enough
+# events had accumulated to fill a block. That is precisely the "streaming arrives as one blob"
+# failure in AGENTS.md §4, except no header can fix it: the bytes genuinely have not been emitted.
+# It would break the live board (`/api/stream`) and local live-reload (`/api/dev/reload`) in a way
+# that looks like "events are slow" rather than like a compression bug.
+#
+# The exclusion is by PATH, deliberately, not by sniffing the response content-type. By the time a
+# `text/event-stream` content-type is visible we are already inside the responder and committed to
+# its send-wrapper; a path prefix is decided before any of that, and it is the same fact stated
+# where a reader will look for it.
+_NO_COMPRESS_PREFIXES = (
+    "/api/stream",      # routers/stream.py — the live board + notification push
+    "/api/dev/reload",  # routers/dev.py — local live reload (404s in production, harmless here)
+)
+
+
+class ConditionalGZipMiddleware:
+    """GZip every response EXCEPT the Server-Sent Events streams.
+
+    Sentinel serves a vanilla-JS frontend with no build step (AGENTS.md §8), so the page shells load
+    real source files: `/tasks` alone pulls `app.js` (65 kb) + `taskboard.js` (215 kb) +
+    `styles.css` (83 kb), and the board's own JSON response is comment-and-prose heavy. None of it
+    was compressed. Text compresses ~70-80%, and Cloud Run bills internet egress by the byte, so
+    this is faster AND cheaper.
+
+    Pure ASGI on purpose — `BaseHTTPMiddleware` (what the other three middlewares here use) would add
+    another task-group-plus-memory-stream layer around every response, which is overhead in the exact
+    place we are trying to remove it.
+    """
+
+    def __init__(self, app: ASGIApp, minimum_size: int = 500, compresslevel: int = 6) -> None:
+        self.app = app
+        # 🔴 compresslevel 6, not Starlette's default of 9. Level 9 costs materially more CPU for
+        # ~1-2% smaller output, and this runs on a shared-core instance where CPU is the scarce
+        # thing — spending it to save a byte we are not paying for is the wrong trade.
+        self._gzip = GZipMiddleware(app, minimum_size=minimum_size, compresslevel=compresslevel)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or scope.get("path", "").startswith(_NO_COMPRESS_PREFIXES):
+            await self.app(scope, receive, send)
+            return
+        await self._gzip(scope, receive, send)
 
 
 # Path prefix -> requests allowed per 60s window, per client IP.

@@ -3,7 +3,9 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean, Date, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..constants import PRIORITY_MEDIUM, TASK_TODO
@@ -13,6 +15,23 @@ from ..utils.time import utcnow
 
 class Task(Base):
     __tablename__ = "tasks"
+
+    # 🔴 COMPOSITE indexes for the two shapes the board actually asks for (2026-08-13). `archived`
+    # and `assigned_to_id` each already carry a single-column index, and neither helps the query that
+    # runs most: `routers/tasks.list_tasks` is
+    #     WHERE archived = false ORDER BY updated_at DESC
+    # and `updated_at` was indexed nowhere at all, so every board load was a scan plus a full sort of
+    # the result. A btree on (archived, updated_at) answers both halves in one ordered read; Postgres
+    # scans it backwards for the DESC, so no explicit DESC is needed and the index stays portable to
+    # the SQLite dev DB.
+    #
+    # The single-column indexes are deliberately LEFT IN PLACE. They serve other callers
+    # (`task_analytics`, the Monitor rollup, `people.py`'s profile card), and dropping an index to
+    # tidy up is a separate decision with its own blast radius.
+    __table_args__ = (
+        Index("ix_tasks_board", "archived", "updated_at"),
+        Index("ix_tasks_assignee_board", "assigned_to_id", "archived"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     title: Mapped[str] = mapped_column(String(200), nullable=False)

@@ -119,7 +119,8 @@ backend/app/
   constants.py     roles, statuses, ROLE_RANK
   security.py      JWT cookie auth + RBAC dependency guards      ← auth lives HERE
   sso.py           portal ag_sso cookie verification
-  middleware.py    CSP, Permissions-Policy, security headers      ← see §5 gotchas
+  middleware.py    CSP, Permissions-Policy, security headers, gzip ← see §5 gotchas
+  assets.py        content-hashed CSS/JS URLs (the build id)      ← see §5 gotchas
   serializers.py   model → dict. Controls what leaves the API.
   events.py        SSE event bus (see routers/stream.py)
   observability.py request logging / metrics
@@ -163,7 +164,7 @@ deploy/            deploy.ps1, seed-job.ps1, DEPLOY.md
 | `dev.py` | **Local-development live reload** (`GET /api/dev/reload`, SSE). 404s in production — §5 |
 | `internal.py` | **HMAC-signed** service-to-service (Mastery Engine ↔ Sentinel, Atrium → Sentinel). Purposes: `user-lookup`, `academy-people`, `holistic-profile`, `growth-detail`, `mentor-search`, `task-request`, `task-feedback`, **`board`**, **`work-digest`**, **`work-detail`** |
 
-Adding a router? Register it in the tuple at [main.py:322](backend/app/main.py#L322).
+Adding a router? Register it in the tuple at [main.py:513](backend/app/main.py#L513).
 
 ### The task board holds TWO kinds of card
 
@@ -439,7 +440,7 @@ what enforces it.
 > ([security.py:50](backend/app/security.py#L50)). Google sign-in follows the same contract.
 
 `/login` short-circuits: arriving with a valid `ag_sso` cookie *and* an active user lands you
-straight on the dashboard, minting a normal session on the way ([main.py:358](backend/app/main.py#L358)).
+straight on the dashboard, minting a normal session on the way ([main.py:582](backend/app/main.py#L582)).
 
 ### 🔴 Sentinel answers on TWO hosts and they behave differently — that is where lockouts come from
 
@@ -585,6 +586,37 @@ Two layers can serve stale JS/CSS; both are handled, don't undo either:
    and rendered "undefined" KPIs. Fixed by `Cache-Control: no-cache` on all non-API responses
    ([middleware.py](backend/app/middleware.py), pinned by `test_security_headers.py`) plus
    `cache: "no-cache"` on the SW's fetches. ETag revalidation keeps it a cheap 304.
+
+### 🟡 Assets are CONTENT-VERSIONED and compressed — what that changes for you (2026-08-13)
+
+The section above made staleness impossible by revalidating **every asset on every navigation**.
+That is a conditional round trip per file, forever — `/tasks` alone is `app.js` + `taskboard.js` +
+`styles.css` ≈ **356 kb**, and the frontend has no build step, so those are real source files.
+
+| Layer | What it does |
+|---|---|
+| [`assets.py`](backend/app/assets.py) | hashes every `static/**/*.{js,css}` at import into one **build id**, and rewrites each page shell's `src=`/`href=` to `/static/js/app.js?v=<id>` |
+| `_VersionedStaticFiles` ([main.py](backend/app/main.py)) | a URL carrying the **current** build id is answered `public, max-age=31536000, immutable` — so the browser serves it with **no request at all**, and the SW's network-first `fetch()` is satisfied from that same HTTP cache |
+| `ConditionalGZipMiddleware` ([middleware.py](backend/app/middleware.py)) | gzip on everything else — `/tasks` drops **356 kb → 110 kb** (69%), and the board's JSON with it |
+
+Four things that are load-bearing:
+
+- 🔴 **The page shell itself stays `no-cache`.** It is the document that hands out the immutable
+  URLs; cache it and a deploy's new URLs never reach anyone. `_page` returns a `Response` (rewritten
+  in memory, memoized per file), not a `FileResponse`.
+- 🔴 **Only the CURRENT build id earns `immutable`.** A stale `?v=` from a page held across a deploy
+  gets ordinary `no-cache`, because the bytes on disk are no longer the ones that URL named.
+- 🔴 **An UNVERSIONED request is completely unchanged** (`no-cache`). That is what keeps `sw.js`'s
+  precache list, old bookmarks and anything not rewritten behaving exactly as before.
+- 🔴 **The SSE streams are excluded from compression by PATH** (`_NO_COMPRESS_PREFIXES`). gzip's
+  deflate stage buffers, so a 40-byte SSE frame emits **zero bytes** — the live board would silently
+  stop being live, and no header fixes that. Adding a new streaming endpoint? Add its prefix.
+
+`sw.js`'s offline fallback is `caches.match(req, { ignoreSearch: true })` **because** of this: shells
+now ask for `kiosk.js?v=<id>` while `CORE` precaches the bare `kiosk.js`, and an exact match would
+miss — the kiosk would fail to boot offline. Online behaviour is unchanged (still network-first).
+The build id is derived from **content**, so a deploy that doesn't touch an asset keeps its URL and
+everyone's cached copy. All of it is pinned by `tests/test_asset_delivery.py`.
 
 ### 🔴 A task has ONE lead and MANY supporters — support widens "assigned" and nothing else
 
