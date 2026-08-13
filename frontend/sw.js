@@ -3,7 +3,7 @@
    always win when online, while the kiosk still works offline from cache. API calls are never
    cached — attendance punches queue in IndexedDB (see kiosk.js) instead.
    Bump CACHE on each meaningful change so old caches are purged on activate. */
-const CACHE = "sentinel-v93";
+const CACHE = "sentinel-v94";
 const CORE = [
   "/static/css/styles.css",
   "/static/js/app.js",
@@ -70,9 +70,19 @@ self.addEventListener("fetch", (e) => {
   // never wired: a page that rendered perfectly and could not sign anyone in. Response.error() makes
   // the fetch fail as what it is, so the browser reports it in the console. Never return a
   // wrong-type body (and never an EMPTY 200 either — a blank script is worse, it fails silently).
+  // 🔴 The OFFLINE fallback ignores the query string, and that is required by content-versioned
+  // asset URLs (backend/app/assets.py, 2026-08-13). Page shells now ask for
+  // `/static/js/kiosk.js?v=<hash>`, while CORE above precaches the bare `/static/js/kiosk.js` — an
+  // exact-match lookup would MISS and the kiosk would fail to boot offline on a tablet that had
+  // installed this worker but never completed an online page load. `?v=` names the same file, so on
+  // the fallback path a cached copy under either spelling is the right answer; a slightly older
+  // asset beats a dead page, which is the entire point of having a fallback.
+  //
+  // It changes nothing when online: the fetch above is still network-first and still wins, so a
+  // fresh deploy is never served from cache while the network is reachable.
   e.respondWith(
     fetch(e.request, { cache: "no-cache" })
       .then((res) => { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(e.request, copy)); return res; })
-      .catch(() => caches.match(e.request).then((hit) => hit || Response.error()))
+      .catch(() => caches.match(e.request, { ignoreSearch: true }).then((hit) => hit || Response.error()))
   );
 });
