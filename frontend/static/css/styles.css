@@ -194,6 +194,52 @@ h2 { letter-spacing: -0.6px; } h1 { letter-spacing: -0.5px; }
 .nav-group.open .nav-group-body { max-height: 420px; opacity: 1; margin-top: 3px; }
 .nav-group-body a { padding: 8px 12px; font-size: 13.5px; }
 .side-foot { margin-top: auto; }
+.side-collapse {
+  display: flex; align-items: center; gap: 11px; width: 100%; margin-top: 8px; padding: 8px 12px;
+  border: none; background: none; border-radius: var(--r-ctl); cursor: pointer; text-align: left;
+  color: var(--muted); font: inherit; font-size: 12.5px; font-weight: 600;
+  transition: background .12s, color .12s;
+}
+.side-collapse:hover { background: var(--sunken); color: var(--ink); }
+.side-collapse .svg-ic { width: 16px; height: 16px; transform: rotate(180deg); transition: transform .18s ease; }
+
+/* ---------- Collapsed (icon-only) rail ----------
+   🔴 Scoped to `:root.side-narrow` and applied by app.js BEFORE first paint — see its comment. The
+   whole feature is one custom-property override plus "hide the labels"; nothing here re-lays-out the
+   shell, because `.app`'s grid already reads `--sidebar-w`.
+
+   🔴 It stops at 900px ON PURPOSE. Below that the rail is a full-width off-canvas DRAWER opened by
+   the hamburger (see the media query further down), where "collapsed to icons" is meaningless — the
+   drawer is not taking space from anything while it is shut. Letting the class through would give a
+   phone a 76px permanent rail and a drawer that opens to icons only. */
+:root.side-narrow { --sidebar-w: 76px; }
+:root.side-narrow .side { padding: 18px 10px; }
+:root.side-narrow .nav-label,
+:root.side-narrow .navlabel,
+:root.side-narrow .badge-sentinel,
+:root.side-narrow .user-card .who { display: none; }
+:root.side-narrow .nav a { justify-content: center; gap: 0; padding: 11px 0; }
+/* The accent bar hangs off the row's left edge by the padding that no longer exists at this width. */
+:root.side-narrow .nav a.active::before { left: -10px; }
+:root.side-narrow .user-card { justify-content: center; padding: 8px; }
+:root.side-narrow .brand { padding: 2px 0 14px; }
+:root.side-narrow .brand-logo .brand-img { max-width: 44px; }
+:root.side-narrow .brand-logo svg { height: 22px; }
+:root.side-narrow .side-collapse { justify-content: center; padding: 8px 0; }
+:root.side-narrow .side-collapse .svg-ic { transform: none; }
+@media (max-width: 900px) {
+  :root.side-narrow { --sidebar-w: 248px; }
+  :root.side-narrow .nav-label,
+  :root.side-narrow .navlabel,
+  :root.side-narrow .badge-sentinel,
+  :root.side-narrow .user-card .who { display: revert; }
+  :root.side-narrow .nav a { justify-content: flex-start; gap: 11px; padding: 9px 12px; }
+  :root.side-narrow .nav a.active::before { left: -14px; }
+  :root.side-narrow .side { padding: 18px 14px; }
+  :root.side-narrow .user-card { justify-content: flex-start; padding: 10px; }
+  /* The control itself goes away rather than sitting there doing nothing at this width. */
+  .side-collapse { display: none; }
+}
 .user-card {
   display: flex; align-items: center; gap: 10px; padding: 10px; border: 1px solid var(--line);
   border-radius: var(--r-ctl); background: var(--sunken); box-shadow: none;
@@ -208,6 +254,7 @@ h2 { letter-spacing: -0.6px; } h1 { letter-spacing: -0.5px; }
   background: var(--grad-green); color: #fff; font-size: 12.5px; font-weight: 800; box-shadow: 0 2px 8px rgba(84,185,72,.28);
 }
 .avatar.sm { width: 28px; height: 28px; font-size: 11px; }
+.avatar.xs { width: 20px; height: 20px; font-size: 9px; }
 .avatar.lg { width: 64px; height: 64px; font-size: 22px; }
 .avatar.has-photo { background: var(--card); box-shadow: 0 2px 8px rgba(0,0,0,.14); overflow: hidden; }
 .avatar.has-photo img { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; display: block; }
@@ -612,6 +659,13 @@ textarea { resize: vertical; min-height: 78px; }
 .tcard { background: #fff; border: 1px solid var(--line); border-radius: 11px; padding: 12px; box-shadow: var(--shadow); cursor: grab; }
 .tcard:hover { box-shadow: var(--shadow-lg); }
 .tcard.dragging { opacity: .5; }
+/* 🔴 A card the viewer may SEE but not CHANGE (2026-08-14) — an employee's board now carries their
+   whole department. It has to read as "somebody else's", or the board looks like it stopped
+   responding: `cursor: grab` on an undraggable card is a promise the drop cannot keep. Deliberately
+   still fully legible (no opacity fade) — reading a colleague's card is the entire reason it is
+   shown; it is the AFFORDANCES that are withdrawn, not the content. */
+.tcard.readonly { cursor: default; border-style: dashed; box-shadow: none; }
+.tcard.readonly:hover { box-shadow: var(--shadow); }
 .tcard.just-moved { animation: cardflash .9s ease-out; }
 @keyframes cardflash { 0% { box-shadow: 0 0 0 2px var(--green), var(--shadow-lg); } 100% { box-shadow: var(--shadow); } }
 @media (prefers-reduced-motion: reduce) { .tcard.just-moved { animation: none; } }
@@ -628,6 +682,9 @@ textarea { resize: vertical; min-height: 78px; }
 .seg button:hover { color: var(--ink); }
 .seg button.on { background: var(--card); color: var(--green-d); box-shadow: var(--shadow); }
 :root[data-theme="dark"] .seg button.on { background: rgba(255,255,255,.08); }
+/* The scope switch sits in the FILTER row, not the header, so it matches the height of the selects
+   beside it rather than the view tabs it borrows its markup from. */
+.seg.sm button { font-size: 12px; padding: 4px 10px; }
 .tb-search { min-width: 220px; }
 
 /* ---------- Task Board: By-Employee swimlanes ---------- */
@@ -703,6 +760,21 @@ textarea { resize: vertical; min-height: 78px; }
 :root[data-theme="dark"] .mgr-warn { background: rgba(255,255,255,.05); }
 .mon-legend { margin: 12px 2px 0; font-size: 12px; line-height: 1.65; color: var(--sub); max-width: 78ch; }
 .mon-legend b { color: var(--ink); font-weight: 700; }
+/* A two-column term/definition grid, so "what does Untouched mean?" is one glance rather than a
+   paragraph to read through. Collapses to stacked rows on narrow screens, where a 150px term column
+   would leave the definitions about twelve characters wide. */
+.mon-legend p { margin: 0 0 10px; }
+.mon-legend dl { display: grid; grid-template-columns: 160px 1fr; gap: 7px 16px; margin: 0; }
+.mon-legend dt { font-weight: 800; color: var(--ink); }
+.mon-legend dd { margin: 0; }
+.mon-legend-note {
+  margin: 12px 0 0; padding: 10px 12px; border-radius: var(--r-ctl);
+  background: var(--sunken); border: 1px solid var(--line);
+}
+@media (max-width: 720px) {
+  .mon-legend dl { grid-template-columns: 1fr; gap: 2px; }
+  .mon-legend dd { margin-bottom: 8px; }
+}
 /* The table gained four columns. `.monitor` is already `overflow-x: auto` above, so a floor here
    makes it scroll INSIDE its own box rather than forcing the whole page sideways. */
 .monitor .mon-tbl { min-width: 860px; }
@@ -749,6 +821,40 @@ textarea { resize: vertical; min-height: 78px; }
 .notif .nt { font-weight: 700; font-size: 13px; color: var(--ink); }
 .notif .nb { font-size: 12px; color: var(--sub); margin-top: 2px; }
 .notif .ntime { font-size: 11px; color: var(--muted); margin-top: 3px; }
+/* The unread tint alone had to carry every distinction in this panel; these give a row a KIND at a
+   glance (app.js NOTIF_KINDS, keyed by the same constants.NOTIF_* the server writes). */
+.notif { align-items: flex-start; }
+.notif .n-body { flex: 1; min-width: 0; }
+.notif .nt, .notif .nb { overflow-wrap: anywhere; }
+.n-ic {
+  display: grid; place-items: center; flex: none; width: 30px; height: 30px; border-radius: 9px;
+  background: var(--sunken); color: var(--sub); margin-top: 1px;
+}
+.n-ic .svg-ic { width: 16px; height: 16px; }
+.n-ic.green  { background: var(--green-soft);       color: var(--green-strong); }
+.n-ic.amber  { background: rgba(242,130,12,.14);    color: var(--sentinel); }
+.n-ic.red    { background: rgba(220,70,60,.13);     color: var(--danger); }
+.n-ic.violet { background: rgba(124,92,220,.14);    color: #6547C4; }
+/* The tints are alpha over a light card; on the dark card the same alpha reads almost black, so the
+   glyph needs to come up rather than the tint coming down. */
+:root[data-theme="dark"] .n-ic.violet { color: #B3A0F0; }
+:root[data-theme="dark"] .n-ic.red    { color: #F09A92; }
+:root[data-theme="dark"] .n-ic.amber  { color: #F5A94E; }
+/* A dot as well as the tint: the unread background is a very light green, which disappears entirely
+   for anyone who cannot distinguish it — and it is the only thing that marked a row unread. */
+.n-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--sentinel); margin-top: 6px; }
+.n-day {
+  position: sticky; top: 0; z-index: 1; background: var(--card);
+  font-size: 10px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--muted); padding: 9px 14px 5px; border-bottom: 1px solid var(--line);
+}
+.n-count {
+  font-size: 11px; font-weight: 800; background: var(--sentinel); color: #fff;
+  border-radius: var(--pill); padding: 1px 7px; margin-left: 4px; vertical-align: middle;
+}
+.n-foot { padding: 9px 14px; border-top: 1px solid var(--line); background: var(--sunken); }
+.n-foot .btn { width: 100%; justify-content: center; }
+.notif-panel .empty { padding: 26px 16px; text-align: center; color: var(--muted); font-size: 13px; }
 
 /* ---------- Toast ---------- */
 #toasts { position: fixed; bottom: 22px; right: 22px; z-index: 200; display: flex; flex-direction: column; gap: 10px; }

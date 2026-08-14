@@ -29,6 +29,7 @@ from ..schemas import (
     CommentIn,
     RecurringServiceIn,
     TaskAdoptionApplyIn,
+    TaskApplyTemplateIn,
     TaskAdoptionRevertIn,
     TaskBulkIn,
     TaskCreateIn,
@@ -1033,14 +1034,24 @@ def create_task(payload: TaskCreateIn, background: BackgroundTasks,
     if payload.status not in task_config.statuses(db):
         raise HTTPException(status_code=400, detail="Invalid status")
     is_am = user.role == "account_manager"
-    # 🔴 A TEAM LEAD MAY ONLY STAFF THEIR OWN DEPARTMENT'S WORK (2026-08-05). This was
-    # `role == ROLE_TEAM_LEAD` with no team test, so create was strictly more permissive than edit:
-    # `task_perms.can_reassign` lets a lead name somebody only while the card is routed to their own
-    # team (`_leads_team`), yet the same lead could CREATE a card for another department with a name
-    # already on it. Same rule, both doors: the card has to belong to their department.
-    may_delegate = user.role in task_perms.FULL or (
-        user.role == ROLE_TEAM_LEAD and payload.assigned_team_id is not None
-        and payload.assigned_team_id == user.team_id)
+    # 🔴 A TEAM LEAD MAY STAFF ANY CARD THEY RAISE (2026-08-14) — this line has now been both things.
+    #
+    # History, because the reasoning matters more than the rule: it began as a bare
+    # `role == ROLE_TEAM_LEAD`; on 2026-08-05 it was narrowed to require the lead's own department,
+    # to match `task_perms.can_reassign`, which at the time asked `_leads_team`. That was a correct
+    # fix for a real asymmetry — create must not be more permissive than edit.
+    #
+    # The asymmetry has now been closed from the OTHER end. `can_reassign` asks `_lead_may_act`:
+    # a lead may staff anything they can SEE, and `can_view` grants them sight of everything they
+    # CREATED (`_created`), whatever department it went to. So the narrow test here no longer matched
+    # edit either — it was strictly *stricter*, and it produced the second half of the reported
+    # "Team Lead can't assign" bug: filling in the New Task form without touching the Department
+    # field answered **403 "Only a team lead or manager can assign a task to somebody else"** — a
+    # sentence that names the caller's own role as the reason they were refused.
+    #
+    # Both doors agree again, at the wider setting. Keep them in step: if `_lead_may_act` is ever
+    # narrowed, narrow this with it.
+    may_delegate = user.role in task_perms.FULL or user.role == ROLE_TEAM_LEAD
     # 🔴 A non-delegating role may route to a TEAM, never to a person (decision D10).
     #
     # Naming a colleague is delegation and stays a lead/manager act. But filing into a DEPARTMENT's
@@ -1741,6 +1752,66 @@ def send_back(task_id: str, payload: TaskParkIn, user: User = Depends(get_curren
     _broadcast("updated", task, user.id)
     return {"ok": True, "returned_to": filer.name if filer else None,
             "task": task_detail(task, db)}
+
+
+@router.post("/{task_id}/apply-template")
+def apply_template(task_id: str, payload: TaskApplyTemplateIn,
+                   user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Seed an EXISTING task's breakdown from a service template (2026-08-14).
+
+    🔴 WHY THIS EXISTS. `create_task` seeds a breakdown from a template, and that was the ONLY door.
+    But the commonest way a card is raised on this board is the quick-add — a title and nothing else —
+    and per §3 of the task-placement guidelines that is *supposed* to be the common case for work that
+    comes up during the day. Those cards could never be given a breakdown except by retyping every
+    phase and step by hand, so the recipe book silently only served people who opened the full form
+    first. The template catalog was doing half its job.
+
+    Permission is `can_edit`, matching the rule the breakdown already follows: renaming, adding and
+    deleting steps is EDITING THE WORK, open to whoever may edit the card (§5). It is emphatically not
+    delegation — this route refuses to carry owners, see below — so it does not ask `can_reassign`.
+
+    🔴 THE TEMPLATE'S STEPS ARRIVE UNOWNED AND UNTICKED, ALWAYS. `task_templates.maintasks_for` runs
+    each recipe through `MT.normalize`, which mints fresh ids and carries no `assignee_id`. That is
+    what keeps this route outside the delegation guard entirely: there is no way to smuggle a name
+    onto somebody's board through it, so it needs no `foreign_owner_changes` diff. If a template ever
+    grows default owners, this route needs that diff before it ships — the guard is on the FIELD, and
+    a second writer would walk straight past it (§5).
+
+    The two modes differ in whether they destroy work, which is why `mode` has no default:
+
+    * `append` — the template's phases are added AFTER the existing ones. Nothing is lost. This is
+      what the drawer offers on a card that already has a breakdown.
+    * `replace` — the current breakdown is discarded, ticks and step owners with it. Offered only
+      behind an explicit confirmation, and recorded in history below so "where did my steps go?" has
+      an answer.
+    """
+    task = _own_row(db, task_id, user, task_perms.can_edit, "given a service template")
+    tpl = task_templates.get(db, payload.service_key)
+    if not tpl:
+        raise HTTPException(status_code=404,
+                            detail="That service no longer exists, or has been switched off in "
+                                   "Manage → Services.")
+    seeded = task_templates.maintasks_for(db, payload.service_key)
+    if not seeded:
+        raise HTTPException(status_code=409,
+                            detail=f"“{tpl.label}” has no phases to add — it is an empty recipe.")
+
+    before = maintasks_svc.normalized(task)
+    after = seeded if payload.mode == "replace" else before + seeded
+    task.maintasks_json = maintasks_svc.dumps(after)
+    # The content type is a SEED like everything else here: it fills a blank, it never overwrites a
+    # choice somebody already made on this card.
+    if tpl.content_type and not task.content_type:
+        task.content_type = tpl.content_type
+    _log(db, task.id, user.id, "service_template",
+         f"{len(before)} phase(s)", f"{tpl.label} ({payload.mode}) → {len(after)} phase(s)")
+    db.commit()
+    audit.record(db, actor_id=user.id, table_name="tasks", record_id=task.id,
+                 action="apply_template", old={"phases": len(before)},
+                 new={"service_key": payload.service_key, "mode": payload.mode,
+                      "phases": len(after)})
+    _broadcast("updated", task, user.id)
+    return task_detail(task, db)
 
 
 @router.post("/{task_id}/review/submit")

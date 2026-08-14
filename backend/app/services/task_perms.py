@@ -3,17 +3,26 @@
 The rules (higher roles inherit lower ones):
 
     | action        | employee/intern | team_lead        | account_manager | admin/super_admin |
-    | view          | assigned + team queue | team + own | all             | all               |
+    | view          | assigned + team queue + DEPARTMENT | team + own | all  | all               |
     | create        | yes             | yes              | yes             | yes               |
-    | edit fields   | assigned        | team + own       | all             | all               |
-    | tick a step   | own + unowned   | team             | all             | all               |
-    | reassign      | self only       | team             | all             | all               |
-    | priority      | no              | team (scoped)    | all             | all               |
-    | review/approve| no              | team (scoped)    | all             | all               |
+    | edit fields   | assigned + team queue | anything visible | all       | all               |
+    | tick a step   | own + unowned   | anything visible | all             | all               |
+    | reassign      | self only       | anything visible | all             | all               |
+    | priority      | no              | anything visible | all             | all               |
+    | review/approve| no              | anything visible | all             | all               |
     | delete        | own created     | team + created   | all             | all               |
-    | move status   | assigned        | team             | all             | all               |
+    | move status   | assigned + team queue | anything visible | all       | all               |
     | bridge/Atrium | no              | no               | AM              | admin/super       |
     | see Atrium    | no              | yes              | yes             | yes               |
+
+🔴 TWO ROWS IN THAT TABLE DISAGREE WITH EACH OTHER ON PURPOSE (2026-08-14), and both are load-bearing:
+
+* an employee **views** their whole department and **edits** far less than they view. `can_edit` is
+  therefore no longer `can_view` minus the viewer seat — see its docstring. A department you can read
+  but not touch is the point; making the two match would hand every employee write access to every
+  colleague's card, which is not what "let me see my department" asked for.
+* a team lead **delete**s less than they can otherwise act on. See `can_delete` — delete is the one
+  irreversible act here, and `can_view` reaches a lead through branches as thin as owning one step.
 
 "assigned" = task.assigned_to_id == user.id, **a supporter of the task**, or assigned to one of the
 task's sub-tasks (`is_assigned` — public, because "what is on me" is asked by more than this module).
@@ -74,8 +83,19 @@ def _is_viewer(user: User) -> bool:
     return user.role in READ_ONLY
 
 
+def _dept(user: User, task: Task) -> bool:
+    """This work is routed to the user's OWN department. Read-relevant for everyone.
+
+    🔴 Split out of `_leads_team` on 2026-08-14 because two different questions were sharing one
+    function: "does this belong to my department?" (a fact about the card, true for every member)
+    and "am I the lead of the department it belongs to?" (a permission). An employee now needs the
+    first one — see `can_view` — and giving them the second would be a role escalation.
+    """
+    return task.assigned_team_id is not None and task.assigned_team_id == user.team_id
+
+
 def _leads_team(user: User, task: Task) -> bool:
-    return user.role == ROLE_TEAM_LEAD and task.assigned_team_id is not None and task.assigned_team_id == user.team_id
+    return user.role == ROLE_TEAM_LEAD and _dept(user, task)
 
 
 def is_assigned(user: User, task: Task) -> bool:
@@ -208,10 +228,21 @@ def can_view(user: User, task: Task) -> bool:
     if user.role == ROLE_TEAM_LEAD:
         return (_leads_team(user, task) or is_assigned(user, task) or _created(user, task)
                 or _unowned_client_work(task))
-    # Employee / intern: what is handed to them, plus their team's untriaged queue. Their board still
-    # answers "what am I working on" -- it just no longer pretends work routed to their team doesn't
-    # exist until somebody names them on it.
-    return is_assigned(user, task) or _team_queue(user, task)
+    # Employee / intern: what is handed to them, their team's untriaged queue, and — since
+    # 2026-08-14 — everything else their DEPARTMENT is carrying.
+    #
+    # 🔴 `_dept` here is a READ ONLY. It is deliberately absent from `can_edit` below, and that
+    # asymmetry is the whole design. The July 2026 fix that stopped an employee's board carrying
+    # other people's work was about ACCOUNTABILITY — a board that lists ten colleagues' cards no
+    # longer answers "what am I working on". But it also made a department opaque to the people in
+    # it: you could not see what your own team was carrying, who was drowning, or whether the thing
+    # you were about to raise already existed. Those are two different needs and they were being
+    # answered by one predicate.
+    #
+    # So: an employee SEES their department's work and CANNOT touch it. `mine` / "My work" still
+    # answers the accountability question (`is_assigned`), and the board's scope selector defaults
+    # to it — the department is a place you go to look, not the pile you are handed.
+    return is_assigned(user, task) or _team_queue(user, task) or _dept(user, task)
 
 
 def can_edit(user: User, task: Task) -> bool:
@@ -222,10 +253,23 @@ def can_edit(user: User, task: Task) -> bool:
     why no read-only seat could exist: anyone who could see a card could rewrite its title, dates,
     breakdown and notes. Splitting the two IS decision D8 — keep them separate functions even though
     the bodies look near-identical, because the next person to add a role needs the seam to be here.
+
+    🔴 AND THE BODIES NO LONGER LOOK ALIKE, ON PURPOSE (2026-08-14). `can_view` gained a DEPARTMENT
+    branch for employees/interns so a team is not opaque to its own members. Had this stayed an alias,
+    that one read would have silently handed every employee edit and move rights over every
+    colleague's card in their department — a far bigger change than the one being made, arriving as a
+    side effect of it. This is the exact seam D8 predicted somebody would need, so it is being used
+    rather than widened: an employee writes only to work that is genuinely on them, or to their team's
+    unowned queue.
+
+    Anyone who can act on the department as a whole (team lead, AM, admin, super) keeps the old
+    equivalence, because for them `can_view`'s branches ARE their authority.
     """
     if _is_viewer(user):
         return False
-    return can_view(user, task)
+    if _is_full(user) or user.role == ROLE_TEAM_LEAD:
+        return can_view(user, task)
+    return is_assigned(user, task) or _team_queue(user, task)
 
 
 def can_move(user: User, task: Task) -> bool:
@@ -233,11 +277,42 @@ def can_move(user: User, task: Task) -> bool:
     return can_edit(user, task)
 
 
+def _lead_may_act(user: User, task: Task) -> bool:
+    """🔴 A TEAM LEAD'S MANAGEMENT POWERS FOLLOW VISIBILITY, NOT THE TEAM FIELD (2026-08-14).
+
+    This is the fix for "the Team Lead can't assign" and "the Team Lead can't approve" — one bug
+    reported twice. Every lead power (`can_reassign`, `can_review`, `can_prioritize`) used to ask
+    `_leads_team`, i.e. `task.assigned_team_id == user.team_id`. But `can_view` grants a lead sight
+    of a card through FOUR different branches, and only that one of them carried any authority. So
+    the board routinely handed a lead a card whose every control was dead:
+
+    * a card with **no department at all** — the default for anything quick-added, including work
+      assigned to the lead personally. `assigned_team_id is None` fails the `is not None` test;
+    * an **adopted Atrium card**, which `_unowned_client_work` shows leads *precisely because* it has
+      no team and no owner — the state that predicate exists to describe is the state that disabled
+      every button on it;
+    * a card the lead **raised for another department** (`_created`);
+    * a card led by somebody else with a **step named to the lead** (`is_assigned`);
+    * and the flat case — the lead's own `users.team_id` never set, which killed all of it everywhere
+      and looked exactly like an application bug.
+
+    The failure was silent in the worst way: `taskboard.js` mirrors these predicates, so the assignee
+    picker rendered `disabled` and Approve was never drawn at all. Nobody saw a 403; they saw a
+    feature that did not exist.
+
+    A lead only ever RECEIVES cards `can_view` already let through, so "anything they can see" is the
+    honest statement of the authority they were always meant to have. `_leads_team` survives for the
+    places that really are about the department (below) — it is not dead.
+    """
+    return user.role == ROLE_TEAM_LEAD and can_view(user, task)
+
+
 def can_reassign(user: User, task: Task) -> bool:
-    """Change the assignee/team to SOMEONE ELSE (delegation) — team_lead within their team, and up."""
+    """Change the assignee/team to SOMEONE ELSE (delegation) — a team lead on any card they can see,
+    and up. See `_lead_may_act`."""
     if _is_viewer(user):
         return False
-    return _is_full(user) or _leads_team(user, task)
+    return _is_full(user) or _lead_may_act(user, task)
 
 
 def can_tick_step(user: User, task: Task, step_owner_id: int | None) -> bool:
@@ -268,10 +343,11 @@ def can_tick_step(user: User, task: Task, step_owner_id: int | None) -> bool:
 
 
 def can_prioritize(user: User, task: Task) -> bool:
-    """Set priority — a management call. Team lead within their team, AM/admin/super anywhere."""
+    """Set priority — a management call. A team lead on any card they can see (`_lead_may_act`),
+    AM/admin/super anywhere."""
     if _is_viewer(user):
         return False
-    return _is_full(user) or _leads_team(user, task)
+    return _is_full(user) or _lead_may_act(user, task)
 
 
 def can_review(user: User, task: Task) -> bool:
@@ -285,8 +361,12 @@ def can_review(user: User, task: Task) -> bool:
     self-approval block would then make the Completed column unreachable for that team forever.
     Every approval stamps `reviewer_id` and writes history, so a self-approval is visible rather
     than impossible.
+
+    🔴 Scope widened to `_lead_may_act` on 2026-08-14 — read that docstring. The team-only test made
+    the Completed column unreachable for exactly the cards a lead is most likely to be asked about:
+    anything with no department set, and every adopted client card.
     """
-    return _is_full(user) or _leads_team(user, task)
+    return _is_full(user) or _lead_may_act(user, task)
 
 
 def can_delete(user: User, task: Task) -> bool:
@@ -296,7 +376,15 @@ def can_delete(user: User, task: Task) -> bool:
 
     The creator branch is gated on `can_view`: once a card has left your board (a manager took it
     off you) it is no longer "your own mistake" to clean up, and deleting what you can't even see
-    is never the intent."""
+    is never the intent.
+
+    🔴 DELIBERATELY STILL `_leads_team`, not `_lead_may_act` (2026-08-14). Assign, approve and
+    prioritise were widened to everything a lead can SEE, because withholding them produced dead
+    buttons on cards the lead was accountable for. Delete is not symmetrical with those: it is the
+    one irreversible act on this board, and `can_view` reaches a lead through branches as thin as
+    "somebody named you on one step of this card". Losing another department's work to a misclick
+    from a lead who holds one step of it is a worse failure than the friction of asking an AM. The
+    creator branch below already covers the ordinary "clean up my own mistake" case."""
     if _is_viewer(user):
         return False
     return _is_full(user) or _leads_team(user, task) or (_created(user, task) and can_view(user, task))

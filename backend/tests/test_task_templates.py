@@ -87,3 +87,116 @@ def test_legacy_flat_checklist_migrates_to_a_main_task(client, db, make_user, au
     assert len(task["maintasks"]) == 1
     assert task["maintasks"][0]["subs"][0]["text"] == "old"
     assert task["checklist_total"] == 1 and task["checklist_done"] == 1
+
+
+# --- Applying a template to an EXISTING task (2026-08-14) ----------------------------------------
+#
+# 🔴 Templates could only ever be applied at CREATE time, so the commonest card on this board — a
+# quick-added title, which §3 of the task-placement guidelines says is the RIGHT way to log work that
+# comes up during the day — could never be given a breakdown without retyping every step. The recipe
+# book only served people who opened the full New Task form first.
+
+def _quick_task(client, title="Something that came up"):
+    """A card raised the common way: a title and nothing else."""
+    r = client.post("/api/tasks", json={"title": title})
+    assert r.status_code == 200
+    assert r.json()["maintasks"] == [], "precondition: a quick-added card has no breakdown"
+    return r.json()["id"]
+
+
+def test_a_template_can_be_applied_to_an_existing_task(client, make_user, auth):
+    auth(make_user(C.ROLE_ACCOUNT_MANAGER))
+    tid = _quick_task(client)
+    r = client.post(f"/api/tasks/{tid}/apply-template",
+                    json={"service_key": "google_meta_campaign", "mode": "append"})
+    assert r.status_code == 200
+    tpl = task_templates.SEED_TEMPLATES["google_meta_campaign"]
+    body = r.json()
+    assert [m["title"] for m in body["maintasks"]] == [g[0] for g in tpl["groups"]]
+    assert body["content_type"] == tpl["content_type"]   # filled a blank
+    assert body["checklist_total"] == sum(len(g[1]) for g in tpl["groups"])
+
+
+def test_append_keeps_the_work_already_there_including_ticks(client, make_user, auth, db):
+    """`append` must be genuinely non-destructive — that is the only reason it is the mode the drawer
+    offers on a card that already has a breakdown."""
+    auth(make_user(C.ROLE_ACCOUNT_MANAGER))
+    tid = _quick_task(client)
+    client.patch(f"/api/tasks/{tid}", json={"maintasks": [
+        {"title": "Work already done", "subs": [{"text": "First step", "done": True}]}]})
+
+    r = client.post(f"/api/tasks/{tid}/apply-template",
+                    json={"service_key": "website_fix", "mode": "append"})
+    assert r.status_code == 200
+    mts = r.json()["maintasks"]
+    assert mts[0]["title"] == "Work already done"
+    assert mts[0]["subs"][0]["done"] is True, "an existing tick must survive"
+    assert len(mts) == 1 + len(task_templates.SEED_TEMPLATES["website_fix"]["groups"])
+
+
+def test_replace_discards_the_old_breakdown(client, make_user, auth):
+    auth(make_user(C.ROLE_ACCOUNT_MANAGER))
+    tid = _quick_task(client)
+    client.patch(f"/api/tasks/{tid}", json={"maintasks": [
+        {"title": "Wrong recipe", "subs": [{"text": "Nope"}]}]})
+    r = client.post(f"/api/tasks/{tid}/apply-template",
+                    json={"service_key": "website_fix", "mode": "replace"})
+    assert r.status_code == 200
+    titles = [m["title"] for m in r.json()["maintasks"]]
+    assert "Wrong recipe" not in titles
+    assert titles == [g[0] for g in task_templates.SEED_TEMPLATES["website_fix"]["groups"]]
+
+
+def test_mode_is_required_because_one_of_them_destroys_work(client, make_user, auth):
+    """🔴 No default. `append` and `replace` differ in whether they discard ticks and step owners, and
+    a wrong guess there is unrecoverable — so the caller has to say which one they mean."""
+    auth(make_user(C.ROLE_ACCOUNT_MANAGER))
+    tid = _quick_task(client)
+    assert client.post(f"/api/tasks/{tid}/apply-template",
+                       json={"service_key": "website_fix"}).status_code == 422
+
+
+def test_the_seeded_steps_are_unowned_so_this_is_not_a_delegation_hole(client, make_user, auth, db):
+    """🔴 Naming somebody on a step puts the card on their board (`task_perms.is_assigned`), so any
+    new writer of `maintasks` is a potential way past the delegation guard — this board has shipped
+    that hole twice. This route is safe only because the recipe carries no owners. If a template ever
+    grows default owners, this test fails and the route needs `foreign_owner_changes`."""
+    auth(make_user(C.ROLE_ACCOUNT_MANAGER))
+    tid = _quick_task(client)
+    r = client.post(f"/api/tasks/{tid}/apply-template",
+                    json={"service_key": "google_meta_campaign", "mode": "append"})
+    mts = r.json()["maintasks"]
+    assert all(m.get("assignee_id") is None for m in mts)
+    assert all(s.get("assignee_id") is None for m in mts for s in m["subs"])
+    assert all(s["done"] is False for m in mts for s in m["subs"])
+
+
+def test_an_employee_cannot_reshape_a_colleagues_card(client, auth, make_user, make_team, db):
+    """It follows `can_edit`, which since 2026-08-14 is NOT `can_view` for an employee — their board
+    carries the whole department read-only."""
+    team = make_team(name="Acquisition")
+    owner = make_user(C.ROLE_EMPLOYEE, team_id=team.id, name="Owner")
+    bystander = make_user(C.ROLE_EMPLOYEE, team_id=team.id, name="Bystander")
+    auth(owner)
+    tid = client.post("/api/tasks", json={"title": "Mine", "assigned_team_id": team.id,
+                                          "assigned_to_id": owner.id}).json()["id"]
+    auth(bystander)
+    assert tid in [c["id"] for c in client.get("/api/tasks").json()], "visible to the department"
+    assert client.post(f"/api/tasks/{tid}/apply-template",
+                       json={"service_key": "website_fix", "mode": "replace"}).status_code == 403
+
+
+def test_an_unknown_or_deactivated_service_is_a_404(client, make_user, auth):
+    auth(make_user(C.ROLE_ACCOUNT_MANAGER))
+    tid = _quick_task(client)
+    assert client.post(f"/api/tasks/{tid}/apply-template",
+                       json={"service_key": "no_such_service", "mode": "append"}).status_code == 404
+
+
+def test_an_atrium_card_is_refused_with_a_reason(client, make_user, auth):
+    """Its breakdown lives in Atrium's workspace JSON, not in `maintasks_json` — `_own_row` refuses
+    every lifecycle action on one, and this route inherits that rather than half-working."""
+    auth(make_user(C.ROLE_ACCOUNT_MANAGER))
+    r = client.post("/api/tasks/atrium:honeytribe:tk_1/apply-template",
+                    json={"service_key": "website_fix", "mode": "append"})
+    assert r.status_code == 400
