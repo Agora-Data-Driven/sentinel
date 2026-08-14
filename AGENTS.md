@@ -962,7 +962,19 @@ Two things about this field will otherwise be re-broken:
   2026-08-04 really does have `campaign == title` (one input used to write both, §7), and those rows
   were **deliberately never backfilled**. `campaignOf` returns `""` for them, which is what stops a
   legacy card printing its own name twice and stops the filter offering one bogus campaign per legacy
-  task. Four surfaces read it — the card, the search, the filter's option list, the drawer — through
+  task.
+- 🔴 **That duplicate test COMPARES normalised text and RETURNS the original (2026-08-14).** It was
+  an exact string compare, and a near miss defeated it outright: the live board held the title
+  *"RHE Rooming House Extension"* against the campaign *"RHE Rooming HouseExtension"* — **one absent
+  space** — so the card printed its own name on both lines. That was not just ugly. `.t-client` and
+  `.t-camp` are `white-space: nowrap`, so the doubled line became the widest unbreakable content in
+  the column and **widened the whole column** (see the `.col` note above: a flex item's automatic
+  minimum beats its basis). One stray keystroke in a campaign name reshaped the board.
+  Whitespace is stripped **entirely**, not collapsed — the difference was a *missing* space, so
+  `\s+ → " "` would not have caught it — and case is folded with it. 🔴 **That is the whole
+  normalisation, deliberately**: anything fuzzier starts suppressing campaigns that legitimately
+  resemble their title, and a grouping key you cannot see is a filter you cannot trust — strictly
+  worse than the duplicate it hides. Four surfaces read it — the card, the search, the filter's option list, the drawer — through
   that one function, because this is precisely the shape of duplication that made the card and the
   drawer disagree about an Atrium owner (§2). **The API still reports the duplicate honestly**; the
   suppression is a display rule, so it stays reversible and no data is rewritten.

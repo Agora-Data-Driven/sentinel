@@ -581,9 +581,29 @@ window.TaskBoard = {
   // So a legacy card would print its own name twice — once as the campaign, once as the title — and
   // the filter would offer one bogus "campaign" per legacy task. Suppressed here rather than in each
   // reader, which is how two of them would drift.
+  //
+  // 🔴 THE COMPARISON IS NORMALISED; THE VALUE RETURNED IS NOT (2026-08-14). It was an EXACT string
+  // compare, and a near miss defeats it completely — the live board carried the title "RHE Rooming
+  // House Extension" against the campaign "RHE Rooming HouseExtension", ONE absent space, so that
+  // card printed its own name on both lines. It was not merely ugly: `.t-client`/`.t-camp` are
+  // `white-space: nowrap`, so the doubled line became the widest unbreakable thing in the column and
+  // widened the COLUMN (see the 🔴 on `.col` in styles.css — a flex item's automatic minimum beats
+  // its basis). One stray keystroke in a campaign name reshaped the board.
+  //
+  // Whitespace is stripped ENTIRELY, not collapsed: the difference here is a space that is missing,
+  // so `\s+ -> " "` would not have matched it. Case is folded with it.
+  // 🔴 And that is the whole normalisation, deliberately. Anything fuzzier (edit distance,
+  // prefixes) starts suppressing campaigns that legitimately resemble their card's title, and a
+  // grouping key you cannot see is a filter you cannot trust — strictly worse than the duplicate
+  // it would hide. Equal-modulo-spacing IS the same string a human typed twice; nothing beyond
+  // that is safe to assume.
+  //
+  // Still a DISPLAY rule only: the API keeps reporting the duplicate honestly and nothing rewrites
+  // a stored value, so this stays reversible and no data is lost.
+  const squash = (s) => (s || "").replace(/\s+/g, "").toLowerCase();
   const campaignOf = (t) => {
     const c = (t.campaign || "").trim();
-    return c && c !== (t.title || "").trim() ? c : "";
+    return c && squash(c) !== squash(t.title) ? c : "";
   };
 
   // The task-placement guidelines' naming rule, stated where the name is actually typed — and shown
