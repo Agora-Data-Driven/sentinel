@@ -134,6 +134,17 @@ inside any comment that lives in a template literal**, never with a backtick.
   - **ONE flag per card, at most** (`flagOf`, in `taskboard.js`): client-asked → not-synced →
     in-review → changes → approved → urgent → parked → filed → unclaimed. It replaced a row of five
     pills that could all be lit at once on a 288px card, at which point none of them was read.
+  - 🔴 **"Parked" is derived from the COLUMN, not from `on_hold`** (`isParked`, 2026-08-14). Sitting
+    in the parked column *is* the hold — the rule `task_workflow._sync_hold` enforces on every
+    Sentinel move — and the flag plus the dashed `.quiet` card now both ask that. `on_hold` alone was
+    false for two kinds of card that were nevertheless sitting in that column: an **Atrium** card
+    (`PATCH /{id}/status` takes the bridge branch, which moves the client card's STAGE and nothing
+    else; over there `on_hold` is a separate flag with its own checkbox on the Atrium edit form), and
+    a Sentinel row dragged in before `_sync_hold` shipped. Both rendered as ordinary live work in the
+    Parked column — reported live 2026-08-14, one client card with no flag and no dimming beside two
+    that had both. The record's notice ladder and the Overview's "my work" strip (`dashboard.js`,
+    `flags`) derive it the same way, or the three surfaces disagree about one card. By **stage**,
+    never the label "Parked" — Manage renames that column.
   - 🔴 **Overdue is deliberately NOT in that ladder.** The DATE carries it, in red, at the other end
     of the card ("Jul 31 · 6d late"). Putting it in the ladder spends the one flag slot on something
     already said — which is exactly how the single card that was both late AND had an open client
