@@ -35,6 +35,7 @@ from ..models import (
     TaskHistory,
     Team,
     User,
+    UserTeam,
 )
 from ..schemas import PersonCreateIn, PersonUpdateIn
 from ..security import get_current_user, is_admin, require_min_role, require_roles
@@ -42,6 +43,7 @@ from ..serializers import (CardPrefetch, gym_log_dict, leave_balance_dict, summa
                            user_full)
 from ..services import audit
 from ..services import leave as leave_svc
+from ..services import teams as teams_svc
 from ..utils.time import today_ph, utcnow
 from ..utils.qr import make_qr_png, new_token
 from ..utils.passwords import hash_password
@@ -75,17 +77,25 @@ def directory(
     db: Session = Depends(get_db),
 ):
     rows = db.execute(select(User).order_by(User.name)).scalars().all()
+    # One read of the department names for the whole directory — the search below asks per person,
+    # and there are a handful of departments against a growing roster.
+    team_names = {t.id: t.name for t in db.execute(select(Team)).scalars().all()}
     out = []
     for u in rows:
-        if team and u.team_id != team:
+        # 🔴 ANY of their departments, not just the primary one (2026-08-14). Filtering a directory
+        # by "Design" has to list everybody who works in Design — somebody whose second department
+        # it is does that work, sits in that stand-up, and is on that board. Matching `team_id`
+        # alone hid exactly the people multi-department membership exists for.
+        if team and not teams_svc.in_team(u, team):
             continue
         if role and u.role != role:
             continue
         if search:
             s = search.lower()
             if s not in u.name.lower() and s not in u.email.lower():
-                team_obj = db.get(Team, u.team_id) if u.team_id else None
-                if not (team_obj and s in team_obj.name.lower()):
+                # Searching by department name matches on any of them, for the same reason.
+                if not any(s in (team_names.get(tid) or "").lower()
+                           for tid in teams_svc.team_ids(u)):
                     continue
         st = _status_of(db, u)
         if status and st != status:
@@ -173,6 +183,8 @@ def create_person(payload: PersonCreateIn, actor: User = Depends(get_current_use
         u.password_hash = hash_password(payload.password)
     db.add(u)
     db.flush()
+    # Additional departments, AFTER the flush — the join row needs the new id.
+    teams_svc.set_extra_teams(db, u, payload.team_ids)
     db.add(QRToken(user_id=u.id, token=new_token()))
     leave_svc.ensure_balances(db, u.id, today_ph().year, commit=False)
     db.commit()
@@ -192,14 +204,24 @@ def update_person(user_id: int, payload: PersonUpdateIn, actor: User = Depends(r
         raise HTTPException(status_code=400, detail="Invalid role")
     # Password is set separately (hashed), and never echoed in the audit log.
     new_password = data.pop("password", None)
+    # Departments are a JOIN TABLE, not a column — pop it before the generic `setattr` loop below
+    # would try to assign a list of ints onto the relationship. Applied after the other fields so a
+    # PATCH that moves somebody's PRIMARY department in the same call is deduped against the new
+    # one, not the old (`set_extra_teams` drops the primary from the extras).
+    extra_teams = data.pop("team_ids", None)
     if new_password:
         u.password_hash = hash_password(new_password)
     if "email" in data and data["email"]:
         data["email"] = data["email"].strip().lower()
     before = {k: getattr(u, k) for k in data}
+    if extra_teams is not None:
+        before["team_ids"] = sorted(t.team_id for t in (u.extra_teams or []))
     for field, value in data.items():
         setattr(u, field, value)
+    stored_teams = teams_svc.set_extra_teams(db, u, extra_teams)
     db.commit()
+    if extra_teams is not None:
+        data["team_ids"] = stored_teams
     audit.record(db, actor_id=actor.id, table_name="users", record_id=u.id, action="update",
                  old=before, new={**data, **({"password": "***"} if new_password else {})})
     team = db.get(Team, u.team_id) if u.team_id else None
@@ -355,6 +377,10 @@ def delete_person(user_id: int, actor: User = Depends(get_current_user), db: Ses
     db.query(Notification).filter(Notification.user_id == u.id).delete(synchronize_session=False)
     db.query(TaskComment).filter(TaskComment.author_id == u.id).delete(synchronize_session=False)
     db.query(QRToken).filter(QRToken.user_id == u.id).delete(synchronize_session=False)
+    # Additional department memberships (models.UserTeam). The relationship cascades on an ORM
+    # delete, but this route clears dependants with bulk statements — which bypass the ORM entirely
+    # — so it has to be named here like every other owned record above.
+    db.query(UserTeam).filter(UserTeam.user_id == u.id).delete(synchronize_session=False)
     # References from other people's records -> null out (keep those records intact).
     db.query(AttendanceRequest).filter(AttendanceRequest.reviewed_by_id == u.id).update({AttendanceRequest.reviewed_by_id: None}, synchronize_session=False)
     db.query(LeaveRequest).filter(LeaveRequest.reviewed_by_id == u.id).update({LeaveRequest.reviewed_by_id: None}, synchronize_session=False)

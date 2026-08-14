@@ -31,6 +31,7 @@ from ..models import (
     TaskVocabItem,
     Team,
     User,
+    UserTeam,
 )
 from ..security import get_current_user, require_roles
 from ..serializers import client_dict, leave_type_dict, shift_template_dict, team_dict
@@ -354,6 +355,11 @@ def delete_team(item_id: int, actor: User = Depends(get_current_user), db: Sessi
         raise HTTPException(404, "Department not found")
     name = t.name
     db.query(User).filter(User.team_id == item_id).update({User.team_id: None}, synchronize_session=False)
+    # 🔴 The ADDITIONAL memberships go too (`models.UserTeam`, 2026-08-14). These rows carry an FK to
+    # `teams`, so leaving them behind orphans them — on Postgres the delete below simply fails, and
+    # on SQLite (which does not enforce FKs by default) it succeeds and leaves rows pointing at a
+    # department that no longer exists, which `teams.team_ids` would keep handing out forever.
+    db.query(UserTeam).filter(UserTeam.team_id == item_id).delete(synchronize_session=False)
     db.query(Task).filter(Task.assigned_team_id == item_id).update({Task.assigned_team_id: None}, synchronize_session=False)
     db.delete(t)
     db.commit()

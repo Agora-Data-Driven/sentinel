@@ -560,6 +560,9 @@ class PersonCreateIn(BaseModel):
     email: str
     role: str = "employee"
     team_id: int | None = None
+    # ADDITIONAL departments (models.UserTeam). `team_id` above stays the primary one — the one that
+    # decides this person's shift, their payroll row and the Department column in People.
+    team_ids: list[int] | None = None
     phone: str | None = None
     hired_date: date | None = None
     shift_template_id: int | None = None
@@ -571,6 +574,11 @@ class PersonUpdateIn(BaseModel):
     email: str | None = None
     role: str | None = None
     team_id: int | None = None
+    # 🔴 `None` means NOT SENT and leaves the memberships untouched; `[]` really does remove them
+    # all. Same contract as `support_ids` (AGENTS.md §5) and for the same reason: a plain `[]`
+    # default would make every unrelated PATCH — a phone number, a shift, a password reset — quietly
+    # empty somebody's additional departments and shrink their board.
+    team_ids: list[int] | None = None
     phone: str | None = None
     hired_date: date | None = None
     shift_template_id: int | None = None

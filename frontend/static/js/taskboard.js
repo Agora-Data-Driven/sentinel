@@ -712,18 +712,68 @@ window.TaskBoard = {
     { key: "mine", label: "on you", tone: "", test: (t) => !!t.mine },
   ];
   let att = {};                     // key -> true while that pill is pressed
-  // Which question this board is answering, for a role that now has two (see #scope-seg). Stored per
-  // browser like the density switch — it is one person's working habit, not org configuration.
+
+  // --- Departments: this viewer belongs to a SET of them ------------------------------------------
+  // 🔴 `S.user.team_ids`, not `S.user.team_id` (2026-08-14, `models.UserTeam`). A person may take
+  // part in several departments — a designer who also sits with Acquisition, a lead covering a
+  // second team — and the server's `task_perms._dept` is a set test now. Every comparison in this
+  // file that used to read `=== S.user.team_id` would otherwise be the client-side half of the bug
+  // that made those people's board show one department while the server sent them two.
+  //
+  // The `team_id` fallback is for a cached `me` payload served from before this shipped: the field
+  // is absent there, and an empty list would silently hide the department the person actually has.
+  const myTeamIds = (S.user.team_ids && S.user.team_ids.length)
+    ? S.user.team_ids.slice()
+    : (S.user.team_id != null ? [S.user.team_id] : []);
+  const inMyDepts = (teamId) => teamId != null && myTeamIds.includes(teamId);
+  // AM+ and the read-only seat work across the whole estate, so no department is "theirs" or "other"
+  // — grouping the pickers for them would be a distinction that means nothing at their level.
+  const estateWide = canManage || readOnly;
+  const myTeamNames = myTeamIds.map((id) => (teamsById[id] || {}).name).filter(Boolean);
+  // 🔴 Three forms, because every one of these sentences is user-facing and a person in two
+  // departments would otherwise be told about "your departments's queue". The plural is not a
+  // rare case here — it is exactly the case this feature was built for, so it cannot be the one
+  // that reads like a bug.
+  const plural = myTeamIds.length > 1;
+  const deptWord = plural ? "departments" : "department";
+  const deptPoss = plural ? "departments'" : "department's";
+  const deptIs = plural ? "are" : "is";
+
+  // Which question this board is answering, for the roles that have more than one (see #scope-seg).
+  // Stored per browser like the density switch — it is one person's working habit, not org config.
   const SCOPE_KEY = "sentinel.tb.scope";
-  let taskScope = "mine";
-  try { if (localStorage.getItem(SCOPE_KEY) === "dept") taskScope = "dept"; } catch (e) { /* private mode */ }
+  // 🔴 The TABS AND THE DEFAULT BOTH DIFFER BY ROLE, and each default reproduces that role's board
+  // exactly as it was — an upgrade must never look like cards have gone missing:
+  //
+  //   employee  On me (default) | My department   — `mine` is the board they had before the
+  //                                                 department read landed on 2026-08-14
+  //   lead      Everything (default) | My department(s)
+  //
+  // 🔴 A lead gets NO "On me" tab, deliberately. The attention pills on this same bar already carry
+  // **on you** (`ATT.mine`), and a tab that repeats a pill two controls to its right is the exact
+  // duplication this bar was cut from fourteen controls to six to remove. The employee's `mine` is
+  // not that duplicate: it is their DEFAULT scope, so it defines the board rather than filtering it.
+  const SCOPE_TABS = canMonitor
+    ? [{ k: "all", label: "Everything",
+         title: `Everything you can see: your ${deptWord}, work assigned to you, cards you raised for another department, and unclaimed client work` },
+       { k: "dept", label: myTeamIds.length > 1 ? "My departments" : "My department",
+         title: `Only work routed to your ${deptWord}${myTeamNames.length ? " (" + myTeamNames.join(", ") + ")" : ""}` }]
+    : [{ k: "mine", label: "On me",
+         title: `Work assigned to you, plus anything in your ${deptPoss} queue that nobody has picked up yet` },
+       { k: "dept", label: myTeamIds.length > 1 ? "My departments" : "My department",
+         title: "Everything your department is carrying, including your colleagues' cards. You can open them; only their owner or a lead can change them" }];
+  const SCOPES = SCOPE_TABS.map((t) => t.k);
+  let taskScope = SCOPES[0];
+  try {
+    const saved = localStorage.getItem(SCOPE_KEY);
+    if (SCOPES.includes(saved)) taskScope = saved;
+  } catch (e) { /* private mode */ }
   /** The pre-2026-08-14 board, exactly: work that is ON you (`mine` — the server's `is_assigned`,
    *  never `assigned_to_id === me`), plus your department's UNCLAIMED queue, which was always shared
    *  because an unowned card is nobody's job yet (`task_perms._team_queue`). Keeping the queue inside
    *  the narrow scope matters: it is the one part of the department view that is genuinely an
    *  invitation to act rather than something to read. */
-  const onMyPlate = (t) => !!t.mine || (t.assigned_to_id == null
-    && t.assigned_team_id != null && t.assigned_team_id === S.user.team_id);
+  const onMyPlate = (t) => !!t.mine || (t.assigned_to_id == null && inMyDepts(t.assigned_team_id));
   let selection = new Set();        // M7 — ids ticked for a bulk action
   let allTasks = [];          // last fetch, unfiltered by the text search
   // View: "board" (status Kanban) | "employee" (swimlanes per person) | "monitor" (manager rollup).
@@ -735,6 +785,51 @@ window.TaskBoard = {
   // is assigned to nobody here (the server enforces both in task_perms.can_view /
   // can_view_atrium). So the multi-person views and the assignee filter are noise: plain board only.
   if (!canMonitor) mode = "board";
+
+  // --- Which filters this role actually needs ----------------------------------------------------
+  // 🔴 THE FILTER BAR IS ROLE-SHAPED (2026-08-14). It used to render one identical row of controls
+  // for every viewer, which meant the two roles at the ends of the ladder both got a bar that did
+  // not fit: an employee was offered a picker of every department in the company (all but one of
+  // which empties their board), and a team lead was offered the same flat list with nothing marking
+  // the departments they lead. Neither control was WRONG — the server has always scoped the answer
+  // — they just could not be used to ask anything.
+  //
+  // Two rules held to below, because the tempting fix breaks both:
+  //   * **group, never truncate.** Every one of these filters can legitimately reach outside the
+  //     viewer's own department (a card they raised for another team, a person from another team
+  //     holding their work). Removing those options removes real queries; labelling them removes
+  //     only the confusion.
+  //   * **a control that cannot change the answer is not rendered at all** — the same rule the
+  //     saved-views picker, the Clear button and the campaign filter already follow here.
+  const otherTeams = teams.filter((t) => !inMyDepts(t.id));
+  // Shown when there is more than one department to choose BETWEEN. A single-department employee's
+  // board is that department, so the picker could only ever empty it; a manager always gets it.
+  const showTeamFilter = teams.length > 1 && (estateWide || canMonitor || myTeamIds.length > 1);
+  const optionList = (rows) => rows.map((t) => `<option value="${t.id}">${S.esc(t.name)}</option>`).join("");
+  function teamOptionsHtml() {
+    const head = `<option value="">All departments</option>`;
+    if (estateWide || !myTeamIds.length) return head + optionList(teams);
+    const mine = teams.filter((t) => inMyDepts(t.id));
+    return head
+      + `<optgroup label="${myTeamIds.length > 1 ? "My departments" : "My department"}">${optionList(mine)}</optgroup>`
+      + (otherTeams.length ? `<optgroup label="Other departments">${optionList(otherTeams)}</optgroup>` : "");
+  }
+  // A person is "in my departments" if ANY of theirs is one of mine — `team_ids` is a set on both
+  // sides now (serializers.user_full). The `team_id` fallback keeps this working against a payload
+  // cached from before that field shipped.
+  const sharesMyDept = (p) => (p.team_ids && p.team_ids.length
+    ? p.team_ids.some(inMyDepts) : inMyDepts(p.team_id));
+  function assigneeOptionsHtml() {
+    const opt = (p) => `<option value="${p.id}">${S.esc(p.name)}</option>`;
+    if (estateWide || !myTeamIds.length) return people.map(opt).join("");
+    const mine = people.filter(sharesMyDept);
+    const rest = people.filter((p) => !sharesMyDept(p));
+    if (!mine.length) return people.map(opt).join("");
+    return `<optgroup label="${myTeamIds.length > 1 ? "My departments" : "My department"}">${mine.map(opt).join("")}</optgroup>`
+      + (rest.length ? `<optgroup label="Elsewhere">${rest.map(opt).join("")}</optgroup>` : "");
+  }
+  // The scope switch needs a department to narrow TO, and something to narrow FROM.
+  const showScopeSeg = !estateWide && myTeamIds.length > 0;
 
   // Section-style header (h3) so the board reads as a dashboard section, not a second page title.
   root.innerHTML = `<div class="tb-head">
@@ -767,32 +862,55 @@ window.TaskBoard = {
     <div class="tb-bar">
       <input id="f-search" class="tb-search" type="search" placeholder="Search tasks, clients, people…" autocomplete="off">
       <select id="f-client"><option value="">All clients</option>${clients.map((c) => `<option value="${c.id}">${S.esc(c.name)}</option>`).join("")}</select>
-      <select id="f-team"><option value="">All departments</option>${teams.map((t) => `<option value="${t.id}">${S.esc(t.name)}</option>`).join("")}</select>
-      ${/* 🔴 SCOPE — only for employees/interns, and only because the distinction is NEW for them
-            (2026-08-14). `task_perms.can_view` now shows an ordinary member their whole department,
-            not just what is on their own plate, so for the first time their board answers two
-            different questions and needs to say which one it is showing.
+      ${/* 🔴 DEPARTMENTS ARE GROUPED, NOT TRIMMED (2026-08-14). This was a flat list of every
+            department in the company, rendered identically for a team lead who can see one of them
+            and for an AM who can see all of them — so a lead's most-used filter was mostly options
+            that answer with an empty board, and nothing on screen said which ones were theirs.
 
-            Deliberately NOT rendered for team_lead and up: they already have `#f-team` above (a real
-            department picker, because they work across several) and the "on you" pill below, so a
-            third control here would be a duplicate of both. This is the "different filter per role"
-            shape — the control exists where the question exists.
+            Grouped rather than filtered down, because "show me the work I filed for Design" is a
+            real question a lead can ask: `_created` keeps a card they raised for another department
+            on their board (that is what "Filed by me" lists), and cutting the option would take a
+            working query away to tidy up the list. So the answer is to SAY which are theirs, not to
+            decide for them.
 
-            Defaults to `mine`, which reproduces their board EXACTLY as it was before the widening.
-            The department is opt-in: nobody logs in one morning to find nine colleagues' cards on a
-            board that used to be a to-do list. */""}
-      ${/* 🔴 And only when they HAVE a department. `task_perms._dept` matches on `user.team_id`, so
-            for somebody whose profile has none, "My department" is a tab that reveals nothing —
+            Hidden entirely for a single-department employee: their whole board is that one
+            department, so every option here either changes nothing or empties the board — and the
+            scope switch beside it already asks the only useful version of the question. */""}
+      ${showTeamFilter ? `<select id="f-team">${teamOptionsHtml()}</select>` : ""}
+      ${/* 🔴 SCOPE — the board answers more than one question for everybody below AM, so it says
+            which one it is showing (2026-08-14).
+
+            For an EMPLOYEE the distinction was new that day: `task_perms.can_view` began showing an
+            ordinary member their whole department, not just what is on their own plate.
+
+            For a TEAM LEAD it was never new and never expressible — their board has always carried
+            four different things at once (their departments' work, cards on them personally, work
+            they raised for another department, and unowned client cards), with one flat list and no
+            way to ask for a subset. "What is on ME today" was the question a lead could not put to
+            their own board; they got it by reading past everyone else's cards. Hence three tabs
+            rather than the employee's two: `all` is what a lead's board has always been, and it
+            stays their default, so nothing they had disappears on upgrade.
+
+            AM / admin / super / viewer get no switch: they hold the whole estate, so "my department"
+            is not a meaningful narrowing of it, and `#f-team` + `#f-assignee` above already cut it
+            the ways they actually cut it. The control exists where the question exists — this is
+            the per-role filter shape, not one bar with everything on it for everyone.
+
+            🔴 And only when the viewer HAS a department. `task_perms._dept` matches on membership,
+            so for somebody whose profile has none, "My department" is a tab that reveals nothing —
             the same empty-control problem as the saved-views picker and the Clear button. */""}
-      ${(!canMonitor && S.user.team_id != null) ? `<div class="seg sm" id="scope-seg" role="tablist">
-        <button type="button" data-scope="mine" role="tab" title="Work assigned to you, plus anything in your department's queue that nobody has picked up yet">On me</button>
-        <button type="button" data-scope="dept" role="tab" title="Everything your department is carrying, including your colleagues' cards. You can open them; only their owner or a lead can change them">My department</button>
-      </div>` : ""}
+      ${showScopeSeg ? `<div class="seg sm" id="scope-seg" role="tablist">${SCOPE_TABS.map((t) =>
+        `<button type="button" data-scope="${t.k}" role="tab" title="${S.esc(t.title)}">${S.esc(t.label)}</button>`).join("")}</div>` : ""}
       ${/* Options are filled by refreshCampaignList from the cards actually on the board, and it
             stays hidden until there is one — the same rule as the saved-views picker below, for the
             same reason: a dropdown whose only entry is its own placeholder cannot do anything. */""}
       <select id="f-campaign" title="Campaign" hidden><option value="">All campaigns</option></select>
-      ${canMonitor ? `<select id="f-assignee"><option value="">Anyone</option><option value="none">Unassigned</option>${people.map((p) => `<option value="${p.id}">${S.esc(p.name)}</option>`).join("")}</select>` : ""}
+      ${/* Grouped for a team lead for the same reason as the department picker, and with the same
+            refusal to shorten the list: a lead may name anybody on a card they can see
+            (`task_perms._lead_may_act`), so somebody outside their department really can be holding
+            their work — dropping those names would make a card unfilterable by the one field that
+            answers "who has it". */""}
+      ${canMonitor ? `<select id="f-assignee"><option value="">Anyone</option><option value="none">Unassigned</option>${assigneeOptionsHtml()}</select>` : ""}
       <span class="tb-sep"></span>
       <span class="tb-att" id="tb-att"></span>
       ${/* Only when there is something to clear — a permanently visible Clear on an unfiltered
@@ -811,9 +929,16 @@ window.TaskBoard = {
   // branch; a board that describes itself wrongly is how the "nothing on you right now" bug went
   // unnoticed for a month.
   const boardLead = () => {
-    if (canMonitor) return "Drag cards across columns. Client cards from Atrium are editable here too — every edit writes straight back to Atrium.";
-    if (taskScope === "dept") return "Everything your department is carrying. Cards that aren't yours are read-only — open them to read, but only their owner or a lead can change them.";
-    return "Your tasks — the work assigned to you, plus anything in your department's queue nobody has picked up. Drag cards across columns to update status.";
+    // A lead's sentence follows the scope too, for the same reason the employee's does: the switch
+    // changes which cards are on screen, and a board that keeps describing the widest view while
+    // showing a narrow one is how somebody concludes their work has gone missing.
+    const depts = myTeamNames.length ? ` (${myTeamNames.join(", ")})` : "";
+    if (canMonitor) {
+      if (showScopeSeg && taskScope === "dept") return `Work routed to your ${deptWord}${depts} — your ${plural ? "teams'" : "team's"} plate, without the cards you hold elsewhere. Use the “on you” pill for your own.`;
+      return "Drag cards across columns. Client cards from Atrium are editable here too — every edit writes straight back to Atrium.";
+    }
+    if (taskScope === "dept") return `Everything your ${deptWord} ${deptIs} carrying${depts}. Cards that aren't yours are read-only — open them to read, but only their owner or a lead can change them.`;
+    return `Your tasks — the work assigned to you, plus anything in your ${deptPoss} queue nobody has picked up. Drag cards across columns to update status.`;
   };
   const LEADS = {
     board: "",   // replaced per render by boardLead() — it depends on the scope switch
@@ -851,7 +976,11 @@ window.TaskBoard = {
     // `att` on every render, so they need no line here. Nor does #f-campaign: refreshCampaignList
     // rebuilds its options from the loaded cards on every render and marks `campaign` selected.)
     S.qs("#f-client").value = filters.client_id;
-    S.qs("#f-team").value = filters.team_id;
+    // Guarded like #f-assignee below: the department picker is not rendered for a viewer who has
+    // no department to choose between (see `showTeamFilter`), and a saved view written before that
+    // rule existed can still carry a `team_id`. The filter itself still applies — it is sent by
+    // `load()` from `filters` — there is simply no control to push it back into.
+    if (S.qs("#f-team")) S.qs("#f-team").value = filters.team_id;
     if (S.qs("#f-assignee")) S.qs("#f-assignee").value = filters.assignee_id;
     S.qs("#f-search").value = search;
     load();
@@ -859,7 +988,7 @@ window.TaskBoard = {
 
   S.qs("#f-search").oninput = (e) => { search = e.target.value.trim().toLowerCase(); render(); };
   S.qs("#f-client").onchange = (e) => { filters.client_id = e.target.value; load(); };
-  S.qs("#f-team").onchange = (e) => { filters.team_id = e.target.value; load(); };
+  if (S.qs("#f-team")) S.qs("#f-team").onchange = (e) => { filters.team_id = e.target.value; load(); };
   // `render`, not `load` — the campaign filter narrows the cards already fetched (see `campaign`).
   S.qs("#f-campaign").onchange = (e) => { campaign = e.target.value; render(); };
   if (S.qs("#f-assignee")) S.qs("#f-assignee").onchange = (e) => { filters.assignee_id = e.target.value; load(); };
@@ -906,7 +1035,7 @@ window.TaskBoard = {
     att = {};
     S.qs("#f-search").value = "";
     S.qs("#f-client").value = "";
-    S.qs("#f-team").value = "";
+    if (S.qs("#f-team")) S.qs("#f-team").value = "";
     S.qs("#f-campaign").value = "";
     if (S.qs("#f-assignee")) S.qs("#f-assignee").value = "";
     load();
@@ -1240,10 +1369,18 @@ window.TaskBoard = {
     // work", the search and the selects answer "WHICH work". Two different questions, so the
     // page-level scope is layered on top of this board's own filters rather than replacing them.
     if (!inPeopleScope(t)) return false;
-    // The role-scoped board/department switch. Only ever narrowing, and only ever for the roles that
-    // have the control — `canMonitor` roles never had their board widened, so there is nothing here
-    // for it to do and `taskScope` is left at its default for them.
-    if (!canMonitor && taskScope === "mine" && !onMyPlate(t)) return false;
+    // The role-scoped board/department switch (#scope-seg). Only ever NARROWING — every card here
+    // already passed the server's `can_view`, so this can hide but never reveal — and only for the
+    // roles that have the control. `all` is the no-op scope: it is what the board shows when nothing
+    // is narrowing it, which is why an AM (who has no switch) never reaches these branches.
+    if (showScopeSeg) {
+      if (taskScope === "mine" && !onMyPlate(t)) return false;
+      // 🔴 `dept` tests the CARD's department against the viewer's set, and deliberately does NOT
+      // fall back to `mine` for a card with no department. "What is my team carrying" is a question
+      // about routed work; a card nobody routed anywhere is not part of the answer, and quietly
+      // padding this view with it would make the two tabs overlap for no stated reason.
+      if (taskScope === "dept" && !inMyDepts(t.assigned_team_id)) return false;
+    }
     // Campaign before the search, because it is the coarser question ("which campaign") and a card
     // outside the picked one is off the board however its text reads.
     if (campaign && campaignOf(t) !== campaign) return false;

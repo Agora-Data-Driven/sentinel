@@ -58,6 +58,7 @@ from ..models import Client, Task, TaskRequest, Team, User
 from ..utils.time import to_ph, today_ph
 from . import atrium_identity, atrium_tasks, task_adoption, task_analytics, task_config, task_perms
 from . import maintasks as MT
+from . import teams as teams_svc
 
 # The wider board is capped; the viewer's OWN work never is (see the module docstring). 300 is far
 # above any real board — the live estate runs in the tens — so this is a runaway guard, not a budget,
@@ -216,7 +217,12 @@ def _people_rollup(db: Session, user: User, today) -> list[dict]:
         return []
     people = db.execute(select(User).where(User.is_active.is_(True))).scalars().all()
     if user.role == ROLE_TEAM_LEAD:
-        people = [p for p in people if p.team_id == user.team_id]
+        # Every department this lead is part of, and everybody in them — including people whose
+        # SECOND department it is (`services/teams`, 2026-08-14). Kept identical to
+        # `tasks.employee_summary` through the same helper: the coach answering a different set of
+        # people from the Monitor is the exact divergence this cohort rule was copied to avoid.
+        mine = teams_svc.member_ids(db, teams_svc.team_ids(user))
+        people = [p for p in people if p.id in mine or p.id == user.id]
     if not people:
         return []
     people = sorted(people, key=lambda p: (p.name or "").lower())

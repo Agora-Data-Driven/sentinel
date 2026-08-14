@@ -26,14 +26,21 @@ window.pageInit = async (S) => {
         { k: "name", label: "Name" },
         { k: "email", label: "Email" },
         { k: "role_label", label: "Role" },
-        { k: "team_name", label: "Department" },
+        { k: "team_name", label: "Department", fmt: (v, r) => _deptCell(v, r) },
         { k: "status", label: "Status", fmt: (v) => S.statusPill(v) },
       ],
       fields: [
         { k: "name", label: "Name", type: "text", req: true },
         { k: "email", label: "Email", type: "text", req: true },
         { k: "role", label: "Role", type: "select", optsKey: "roles" },
-        { k: "team_id", label: "Department", type: "select", optsKey: "teams", allowEmpty: true, coerce: "intOrNull" },
+        { k: "team_id", label: "Department (their main one — drives their shift, payroll and the People directory)", type: "select", optsKey: "teams", allowEmpty: true, coerce: "intOrNull" },
+        // 🔴 ADDITIONAL departments (models.UserTeam, 2026-08-14). People here are not all in exactly
+        // one department — a designer who also sits with Acquisition, a lead covering a second team
+        // — and until this existed the only way to say so was to change their main one, which moved
+        // their shift and their payroll row with it. Ticking a box here widens what they SEE (that
+        // department's board, queue, notifications and rollups) and nothing else; a team lead leads
+        // every department ticked here, an employee reads them exactly as they read their own.
+        { k: "team_ids", label: "Also works with (extra departments — they see and, if they're a team lead, lead these too)", type: "multi", optsKey: "teams", coerce: "intList", omitValueOf: "team_id" },
         { k: "shift_template_id", label: "Shift (override; blank = use department's)", type: "select", optsKey: "shiftTemplates", allowEmpty: true, coerce: "intOrNull" },
         { k: "phone", label: "Phone", type: "text" },
         { k: "hired_date", label: "Hired date", type: "date" },
@@ -213,6 +220,19 @@ window.pageInit = async (S) => {
     return t ? S.esc(`${t.name} (${t.start}–${t.end})`) : "—";
   };
 
+  // A person's departments for the Employees table: their MAIN one, plus a chip for the extras
+  // (models.UserTeam). Without the chip the console cannot show that somebody is in two departments
+  // at all — the column reads `team_name`, which is the primary one and always will be — so a
+  // super-admin editing the row would have no way to know the extras existed before opening it.
+  const _deptCell = (name, r) => {
+    const extra = (r.team_ids || []).filter((id) => id !== r.team_id);
+    const names = extra.map((id) => (teams.find((t) => t.id === id) || {}).name).filter(Boolean);
+    const chip = names.length
+      ? ` <span class="pill grey" title="${S.esc("Also works with: " + names.join(", "))}">+${names.length}</span>`
+      : "";
+    return (name ? S.esc(name) : `<span class="muted">—</span>`) + chip;
+  };
+
   // Compact summary of a service's auto-fill defaults for the Services table.
   const _svcDefaults = (r) => {
     const bits = [];
@@ -232,9 +252,17 @@ window.pageInit = async (S) => {
     S.qsa("#mtabs button").forEach((x) => x.classList.remove("active")); b.classList.add("active"); render(b.dataset.k);
   });
 
-  function resolveOpts(f) {
+  function resolveOpts(f, item) {
     let arr = f.optsKey ? (OPTS[f.optsKey] || []) : (f.opts || []).map((o) => (typeof o === "string" ? { value: o, label: o } : o));
     if (f.allowEmpty) arr = [{ value: "", label: "—" }].concat(arr);
+    // 🔴 Drop the option already held by another field (`omitValueOf`). Used by Employees, where
+    // "Also works with" must not offer the person's MAIN department: the server drops it from the
+    // extras (`services/teams.set_extra_teams` — storing it twice would put one department in two
+    // places and make un-ticking it in one of them do nothing), so a box that could be ticked and
+    // then came back empty would read as a save that silently failed.
+    if (f.omitValueOf && item && item[f.omitValueOf] != null) {
+      arr = arr.filter((o) => String(o.value) !== String(item[f.omitValueOf]));
+    }
     return arr;
   }
 
@@ -396,9 +424,15 @@ window.pageInit = async (S) => {
       </div>`;
     }
     if (f.type === "select") {
-      return `<select data-mf="${f.k}">${resolveOpts(f).map((o) => `<option value="${S.esc(o.value)}" ${String(o.value) === String(v == null ? "" : v) ? "selected" : ""}>${S.esc(o.label)}</option>`).join("")}</select>`;
+      return `<select data-mf="${f.k}">${resolveOpts(f, item).map((o) => `<option value="${S.esc(o.value)}" ${String(o.value) === String(v == null ? "" : v) ? "selected" : ""}>${S.esc(o.label)}</option>`).join("")}</select>`;
     }
-    if (f.type === "multi") return `<div class="row wrap">${resolveOpts(f).map((o) => `<label class="chip" style="cursor:pointer"><input type="checkbox" style="width:auto" data-mf="${f.k}" value="${S.esc(o.value)}" ${(v || []).includes(o.value) ? "checked" : ""}> ${S.esc(o.label)}</label>`).join("")}</div>`;
+    // Compared as STRINGS: a checkbox's value always is one, while these ids arrive as numbers
+    // (`team_ids`) or as text (`day_types`), and `includes` across the two types silently checks
+    // nothing — the form would open with every box clear and saving would wipe the row.
+    if (f.type === "multi") {
+      const on = (v || []).map(String);
+      return `<div class="row wrap">${resolveOpts(f, item).map((o) => `<label class="chip" style="cursor:pointer"><input type="checkbox" style="width:auto" data-mf="${f.k}" value="${S.esc(o.value)}" ${on.includes(String(o.value)) ? "checked" : ""}> ${S.esc(o.label)}</label>`).join("")}</div>`;
+    }
     if (f.type === "color") return `<input type="color" data-mf="${f.k}" value="${S.esc(v || "#6B7280")}" style="width:56px;height:34px;padding:2px">`;
     if (f.type === "bool") return `<label class="chip" style="cursor:pointer;align-self:start"><input type="checkbox" style="width:auto" data-mf="${f.k}" ${v ? "checked" : ""}> Enabled</label>`;
     const t = f.type === "number" ? "number" : f.type === "time" ? "time" : f.type === "date" ? "date" : f.type === "password" ? "password" : "text";
@@ -432,7 +466,8 @@ window.pageInit = async (S) => {
         if (f.type === "multi") val = S.qsa(`[data-mf="${f.k}"]:checked`).map((c) => c.value);
         else if (f.type === "bool") val = S.qs(`[data-mf="${f.k}"]`).checked;
         else val = S.qs(`[data-mf="${f.k}"]`).value;
-        if (f.coerce === "intOrNull") val = (val === "" ? null : Number(val));
+        if (f.coerce === "intList") val = (val || []).map(Number).filter((n) => Number.isFinite(n));
+        else if (f.coerce === "intOrNull") val = (val === "" ? null : Number(val));
         else if ((f.type === "date" || f.type === "number") && val === "") val = null;
         if (f.omitIfBlank && (val === "" || val == null)) continue;
         payload[f.k] = val;

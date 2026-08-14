@@ -35,6 +35,7 @@ from ..models import (
 )
 from ..utils.time import today_ph
 from . import gym as gym_svc
+from . import teams as teams_svc
 from ..serializers import (
     achievement_dict,
     body_metric_dict,
@@ -58,7 +59,10 @@ def can_view(viewer: User, target: User) -> bool:
         return True
     if viewer.role in ADMIN_ROLES:
         return True
-    if viewer.role == ROLE_TEAM_LEAD and viewer.team_id and viewer.team_id == target.team_id:
+    # A lead reads the profile of anyone in ANY department they share (`services/teams`,
+    # 2026-08-14). Both sides are sets now; an empty one shares nothing, which is why the old
+    # `viewer.team_id and` guard is no longer needed to stop two department-less people matching.
+    if viewer.role == ROLE_TEAM_LEAD and teams_svc.shares_department(viewer, target):
         return True
     return False
 

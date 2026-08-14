@@ -174,7 +174,7 @@ Adding a router? Register it in the tuple at [main.py:513](backend/app/main.py#L
 | id | an integer PK | the string `atrium:<client_key>:<task_id>` |
 | stored in | Postgres `tasks` | that client's Atrium workspace JSON — **Atrium is the source of truth** |
 | reaches the board via | `task_card` | `atrium_tasks.fetch_tasks()` → `as_board_card` (fail-soft: an Atrium outage just hides them) |
-| who sees it | `task_perms.can_view` (employee/intern: what is assigned to them, their team's unclaimed queue, and — since 2026-08-14 — their **whole department, read-only**; see §5) | `task_perms.can_view_atrium` — **team lead and up** |
+| who sees it | `task_perms.can_view` (employee/intern: what is assigned to them, their team's unclaimed queue, and — since 2026-08-14 — **every department they are in, read-only**; a person may be in more than one — see §5) | `task_perms.can_view_atrium` — **team lead and up** |
 
 🔴 **A card is one kind or the other, never both (WP 4.3, 2026-08-04).** The moment a Sentinel row
 carries `atrium_task_id` — whether Send to Atrium put it there or adoption did — that row **is** the
@@ -711,6 +711,53 @@ SSE generator **directly**, not through `TestClient`: `request.is_disconnected()
 under TestClient's portal, so `client.stream()` on the 200 path hangs the suite forever rather than
 failing. The 404 paths are safe to test over HTTP because they raise before streaming starts.
 
+### 🔴 A PERSON MAY BELONG TO SEVERAL DEPARTMENTS — `users.team_id` is only their PRIMARY one (2026-08-14)
+
+`models.UserTeam` + **`services/teams.py`**, which is the one place the union is derived. Before it,
+nine files compared one integer to another (`something.team_id == user.team_id`), which silently
+asserted that everybody belongs to exactly one department. People here do not: a designer who also
+sits with Acquisition, a lead covering a second team while it has no lead of its own. Those people
+saw one department's board, were missing from the other's rollups, and were never notified about its
+work — **all invisibly**, because a card that is not on your board and a notification that was never
+sent both look exactly like a quiet day.
+
+🔴 **`users.team_id` IS KEPT and still answers a different question.** Two questions were sharing one
+column, and only one of them can take a set:
+
+| question | ask | why it cannot be a set |
+|---|---|---|
+| "which department is this person **OF**?" | `user.team_id` | `Team.shift_template_id` decides whether a punch is late; payroll needs one row; the People column has room for one name |
+| "whose work may they **take part in**?" | `services/teams.team_ids(user)` | — |
+
+Everything that scopes a board, a rollup or a notification asks that helper: `task_perms._dept` /
+`_team_queue` / `_leads_team`, `tasks.employee_summary` + `throughput`, `work_digest`,
+`team_growth`, `development.can_view`, `notifications.notify_managers`, the People directory filter,
+attendance summaries, the gym rollup and every `?team_id=` report filter. **Do not re-derive the
+union** — a second copy of this rule is how `is_assigned` and the Overview's "my work" strip came to
+disagree in July 2026.
+
+- 🔴 **Membership widens what somebody SEES and nothing else.** An extra department is not a
+  promotion: an employee still cannot edit a colleague's card in it (`can_edit` never reads `_dept`),
+  and `can_delete` still refuses a department they are not in. A team lead *does* lead every
+  department they are in — the role is a property of the person, and `_leads_team` is the set test.
+- 🔴 **An empty set matches NOTHING, deliberately.** The comparison this replaced was `None == None`,
+  which quietly grouped every department-less person into one pseudo-team — a lead with no department
+  could see all of them. A lead with no department now monitors only themselves.
+- 🔴 **`team_ids: None` means "not sent"; `[]` means "remove them all"** — the same contract as
+  `support_ids`, for the same reason: a plain `[]` default would make every unrelated PATCH (a phone
+  number, a shift, a password reset) quietly empty somebody's departments and shrink their board.
+  `services/teams.set_extra_teams` also drops the primary from the extras (one department in two
+  places makes un-ticking it in one of them do nothing) and ignores unknown ids rather than 400-ing
+  a form built from a department list that has since changed.
+- **Deleting a department deletes its memberships** (`manage.delete_team`). Those rows carry an FK;
+  orphaned on SQLite they survive and `team_ids` keeps handing out a department that no longer exists.
+- **The set ships as `team_ids` on `user_full` only** (`/api/auth/me`, `/api/people`) — never on
+  `user_public`, which is serialized once per card for every assignee and supporter on the board.
+  Primary first, so a surface with room for one name prints the right one.
+- Set it in **Manage → Employees → "Also works with"**. `frontend/README.md` has the filter-bar half.
+
+Pinned by `tests/test_multi_department.py`, weighted toward the refusals and the write contract.
+
 ### 🔴 A TEAM LEAD'S POWERS FOLLOW WHAT THEY CAN SEE — not the team field (2026-08-14)
 
 Reported as two bugs ("Team Lead can't assign", "Team Lead can't approve"); it was **one predicate**.
@@ -746,7 +793,8 @@ them, because such a card is invisible to everyone below AM and never had a dead
 
 ### 🔴 An employee SEES their whole department and may WRITE to almost none of it (2026-08-14)
 
-`can_view` gained a `_dept` branch, so a team is no longer opaque to its own members. **This is the
+`can_view` gained a `_dept` branch, so a team is no longer opaque to its own members. (`_dept` is a
+SET test — a person may be in several departments; see the section above.) **This is the
 one place `can_edit` and `can_view` genuinely diverge in shape, and it is load-bearing:**
 
 | | employee / intern |
@@ -764,9 +812,11 @@ by the board defaulting to the narrow scope.
   no viewer). Required, not decorative: a visible-but-read-only card must not render draggable and
   then 403 on drop. `taskboard.js` marks it `.readonly`, `draggable="false"`, no move select, no bulk
   checkbox — it still opens, because reading a colleague's card is the point.
-- **The board's scope switch (`#scope-seg`, "On me" / "My department") is rendered for non-managers
-  only**, and defaults to **On me**, which reproduces their old board exactly. Managers already have
-  `#f-team` and the "on you" pill; a third control there would duplicate both.
+- **The board's scope switch (`#scope-seg`) is rendered for everyone below AM**, with per-role tabs
+  and a per-role default that reproduces that role's old board exactly — an employee opens on **On
+  me**, a team lead on **Everything**. A lead gets no "On me" tab, because the attention pills on the
+  same bar already carry **on you**. The whole role-shaped filter bar (which pickers each role gets,
+  and why they are grouped rather than trimmed) is in [frontend/README.md](frontend/README.md).
 - 🔴 **THE AI COACH INHERITED THIS, AND THAT IS INTENDED.** `services/work_digest` filters on
   `can_view` *by design* — its stated failure mode is the coach denying work the person can see on
   their own screen — so an employee's coach can now discuss their department. It is what finally makes

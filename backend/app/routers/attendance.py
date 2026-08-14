@@ -38,6 +38,7 @@ from ..serializers import attendance_request_dict, summary_dict, user_public
 from ..services import attendance as att
 from ..services import audit
 from ..services import notifications as notif
+from ..services import teams as teams_svc
 from ..utils.time import PH_TZ, minutes_between, parse_hhmm, to_ph, today_ph, utcnow
 from ..constants import ROLE_TEAM_LEAD
 
@@ -330,10 +331,13 @@ def summaries(
     out = []
     for s in rows:
         u = db.get(User, s.user_id)
-        if team_id and (not u or u.team_id != team_id):
+        # Both tests are SET tests since 2026-08-14 (`services/teams`): a person may be in several
+        # departments, so filtering by one lists everybody who works in it, and a lead covering two
+        # departments sees the attendance of both.
+        if team_id and not teams_svc.in_team(u, team_id):
             continue
-        # Team leads only see their own team.
-        if admin.role == ROLE_TEAM_LEAD and (not u or u.team_id != admin.team_id):
+        # Team leads only see the departments they are part of.
+        if admin.role == ROLE_TEAM_LEAD and not teams_svc.shares_department(u, admin):
             continue
         out.append(summary_dict(s, u))
     return out

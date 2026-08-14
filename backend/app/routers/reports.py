@@ -27,6 +27,7 @@ from ..models import (
     User,
 )
 from ..security import get_current_user
+from ..services import teams as teams_svc
 from ..utils.csv_export import csv_response
 from ..utils.time import to_ph, today_ph
 
@@ -64,7 +65,10 @@ def _build(db: Session, report: str, user: User, from_: date | None, to: date | 
         rows = []
         for s in db.execute(q).scalars().all():
             u = db.get(User, s.user_id)
-            if team_id and (not u or u.team_id != team_id):
+            # A person may belong to several departments (`services/teams`, 2026-08-14), so a
+            # department filter matches ANY of theirs — a report on Design that omits the people
+            # whose second department it is under-reports that department's hours.
+            if team_id and not teams_svc.in_team(u, team_id):
                 continue
             rows.append([u.name if u else "?", s.date.isoformat(), _fmt_dt(s.clock_in),
                          _fmt_dt(s.clock_out), s.status, s.total_work_hours,
@@ -81,7 +85,7 @@ def _build(db: Session, report: str, user: User, from_: date | None, to: date | 
         rows = []
         for g in db.execute(q).scalars().all():
             u = db.get(User, g.user_id)
-            if team_id and (not u or u.team_id != team_id):
+            if team_id and not teams_svc.in_team(u, team_id):
                 continue
             rows.append([u.name if u else "?", g.date.isoformat(), g.day_type,
                          g.duration_minutes, g.status, len(g.exercises)])
@@ -131,7 +135,7 @@ def _build(db: Session, report: str, user: User, from_: date | None, to: date | 
         balances = db.execute(select(LeaveBalance).where(LeaveBalance.year == year)).scalars().all()
         for b in balances:
             u = db.get(User, b.user_id)
-            if team_id and (not u or u.team_id != team_id):
+            if team_id and not teams_svc.in_team(u, team_id):
                 continue
             lt = db.get(LeaveType, b.leave_type_id)
             pending = db.execute(
@@ -154,7 +158,8 @@ def _build(db: Session, report: str, user: User, from_: date | None, to: date | 
             q = q.where(Task.assigned_team_id == team_id)
         for t in db.execute(q).scalars().all():
             if t.due_date and t.due_date < today:
-                if user.role == ROLE_TEAM_LEAD and t.assigned_team_id != user.team_id:
+                # A lead's own departments — ALL of them (`services/teams`), not just the primary.
+                if user.role == ROLE_TEAM_LEAD and not teams_svc.in_team(user, t.assigned_team_id):
                     continue
                 assignee = db.get(User, t.assigned_to_id) if t.assigned_to_id else None
                 rows.append([t.title, (today - t.due_date).days, t.priority,

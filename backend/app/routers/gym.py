@@ -37,6 +37,7 @@ from ..services import audit
 from ..services import development as dev_svc
 from ..services import gym as gym_svc
 from ..services import settings as settings_svc
+from ..services import teams as teams_svc
 from ..utils.time import today_ph, utcnow
 
 router = APIRouter(prefix="/api/gym", tags=["gym"])
@@ -436,10 +437,14 @@ def summary(
     """Week-to-date compliance per user (Completed / Incomplete / Missing)."""
     start = today_ph() - timedelta(days=today_ph().weekday())  # Monday
     users_q = select(User).where(User.is_active.is_(True))
+    # Departments are a SET per person since 2026-08-14 (`services/teams`), so both of these
+    # narrow by MEMBERSHIP rather than by the primary `users.team_id` column: picking a department
+    # lists everyone who works in it, and a lead covering two sees both.
     if team_id:
-        users_q = users_q.where(User.team_id == team_id)
+        users_q = users_q.where(User.id.in_(teams_svc.member_ids(db, {team_id})))
     if admin.role == ROLE_TEAM_LEAD:
-        users_q = users_q.where(User.team_id == admin.team_id)
+        mine = teams_svc.member_ids(db, teams_svc.team_ids(admin)) | {admin.id}
+        users_q = users_q.where(User.id.in_(mine))
     users = db.execute(users_q).scalars().all()
     out = []
     for u in users:
