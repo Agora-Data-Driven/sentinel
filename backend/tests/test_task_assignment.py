@@ -9,12 +9,16 @@ pinned, in order:
     per-step owners + assigned_to_id                               <- the lead
     "not ours"   -> back to the filer, with an internal reason      <- 4.2e / D11
 
-Two rules that are easy to get backwards and are therefore tested from both sides:
+Three rules that are easy to get backwards and are therefore tested from both sides:
 
 * an employee may route work to a TEAM but never to a PERSON (D10);
-* team work is shared only while it is UNASSIGNED — the moment someone owns it, it is their job and
-  leaves everybody else's board (the July 2026 "an intern's board showed seven cards, none of them
-  theirs" regression must not come back).
+* an employee SEES their whole department and may WRITE to almost none of it (2026-08-14). The July
+  2026 regression — "an intern's board showed seven cards, none of them theirs" — was about
+  accountability, not secrecy, so it is now pinned on `mine` / `can_edit` rather than on the card
+  being absent. Asserting only one half of that lets the other half regress silently;
+* whatever a team lead may do to an EXISTING card, `create_task` must let them do to a new one. That
+  invariant has been enforced at two different settings; the settings are allowed to move, the
+  agreement between the two doors is not.
 """
 from __future__ import annotations
 
@@ -56,15 +60,46 @@ def test_team_work_with_no_owner_is_visible_to_the_team(client, auth, db, acq, a
     assert t.id in [c["id"] for c in client.get("/api/tasks").json()]
 
 
-def test_once_owned_it_leaves_everybody_elses_board(client, auth, db, acq, acq_member, make_user):
-    """🔴 The July 2026 regression in reverse. Shared while unowned; private once owned — otherwise an
-    employee's board fills up with their colleagues' work again."""
+def test_a_colleagues_card_is_visible_to_the_department_but_read_only(
+        client, auth, db, acq, acq_member, make_user):
+    """🔴 REPLACES `test_once_owned_it_leaves_everybody_elses_board` (2026-08-14).
+
+    That test pinned "shared while unowned, INVISIBLE once owned", which is the July 2026 fix stated
+    as a visibility rule. The fix was really about ACCOUNTABILITY — a board listing ten colleagues'
+    cards stops answering "what am I working on" — and stating it as visibility made a department
+    opaque to its own members: you could not see what your team was carrying or whether the thing you
+    were about to raise already existed.
+
+    So the rule moved to where it belongs. The card is VISIBLE (`task_perms._dept`) and READ-ONLY
+    (`can_edit` no longer follows `can_view` for employees). Both halves are asserted here, because
+    either one alone is a bug: visibility without the read-only half hands every employee write access
+    to the whole department, and the read-only half without visibility is the opacity being fixed.
+    """
     other = make_user(C.ROLE_EMPLOYEE, team_id=acq.id, name="Someone else")
     t = Task(title="Owned by a colleague", assigned_team_id=acq.id, assigned_to_id=other.id)
     db.add(t)
     db.commit()
     auth(acq_member)
-    assert t.id not in [c["id"] for c in client.get("/api/tasks").json()]
+
+    card = next((c for c in client.get("/api/tasks").json() if c["id"] == t.id), None)
+    assert card is not None, "an employee should see their own department's work"
+    # ...but it is somebody else's job, and the board must say so on the card itself.
+    assert card["mine"] is False
+    assert card["can_edit"] is False
+
+    # And the server enforces it — the flag is a courtesy to the UI, never the gate.
+    assert client.patch(f"/api/tasks/{t.id}", json={"title": "hijacked"}).status_code == 403
+    assert client.patch(f"/api/tasks/{t.id}/status",
+                        json={"status": C.TASK_COMPLETED}).status_code == 403
+
+
+def test_the_department_read_does_not_reach_another_department(client, auth, db, dev, acq_member):
+    """The widened read is scoped to the viewer's OWN department — it is not a board-wide unlock."""
+    other_teams = Task(title="Development's owned work", assigned_team_id=dev.id, assigned_to_id=None)
+    db.add(other_teams)
+    db.commit()
+    auth(acq_member)
+    assert other_teams.id not in [c["id"] for c in client.get("/api/tasks").json()]
 
 
 def test_another_teams_queue_is_not_my_business(client, auth, db, dev, acq_member):
@@ -159,12 +194,19 @@ def test_an_employees_own_quick_task_still_self_assigns(client, auth, acq_member
     assert r.json()["assigned_to_id"] == acq_member.id
 
 
-# --- 4.2g bis / 2026-08-05: a team lead staffs THEIR OWN department's work ------------------------
+# --- 4.2g bis: create and edit must agree about who a lead may staff ------------------------------
 #
-# 🔴 Create was strictly more permissive than edit. `task_perms.can_reassign` lets a lead name
-# somebody only while the card is routed to their own team (`_leads_team`) — but `create_task` tested
-# the ROLE alone, so the same lead could file a card for another department with a name already on
-# it. Same rule, both doors.
+# The rule this section pins has been at two settings, and the INVARIANT is what matters: whatever
+# `task_perms` lets a lead do to an existing card, `create_task` must let them do to a new one.
+#
+# 2026-08-05 enforced that at the NARROW setting (own department only), because create tested the
+# role alone while `can_reassign` asked `_leads_team`. 2026-08-14 enforces it at the WIDE setting:
+# `can_reassign` now asks `_lead_may_act` (anything the lead can SEE), and `can_view` shows a lead
+# everything they CREATED whatever department it went to — so the narrow create test had become
+# stricter than edit, and refused a lead's own form with "Only a team lead or manager can assign".
+#
+# What has never moved, and is the real content of D10: an EMPLOYEE may route to a department but
+# never name a person.
 
 def test_a_lead_may_name_someone_on_their_own_departments_card(client, auth, acq, acq_lead, acq_member):
     auth(acq_lead)
@@ -174,9 +216,28 @@ def test_a_lead_may_name_someone_on_their_own_departments_card(client, auth, acq
     assert r.json()["assigned_to_id"] == acq_member.id
 
 
-def test_a_lead_cannot_name_someone_in_another_department(client, auth, db, dev, acq_lead, make_user):
-    victim = make_user(C.ROLE_EMPLOYEE, team_id=dev.id)
+def test_a_lead_may_name_someone_in_another_department_and_keeps_the_card(
+        client, auth, db, dev, acq_lead, make_user):
+    """The other half of the invariant above: a lead files cross-department work with an owner on it,
+    and — because `_created` keeps it visible to them — can still restaff it afterwards. Refusing the
+    create while allowing the edit was the inconsistency, and it read as "assign is broken"."""
+    other = make_user(C.ROLE_EMPLOYEE, team_id=dev.id, name="Dev person")
     auth(acq_lead)
+    r = client.post("/api/tasks", json={"title": "Fix the site", "assigned_team_id": dev.id,
+                                        "assigned_to_id": other.id})
+    assert r.status_code == 200
+    assert r.json()["assigned_to_id"] == other.id
+
+    tid = r.json()["id"]
+    second = make_user(C.ROLE_EMPLOYEE, team_id=dev.id, name="Other dev person")
+    assert client.patch(f"/api/tasks/{tid}", json={"assigned_to_id": second.id}).status_code == 200
+
+
+def test_an_employee_still_cannot_name_a_person_in_another_department(
+        client, auth, db, dev, acq_member, make_user):
+    """D10 is untouched by the 2026-08-14 widening — it only ever moved for team_lead and up."""
+    victim = make_user(C.ROLE_EMPLOYEE, team_id=dev.id)
+    auth(acq_member)
     r = client.post("/api/tasks", json={"title": "Fix the site", "assigned_team_id": dev.id,
                                         "assigned_to_id": victim.id})
     assert r.status_code == 403
@@ -318,3 +379,98 @@ def test_an_atrium_card_cannot_be_sent_back(client, auth, make_user):
     auth(make_user(C.ROLE_ACCOUNT_MANAGER))
     r = client.post("/api/tasks/atrium:honeytribe:tk_1/send-back", json={"reason": "x"})
     assert r.status_code == 400
+
+
+# --- 2026-08-14: the "Team Lead can't assign / can't approve" bug ---------------------------------
+#
+# 🔴 Reported as two separate faults; it was one predicate. Every lead power asked `_leads_team`
+# (`task.assigned_team_id == user.team_id`) while `can_view` let a lead reach a card through FOUR
+# branches — so the board routinely handed a lead a card with every control dead, and because
+# `taskboard.js` mirrors these predicates the picker rendered `disabled` and Approve was never drawn.
+# Nobody ever saw a 403; they saw a feature that appeared not to exist.
+#
+# One test per way in, because each is a genuinely different route to the same dead card and a fix
+# that only covers the obvious one leaves the report alive. See `task_perms._lead_may_act`.
+
+# 🔴 The parametrisation lists the ways a lead genuinely REACHES a card, which is not the same as
+# "every card with no department". A departmentless card that is unowned, uncreated and unlinked is
+# invisible to everyone below AM — `can_view` has no branch for it — so there was never a dead button
+# there to fix. Writing the obvious-looking scenario first is what surfaced that; each case below is
+# asserted visible before it is asserted actionable, so a future change that quietly removes one of
+# `can_view`'s branches fails here loudly instead of turning this into a test of nothing.
+@pytest.mark.parametrize("reached_via", ["is_assigned", "created_by_the_lead", "lead_has_no_team"])
+def test_a_lead_can_staff_a_card_they_can_see(client, auth, db, acq, dev, acq_lead, acq_member,
+                                              reached_via):
+    t = Task(title="Quick-added, no department chosen")
+    if reached_via == "is_assigned":
+        # The commonest report: work handed straight to the lead, department left blank.
+        t.assigned_to_id = acq_lead.id
+    if reached_via == "created_by_the_lead":
+        # A lead raises work for another department; `_created` keeps it on their board.
+        t.assigned_team_id = dev.id
+        t.created_by_id = acq_lead.id
+    if reached_via == "lead_has_no_team":
+        # The flat case: nobody ever filled in the lead's own department on their profile, which used
+        # to disable their entire role everywhere at once, on every card.
+        t.assigned_team_id = acq.id
+        t.assigned_to_id = acq_lead.id
+        acq_lead.team_id = None
+    db.add(t)
+    db.commit()
+    auth(acq_lead)
+
+    assert t.id in [c["id"] for c in client.get("/api/tasks").json()], "precondition: it is visible"
+    # Priority first — it was dead for exactly the same reason as assignment.
+    assert client.patch(f"/api/tasks/{t.id}/priority",
+                        json={"priority": C.PRIORITY_URGENT}).status_code == 200
+    # #1 — assign. 🔴 LAST ON PURPOSE. Because a lead's powers now follow VISIBILITY, handing a card
+    # to somebody else can be the act that ends the lead's own sight of it (here: the card reached
+    # them via `is_assigned`, and they just assigned it away). That is the same deliberate property
+    # as `test_after_bouncing_the_lead_can_no_longer_see_it` — delegating is giving it away — but it
+    # makes these calls order-dependent, which a reader of this test needs to know.
+    assert client.patch(f"/api/tasks/{t.id}",
+                        json={"assigned_to_id": acq_member.id}).status_code == 200
+
+
+def test_a_lead_can_approve_a_card_with_no_department(client, auth, db, acq_lead, acq_member):
+    """#3 — the approval half. Submitting for review needs only `can_edit`, so work could be pushed
+    into `pending` and then approved by nobody below AM: the lead saw the card (they raised it) and
+    the Approve button was never drawn. That is a review state with no reachable exit."""
+    t = Task(title="Undepartmented work", assigned_to_id=acq_member.id, created_by_id=acq_lead.id)
+    db.add(t)
+    db.commit()
+    auth(acq_member)
+    assert client.post(f"/api/tasks/{t.id}/review/submit").status_code == 200
+    auth(acq_lead)
+    assert client.post(f"/api/tasks/{t.id}/review/approve").status_code == 200
+
+
+def test_a_lead_still_cannot_touch_a_card_they_cannot_see(client, auth, db, dev, acq_lead, make_user):
+    """🔴 The widening is "anything they CAN SEE" — it is not "anything". Another department's owned
+    work is invisible to this lead, and every power must stay refused on it."""
+    dev_member = make_user(C.ROLE_EMPLOYEE, team_id=dev.id)
+    t = Task(title="Development's own work", assigned_team_id=dev.id, assigned_to_id=dev_member.id)
+    db.add(t)
+    db.commit()
+    auth(acq_lead)
+    assert t.id not in [c["id"] for c in client.get("/api/tasks").json()]
+    assert client.patch(f"/api/tasks/{t.id}", json={"assigned_to_id": acq_lead.id}).status_code == 403
+    assert client.post(f"/api/tasks/{t.id}/review/approve").status_code == 403
+    assert client.patch(f"/api/tasks/{t.id}/priority",
+                        json={"priority": C.PRIORITY_URGENT}).status_code == 403
+
+
+def test_delete_is_deliberately_not_widened_with_the_rest(client, auth, db, acq_lead, make_user):
+    """🔴 Assign/approve/prioritise follow `can_view`; DELETE deliberately does not (`can_delete`
+    still asks `_leads_team`). `can_view` reaches a lead through branches as thin as "somebody named
+    you on one step", and delete is the only irreversible act on this board. If this test starts
+    failing, that asymmetry was removed — make sure it was on purpose."""
+    owner = make_user(C.ROLE_EMPLOYEE, name="Owner")
+    t = Task(title="Card the lead merely holds a step on", assigned_to_id=owner.id,
+             maintasks_json='[{"id":"m1","title":"Phase","assignee_id":%d,"subs":[]}]' % acq_lead.id)
+    db.add(t)
+    db.commit()
+    auth(acq_lead)
+    assert t.id in [c["id"] for c in client.get("/api/tasks").json()]
+    assert client.patch(f"/api/tasks/{t.id}", json={"assigned_to_id": acq_lead.id}).status_code == 200
+    assert client.delete(f"/api/tasks/{t.id}").status_code == 403

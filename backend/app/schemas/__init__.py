@@ -532,6 +532,23 @@ class TaskPriorityIn(BaseModel):
     priority: str
 
 
+class TaskApplyTemplateIn(BaseModel):
+    """Seed an EXISTING task's work breakdown from a service template (2026-08-14).
+
+    Service templates could only ever be applied at CREATE time, which made them unreachable for the
+    commonest way a card is raised: somebody types a title, hits enter, and fills the rest in later.
+    Those cards could never get a breakdown at all without retyping every phase by hand — so in
+    practice the recipe book only served people who happened to open the full New Task form first.
+
+    `mode` is REQUIRED rather than defaulted, because the two modes differ in whether they destroy
+    work: `append` adds the template's phases after whatever is there, `replace` discards the current
+    breakdown — including every tick and every step owner. A default would pick one of those on the
+    caller's behalf, and the wrong guess is unrecoverable.
+    """
+    service_key: str
+    mode: Literal["append", "replace"]
+
+
 class CommentIn(BaseModel):
     body: str
     attachments: list[dict[str, Any]] = Field(default_factory=list)

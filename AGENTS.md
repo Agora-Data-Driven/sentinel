@@ -174,7 +174,7 @@ Adding a router? Register it in the tuple at [main.py:513](backend/app/main.py#L
 | id | an integer PK | the string `atrium:<client_key>:<task_id>` |
 | stored in | Postgres `tasks` | that client's Atrium workspace JSON — **Atrium is the source of truth** |
 | reaches the board via | `task_card` | `atrium_tasks.fetch_tasks()` → `as_board_card` (fail-soft: an Atrium outage just hides them) |
-| who sees it | `task_perms.can_view` (employee/intern: **only what's assigned to them**) | `task_perms.can_view_atrium` — **team lead and up** |
+| who sees it | `task_perms.can_view` (employee/intern: what is assigned to them, their team's unclaimed queue, and — since 2026-08-14 — their **whole department, read-only**; see §5) | `task_perms.can_view_atrium` — **team lead and up** |
 
 🔴 **A card is one kind or the other, never both (WP 4.3, 2026-08-04).** The moment a Sentinel row
 carries `atrium_task_id` — whether Send to Atrium put it there or adoption did — that row **is** the
@@ -710,6 +710,85 @@ Covered by `tests/test_dev_reload.py` (17 cases, weighted toward the gates). �
 SSE generator **directly**, not through `TestClient`: `request.is_disconnected()` never becomes True
 under TestClient's portal, so `client.stream()` on the 200 path hangs the suite forever rather than
 failing. The 404 paths are safe to test over HTTP because they raise before streaming starts.
+
+### 🔴 A TEAM LEAD'S POWERS FOLLOW WHAT THEY CAN SEE — not the team field (2026-08-14)
+
+Reported as two bugs ("Team Lead can't assign", "Team Lead can't approve"); it was **one predicate**.
+`can_reassign` / `can_review` / `can_prioritize` all asked `_leads_team`
+(`task.assigned_team_id == user.team_id`), while `can_view` grants a lead sight through **four**
+branches — so the board routinely handed a lead a card with every control dead:
+
+| Reached the lead via | Why `_leads_team` failed |
+|---|---|
+| `is_assigned` | work handed to them with **Department left blank** — `assigned_team_id is None` |
+| `_unowned_client_work` | an **adopted Atrium card**, which that predicate shows leads *precisely because* it has no team |
+| `_created` | a card the lead raised **for another department** |
+| any of them | the lead's own **`users.team_id` was never set** — this killed the whole role, everywhere, at once |
+
+🔴 **The failure was invisible.** `taskboard.js` mirrors these predicates, so the assignee picker
+rendered `disabled` and Approve was **never drawn**. Nobody saw a 403; they saw a missing feature.
+That is why the frontend mirror is now just `isLead` — the board only ever receives cards `can_view`
+already passed, so there is no client-side re-derivation left to drift.
+
+`task_perms._lead_may_act` is the one definition. Two things deliberately did **not** move:
+
+- **`can_delete` still asks `_leads_team`.** Delete is the only irreversible act here, and `can_view`
+  reaches a lead through branches as thin as "somebody named you on one step".
+- **`create_task.may_delegate` was relaxed to match** (it had been narrowed to the lead's own
+  department on 2026-08-05). It was the *second half of the same report*: a lead who filled in the
+  form without touching Department got **403 "Only a team lead or manager can assign a task to
+  somebody else"** — a sentence naming their own role as the reason. 🔴 **Keep the two doors in step**:
+  whatever `_lead_may_act` allows on an existing card, create must allow on a new one.
+
+Pinned by `tests/test_task_assignment.py` (one case per way in, each asserted **visible** before it
+is asserted actionable — the obvious-looking "any card with no department" scenario is *not* one of
+them, because such a card is invisible to everyone below AM and never had a dead button).
+
+### 🔴 An employee SEES their whole department and may WRITE to almost none of it (2026-08-14)
+
+`can_view` gained a `_dept` branch, so a team is no longer opaque to its own members. **This is the
+one place `can_edit` and `can_view` genuinely diverge in shape, and it is load-bearing:**
+
+| | employee / intern |
+|---|---|
+| `can_view` | `is_assigned` **or** `_team_queue` **or** `_dept` |
+| `can_edit` | `is_assigned` **or** `_team_queue` — **never `_dept`** |
+
+Had `can_edit` stayed an alias of `can_view`, that single read would have handed every employee edit
+and move rights over every colleague's card — a far bigger change arriving as a side effect of a
+smaller one. The July 2026 regression this seems to reverse was about **accountability** ("an intern's
+board showed seven cards, none of them theirs"), not secrecy; that half is now answered by `mine` and
+by the board defaulting to the narrow scope.
+
+- **`serializers.task_card` publishes `can_edit`** (viewer-relative, in the `mine` dict, absent when
+  no viewer). Required, not decorative: a visible-but-read-only card must not render draggable and
+  then 403 on drop. `taskboard.js` marks it `.readonly`, `draggable="false"`, no move select, no bulk
+  checkbox — it still opens, because reading a colleague's card is the point.
+- **The board's scope switch (`#scope-seg`, "On me" / "My department") is rendered for non-managers
+  only**, and defaults to **On me**, which reproduces their old board exactly. Managers already have
+  `#f-team` and the "on you" pill; a third control there would duplicate both.
+- 🔴 **THE AI COACH INHERITED THIS, AND THAT IS INTENDED.** `services/work_digest` filters on
+  `can_view` *by design* — its stated failure mode is the coach denying work the person can see on
+  their own screen — so an employee's coach can now discuss their department. It is what finally makes
+  "who on my team is buried?", quoted in that module's own docstring, answerable. The card lands in
+  `board.others` (the cappable, truncation-declaring bucket), **never in `mine`**, so the coach still
+  never briefs somebody as if a colleague's card were theirs. Pinned by `tests/test_work_digest.py`.
+  Anything else that filters on `can_view` inherits this too — check before assuming it is a leak.
+
+### 🟡 A service template can be applied to an EXISTING task (2026-08-14)
+
+`POST /api/tasks/{id}/apply-template` (`{service_key, mode: "append"|"replace"}`). Templates could
+only be picked at **create** time, so the commonest card on this board — a quick-added title, which
+§3 of the task-placement guidelines says is the *right* way to log work that comes up during the day —
+could never be given a breakdown without retyping every phase.
+
+- Guarded by **`can_edit`**, matching the existing rule that editing the breakdown is editing the work.
+- 🔴 **`mode` has no default.** `replace` discards every tick and step owner; a wrong guess is
+  unrecoverable, so the caller must say which they mean (the drawer skips the question only when the
+  breakdown is empty and the two modes are identical).
+- 🔴 **It is not a delegation hole only because recipes carry no owners.** If a template ever grows
+  default assignees, this route needs `maintasks.foreign_owner_changes` before it ships —
+  `tests/test_task_templates.py` fails loudly if that day comes.
 
 ### 🔴 `can_edit` is NOT `can_view`, and `can_edit_atrium` is NOT `can_view_atrium`
 

@@ -41,8 +41,21 @@ window.TaskBoard = {
   // was the bug. `isAM` survives ONLY for Atrium-owned cards, where the server really is AM+
   // (can_manage_atrium): such a card has no Sentinel team for a lead to be the lead OF.
   const isAM = canManage;
-  const canPrioritize = (t) => t.source === "atrium" ? canManage : (canManage
-    || (canMonitor && t.assigned_team_id != null && t.assigned_team_id === S.user.team_id));
+  // 🔴 A TEAM LEAD'S POWERS FOLLOW WHAT THEY CAN SEE (2026-08-14, task_perms._lead_may_act).
+  //
+  // These four gates used to repeat the server's OLD rule — `t.assigned_team_id === S.user.team_id`
+  // — and that mirror is precisely why the bug was reported as "Team Lead can't assign / can't
+  // approve" rather than as a permission error: the picker rendered `disabled` and Approve was never
+  // drawn, so nobody ever saw the 403 that would have explained it. A card with no department, an
+  // adopted client card, work the lead raised for another team, and a lead whose own profile had no
+  // department all produced the same dead card.
+  //
+  // The board only ever RECEIVES cards the server's `can_view` already let through, so mirroring
+  // "anything they can see" is simply `isLead` — there is no client-side re-derivation left to drift
+  // from the server. That is the point: the previous mirror was a second copy of a rule, and it
+  // outlived the rule it copied.
+  const isLead = !readOnly && S.can("team_lead");
+  const canPrioritize = (t) => t.source === "atrium" ? canManage : (canManage || isLead);
   // On the create/edit FORM there may be no team yet (it is a field on the form), so this mirrors
   // create_task's `may_delegate` instead: a lead may set priority on work they raise.
   const canPrioritizeOnForm = canManage || canMonitor;
@@ -61,10 +74,20 @@ window.TaskBoard = {
   // an owner to SOMEBODY ELSE — is AM+ anywhere, a team lead within their own team. Used by the
   // D12 routing control; self-assignment is deliberately NOT gated on this, which is why the
   // per-step pickers stay open to everyone (§2.4e / WP 4.2f).
-  const canReassign = (t) => !readOnly && (canManage
-    || (canMonitor && t.assigned_team_id != null && t.assigned_team_id === S.user.team_id));
-  const canReview = (t) => !readOnly && t.source !== "atrium" && (canManage
-    || (canMonitor && t.assigned_team_id != null && t.assigned_team_id === S.user.team_id));
+  const canReassign = (t) => !readOnly && (canManage || (t.source !== "atrium" && isLead));
+  const canReview = (t) => !readOnly && t.source !== "atrium" && (canManage || isLead);
+  // 🔴 MAY THIS VIEWER EDIT THIS CARD AT ALL? Answered by the SERVER (`serializers.task_card`), not
+  // re-derived here. New in 2026-08-14: an employee's board now carries their whole DEPARTMENT, and
+  // almost none of it is theirs to touch — so for the first time a visible card can be read-only for
+  // an ordinary member. Drag, the inline ✕, the status control and the drawer's save all consult
+  // this. Absent (undefined) means the payload named no viewer, which only happens on surfaces that
+  // list somebody else's work; treating that as editable would be the optimistic guess this exists to
+  // avoid, so it falls back to false for a card that carries the flag's siblings.
+  // An Atrium card carries no `can_edit` — it has no Sentinel row to ask — and the server only ever
+  // lists one to team_lead+ (`can_view_atrium`), so for anyone who is holding one, `can_edit_atrium`
+  // is already satisfied by not being the read-only seat.
+  const canEditCard = (t) => !readOnly
+    && (t.source === "atrium" || t.can_edit === undefined || t.can_edit === true);
 
   // Board-only styles (styles.css stays untouched): the hover ✕ on cards. Injected once,
   // same pattern as the Coach FAB styles in app.js — CSP allows style elements, not inline JS.
@@ -505,6 +528,40 @@ window.TaskBoard = {
       /* A multi-select stays boxed at rest: it is a LIST, not a value, so there is nothing for a
          flush single line to show and the rows either side would run into it. */
       .tf-row>.v select[multiple]{padding:5px 7px;font-size:12.5px}
+      /* ---- People picker (Support) ----
+         Replaces the native 'multiple' select, whose ctrl-click selection model meant a plain click
+         on a second name silently DESELECTED the first -- so staffing two people usually staffed
+         one. The select is still there, hidden, carrying the value; this is only its face.
+         NO BACKTICKS ANYWHERE IN THIS COMMENT -- see the top of this style block. */
+      .ppick{border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--input);
+        overflow:hidden}
+      .ppick-chips{display:flex;flex-wrap:wrap;gap:5px;padding:7px 8px;min-height:34px;
+        align-items:center;border-bottom:1px solid var(--line)}
+      .ppick-chip{display:inline-flex;align-items:center;gap:6px;padding:2px 4px 2px 2px;
+        border-radius:999px;background:var(--card);border:1px solid var(--line);
+        font-size:12px;font-weight:600;color:var(--ink)}
+      /* The LEAD is shown here too, and marked -- "who is on this card" is unanswerable without
+         them. It carries no remove button on purpose: the Lead row one field up owns that. */
+      .ppick-chip.is-lead{border-color:var(--green);background:var(--green-soft);
+        color:var(--green-strong)}
+      .ppick-chip em{font-style:normal;font-size:9.5px;font-weight:800;letter-spacing:.08em;
+        text-transform:uppercase;opacity:.75;padding-right:4px}
+      .ppick-x{border:none;background:none;cursor:pointer;color:var(--muted);font-size:11px;
+        line-height:1;padding:2px 3px;border-radius:50%}
+      .ppick-x:hover{background:var(--sunken);color:var(--danger)}
+      .ppick-none{font-size:12px;color:var(--muted);padding:2px 4px}
+      .ppick-q{width:100%;border:none !important;border-bottom:1px solid var(--line) !important;
+        border-radius:0 !important;background:var(--card) !important;font-size:12.5px}
+      .ppick-q[hidden]{display:none}
+      .ppick-list{max-height:168px;overflow-y:auto;background:var(--card)}
+      .ppick-row{display:flex;align-items:center;gap:8px;padding:6px 9px;cursor:pointer;
+        font-size:13px;color:var(--ink)}
+      .ppick-row:hover{background:var(--hover)}
+      .ppick-row input{width:15px;height:15px;flex:none;margin:0;accent-color:var(--green)}
+      .ppick-row .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+      .ppick-row.locked{cursor:not-allowed;opacity:.7}
+      .ppick-you{font-style:normal;font-size:9.5px;font-weight:800;letter-spacing:.08em;
+        text-transform:uppercase;color:var(--violet-d);flex:none}
       /* A row whose control carries a sentence under it (the locked Lead picker, Support, Raised as)
          must sit its label with the FIRST line, not halfway down the block. */
       .tf-row.tall{align-items:start;padding:11px 0}
@@ -655,6 +712,18 @@ window.TaskBoard = {
     { key: "mine", label: "on you", tone: "", test: (t) => !!t.mine },
   ];
   let att = {};                     // key -> true while that pill is pressed
+  // Which question this board is answering, for a role that now has two (see #scope-seg). Stored per
+  // browser like the density switch — it is one person's working habit, not org configuration.
+  const SCOPE_KEY = "sentinel.tb.scope";
+  let taskScope = "mine";
+  try { if (localStorage.getItem(SCOPE_KEY) === "dept") taskScope = "dept"; } catch (e) { /* private mode */ }
+  /** The pre-2026-08-14 board, exactly: work that is ON you (`mine` — the server's `is_assigned`,
+   *  never `assigned_to_id === me`), plus your department's UNCLAIMED queue, which was always shared
+   *  because an unowned card is nobody's job yet (`task_perms._team_queue`). Keeping the queue inside
+   *  the narrow scope matters: it is the one part of the department view that is genuinely an
+   *  invitation to act rather than something to read. */
+  const onMyPlate = (t) => !!t.mine || (t.assigned_to_id == null
+    && t.assigned_team_id != null && t.assigned_team_id === S.user.team_id);
   let selection = new Set();        // M7 — ids ticked for a bulk action
   let allTasks = [];          // last fetch, unfiltered by the text search
   // View: "board" (status Kanban) | "employee" (swimlanes per person) | "monitor" (manager rollup).
@@ -699,6 +768,26 @@ window.TaskBoard = {
       <input id="f-search" class="tb-search" type="search" placeholder="Search tasks, clients, people…" autocomplete="off">
       <select id="f-client"><option value="">All clients</option>${clients.map((c) => `<option value="${c.id}">${S.esc(c.name)}</option>`).join("")}</select>
       <select id="f-team"><option value="">All departments</option>${teams.map((t) => `<option value="${t.id}">${S.esc(t.name)}</option>`).join("")}</select>
+      ${/* 🔴 SCOPE — only for employees/interns, and only because the distinction is NEW for them
+            (2026-08-14). `task_perms.can_view` now shows an ordinary member their whole department,
+            not just what is on their own plate, so for the first time their board answers two
+            different questions and needs to say which one it is showing.
+
+            Deliberately NOT rendered for team_lead and up: they already have `#f-team` above (a real
+            department picker, because they work across several) and the "on you" pill below, so a
+            third control here would be a duplicate of both. This is the "different filter per role"
+            shape — the control exists where the question exists.
+
+            Defaults to `mine`, which reproduces their board EXACTLY as it was before the widening.
+            The department is opt-in: nobody logs in one morning to find nine colleagues' cards on a
+            board that used to be a to-do list. */""}
+      ${/* 🔴 And only when they HAVE a department. `task_perms._dept` matches on `user.team_id`, so
+            for somebody whose profile has none, "My department" is a tab that reveals nothing —
+            the same empty-control problem as the saved-views picker and the Clear button. */""}
+      ${(!canMonitor && S.user.team_id != null) ? `<div class="seg sm" id="scope-seg" role="tablist">
+        <button type="button" data-scope="mine" role="tab" title="Work assigned to you, plus anything in your department's queue that nobody has picked up yet">On me</button>
+        <button type="button" data-scope="dept" role="tab" title="Everything your department is carrying, including your colleagues' cards. You can open them; only their owner or a lead can change them">My department</button>
+      </div>` : ""}
       ${/* Options are filled by refreshCampaignList from the cards actually on the board, and it
             stays hidden until there is one — the same rule as the saved-views picker below, for the
             same reason: a dropdown whose only entry is its own placeholder cannot do anything. */""}
@@ -717,10 +806,17 @@ window.TaskBoard = {
     <div id="tb-bulkbar" class="row" hidden></div>
     <div id="board"></div>`;
 
+  // 🔴 The non-manager sentence follows the SCOPE now (2026-08-14). It used to read "Your tasks — the
+  // work assigned to you", which stopped being true the moment `can_view` gained its department
+  // branch; a board that describes itself wrongly is how the "nothing on you right now" bug went
+  // unnoticed for a month.
+  const boardLead = () => {
+    if (canMonitor) return "Drag cards across columns. Client cards from Atrium are editable here too — every edit writes straight back to Atrium.";
+    if (taskScope === "dept") return "Everything your department is carrying. Cards that aren't yours are read-only — open them to read, but only their owner or a lead can change them.";
+    return "Your tasks — the work assigned to you, plus anything in your department's queue nobody has picked up. Drag cards across columns to update status.";
+  };
   const LEADS = {
-    board: canMonitor
-      ? "Drag cards across columns. Client cards from Atrium are editable here too — every edit writes straight back to Atrium."
-      : "Your tasks — the work assigned to you. Drag cards across columns to update status.",
+    board: "",   // replaced per render by boardLead() — it depends on the scope switch
     employee: "Every teammate's tasks, grouped by person. Drag a card between columns to change its status.",
     monitor: "Team workload at a glance: open work, what's overdue, and what shipped this week. Click a row to see that person's tasks.",
   };
@@ -794,6 +890,11 @@ window.TaskBoard = {
   };
 
   S.qsa("#view-seg button").forEach((b) => b.onclick = () => setMode(b.dataset.view));
+  S.qsa("#scope-seg button").forEach((b) => b.onclick = () => {
+    taskScope = b.dataset.scope;
+    try { localStorage.setItem(SCOPE_KEY, taskScope); } catch (e) { /* private mode */ }
+    render();
+  });
 
   // One control to undo all of it. It only exists while something IS filtered (renderAttention), so
   // it is never a button that does nothing — and it clears the pills and the selects together,
@@ -1139,6 +1240,10 @@ window.TaskBoard = {
     // work", the search and the selects answer "WHICH work". Two different questions, so the
     // page-level scope is layered on top of this board's own filters rather than replacing them.
     if (!inPeopleScope(t)) return false;
+    // The role-scoped board/department switch. Only ever narrowing, and only ever for the roles that
+    // have the control — `canMonitor` roles never had their board widened, so there is nothing here
+    // for it to do and `taskScope` is left at its default for them.
+    if (!canMonitor && taskScope === "mine" && !onMyPlate(t)) return false;
     // Campaign before the search, because it is the coarser question ("which campaign") and a card
     // outside the picked one is off the board however its text reads.
     if (campaign && campaignOf(t) !== campaign) return false;
@@ -1226,11 +1331,12 @@ window.TaskBoard = {
   }
 
   function render() {
-    S.qs("#tb-lead").textContent = LEADS[mode]
+    S.qs("#tb-lead").textContent = (mode === "board" ? boardLead() : LEADS[mode])
       + (scope.scoped
         ? ` · scoped to ${scope.ids.length} ${scope.ids.length === 1 ? "person" : "people"} from Team progress`
         : "");
     S.qsa("#view-seg button").forEach((b) => b.classList.toggle("on", b.dataset.view === mode));
+    S.qsa("#scope-seg button").forEach((b) => b.classList.toggle("on", b.dataset.scope === taskScope));
     S.qs("#f-search").closest(".tb-bar").style.display = mode === "monitor" ? "none" : "";
     const board = S.qs("#board");
     board.className = mode === "board" ? "board" + densityCls() : "";
@@ -1418,13 +1524,22 @@ window.TaskBoard = {
         : "");
 
     board.innerHTML = `<table class="mon-tbl">
+      ${/* 🔴 PLAIN HEADERS (2026-08-14). These read "Load / Workload / Sitting / Cycle / On time /
+            Done · 7d" — six pieces of analytics jargon, three of which ("Load" vs "Workload" vs
+            "Open") sound like the same thing and are not: one is a RELATIVE BAND, one is a BAR of
+            open work by column, one is a COUNT. A manager staffs from this table, so a header that
+            has to be hovered before it can be trusted is a header that gets guessed at instead.
+            Every tooltip is kept — the header is now the short version of it rather than a code. */""}
       <thead><tr>
-        <th>Teammate</th><th>Load</th><th>Workload</th>
-        <th class="num">Open</th><th class="num">Overdue</th>
-        <th class="num" title="Open cards nobody has touched in ${staleDays}+ days">Sitting</th>
-        <th class="num" title="Median calendar days from start to completion">Cycle</th>
-        <th class="num" title="Share of dated work delivered on or before its due date">On time</th>
-        <th class="num">Done · 7d</th>
+        <th>Teammate</th>
+        <th title="How this person's open work compares with the median for this team">vs team</th>
+        <th title="How much is open, and which columns it is sitting in">Open work</th>
+        <th class="num" title="Open cards on this person right now">Open</th>
+        <th class="num" title="Open cards whose due date has passed">Past due</th>
+        <th class="num" title="Open cards nobody has touched in ${staleDays}+ days">Untouched</th>
+        <th class="num" title="Median calendar days from start to completion, over the last ${MONITOR_WINDOW_DAYS} days">Days to finish</th>
+        <th class="num" title="Share of dated work delivered on or before its due date, over the last ${MONITOR_WINDOW_DAYS} days">Met due date</th>
+        <th class="num" title="Cards completed in the last 7 days">Finished (7d)</th>
       </tr></thead>
       <tbody>${rows.map((r) => {
         const u = r.user;
@@ -1439,7 +1554,7 @@ window.TaskBoard = {
         // work held via somebody else's breakdown, and work Atrium owns. The second one also warns
         // that those cards can't reach Cycle/On-time — Atrium sends no completion stamp, so counting
         // them there would mean counting completion off `updated_at` (the §2.4h bug).
-        const stepNote = r.stepped ? `<span class="mon-sub" title="Cards led by somebody else, where they own a phase or step">${r.stepped} as steps</span>` : "";
+        const stepNote = r.stepped ? `<span class="mon-sub" title="Cards somebody else leads, where this person owns a phase or step of the plan">${r.stepped} on steps</span>` : "";
         // 🔴 Counted and labelled SEPARATELY from `stepped` (2026-08-06). Support used to fall into
         // that bucket, so a person named on a card as support was described as owning "steps" of it —
         // possibly zero steps. The label has to match the reason or the row is confidently wrong
@@ -1447,13 +1562,15 @@ window.TaskBoard = {
         const supportNote = r.supporting ? `<span class="mon-sub" title="Cards somebody else leads, where this person is named as support">${r.supporting} supporting</span>` : "";
         // 🔴 OPEN client cards, like both sub-lines above it (2026-08-06). The server sent a TOTAL
         // until then, so this line could be bigger than the Open count it hangs under.
-        const clientNote = r.client_cards ? `<span class="mon-sub" title="Open client cards Atrium owns, led by this person. Atrium sends no completion date, so these are NOT in Cycle or On time.">${r.client_cards} client</span>` : "";
+        const clientNote = r.client_cards ? `<span class="mon-sub" title="Open client cards Atrium owns, led by this person. Atrium sends no completion date, so these cannot appear in “Days to finish” or “Met due date”.">${r.client_cards} client-owned</span>` : "";
         // 🔴 The reactive half of the plate (2026-08-11) — §1 vs §3 of the task-placement guidelines.
         // OPEN-scoped like the three sub-lines above it, because this cell is a breakdown of the Open
         // number beside it; `client_cards` shipped as a total once and produced "8 open · 19 client".
         // Unclassified work (every task predating the column, and every Atrium card) is in NEITHER
         // side, so this line can be smaller than Open without the difference being planned work.
-        const addedNote = r.added_open ? `<span class="mon-sub" title="Open work that was ADDED during the day rather than planned in — an unexpected revision, a budget change, a report suddenly needed. Tasks raised before this was tracked count as neither.">${r.added_open} added</span>` : "";
+        // "added" meant nothing on its own — every task was added by somebody. The word that carries
+        // the actual distinction (§1 vs §3 of the task-placement guidelines) is UNPLANNED.
+        const addedNote = r.added_open ? `<span class="mon-sub" title="Open work that came up during the day rather than being planned in ahead of it — an unexpected revision, a budget change, a report suddenly needed. Tasks raised before this was tracked count as neither planned nor unplanned.">${r.added_open} unplanned</span>` : "";
         return `<tr data-uid="${u.id}" tabindex="0">
           <td class="who"><div class="who-in">${S.avatar(u, "sm")}<div><div class="n">${S.esc(u.name)} ${capacity(r)}</div><div class="r">${S.esc(u.role_label || u.role || "")}</div></div></div></td>
           <td>${bandPill(r)}</td>
@@ -1466,23 +1583,49 @@ window.TaskBoard = {
           <td class="num good">${r.completed_week || 0}</td>
         </tr>`;
       }).join("")}</tbody></table>
-      <p class="mon-legend">
-        <b>Load</b> compares each person against this team's median open work — tasks carry no size
-        estimate, so it ranks who is carrying more, it does not measure hours. It stays blank until
-        that median reaches two cards, because below it "more than the median" is a single card.
-        <b>Workload</b> bar: its LENGTH is this person's open work against the busiest plate here,
-        its COLOURS are which columns that work sits in.
-        <b>Cycle</b> and <b>On time</b> cover the last ${MONITOR_WINDOW_DAYS} days and count
-        Sentinel rows only — Atrium sends no completion date, so a person's <b>client</b> cards
-        show under Open but cannot reach those two columns.
-        <b>Sitting</b> counts open cards untouched for ${staleDays}+ days.
-        A person can appear on a card they don't lead — as <b>support</b>, or holding a phase or step
-        of it — so these rows do not add up to the board's total. That is shared work, counted on
-        every plate it is really on.
-        <b>Added</b> is open work raised during the day rather than planned in ahead of it. Work
-        created before this was tracked — and every client card, which has no Sentinel creator to
-        judge — counts as neither planned nor added, so Open minus Added is not "planned".
-      </p>`;
+      ${/* 🔴 A DEFINITION LIST, NOT A PARAGRAPH (2026-08-14). The same facts were one 150-word block
+            of prose with six bold words buried in it, so the one answer somebody actually wanted —
+            "what does Sitting mean?" — had to be found by reading all of it. Every term below is now
+            addressable on its own line, in the SAME wording as the column header above it, because a
+            legend that renames the thing it explains is a second vocabulary to learn.
+
+            Nothing here is a new claim: the caveats were all present in the paragraph and every one
+            of them is load-bearing (a client card genuinely cannot reach the two derived columns; the
+            rows genuinely do not sum to the board). Losing one to tidiness would make the table
+            confidently wrong rather than merely dense. */""}
+      <div class="mon-legend">
+        <p class="mon-legend-top">These numbers describe <b>who is carrying what</b>. Tasks carry no
+          size estimate, so nothing here measures hours — it ranks and counts cards.</p>
+        <dl>
+          <dt>vs team</dt>
+          <dd>Whether this person has more or less open work than the team's typical person. Blank
+            until the team's median reaches two cards — below that, "more than typical" is one card.</dd>
+
+          <dt>Open work</dt>
+          <dd>The bar. Its <b>length</b> is this person's open cards against the busiest plate on
+            screen; its <b>colours</b> are which columns that work is sitting in.</dd>
+
+          <dt>Open</dt>
+          <dd>Cards on this person now. The small lines underneath say why that number is what it is:
+            <b>on steps</b> (someone else leads the card, this person owns part of the plan),
+            <b>supporting</b> (named as help, not accountable),
+            <b>client-owned</b> (the card lives in Atrium), and
+            <b>unplanned</b> (came up during the day rather than being planned in).</dd>
+
+          <dt>Untouched</dt>
+          <dd>Open cards nobody has changed in ${staleDays}+ days. Not necessarily late — just quiet.</dd>
+
+          <dt>Days to finish · Met due date</dt>
+          <dd>The last ${MONITOR_WINDOW_DAYS} days, and <b>Sentinel cards only</b>. Atrium never sends
+            a completion date, so a person's <b>client-owned</b> cards count under Open and can never
+            appear in these two columns. A dash means there was nothing to measure, not zero.</dd>
+        </dl>
+        <p class="mon-legend-note">🔴 <b>These rows do not add up to the board's total, and that is
+          correct.</b> One card can sit on several plates — its lead, its supporters, and whoever owns
+          a step of it — so shared work is counted on every plate it is really on. For the same reason
+          <b>Open minus unplanned is not "planned"</b>: cards raised before this was tracked, and every
+          client-owned card, are neither.</p>
+      </div>`;
     const jump = (uid) => { setMode("employee"); requestAnimationFrame(() => focusLane(uid)); };
     S.qsa(".mon-tbl tbody tr").forEach((tr) => {
       tr.onclick = () => jump(tr.dataset.uid);
@@ -1717,9 +1860,16 @@ window.TaskBoard = {
         : "");
     const pct = t.checklist_total ? Math.round(100 * t.checklist_done / t.checklist_total) : 0;
     const camp = campaignOf(t);
-    return `<div class="tcard${isParked(t) ? " quiet" : ""}" draggable="true" data-id="${t.id}">
+    // 🔴 A card can now be VISIBLE-BUT-NOT-YOURS (2026-08-14): an employee's board carries their whole
+    // department. Such a card must not be draggable, must not offer the move select, and must not be
+    // selectable for a bulk action — every one of those would answer 403 on drop, which is the "the
+    // button is broken" experience this release exists to remove. It still opens: reading a
+    // colleague's card is the entire point of showing it.
+    const editable = canEditCard(t);
+    return `<div class="tcard${isParked(t) ? " quiet" : ""}${editable ? "" : " readonly"}" draggable="${editable}" data-id="${t.id}"${
+        editable ? "" : ` title="${S.esc((t.assignee && t.assignee.name) || "Somebody else")} owns this — you can open it, but only they or a lead can change it"`}>
       <div class="t-top">
-        ${pickable ? `<input type="checkbox" class="t-pick" aria-label="Select ${S.esc(t.title)}">` : ""}
+        ${(pickable && editable) ? `<input type="checkbox" class="t-pick" aria-label="Select ${S.esc(t.title)}">` : ""}
         ${label ? `<span class="t-disc" style="background:${S.esc(S.colors.labels[label] || "#6B7280")}" title="${S.esc(t.labels.join(", "))}"></span>` : ""}
         <span class="t-client">${S.esc(t.client_name || "Internal")}</span>
         ${/* Client / campaign reads as one line, which is also the naming rule the form now states:
@@ -1743,7 +1893,7 @@ window.TaskBoard = {
         <div class="t-meta">${dateBit}${t.comment_count ? `<span class="cc" title="${t.comment_count} comment${t.comment_count > 1 ? "s" : ""}">${S.ICON.comment}${t.comment_count}</span>` : ""}</div>
       </div>
       ${t.checklist_total ? `<div class="t-bar" title="${t.checklist_done} of ${t.checklist_total} steps done"><i style="width:${pct}%"></i></div>` : ""}
-      ${!readOnly ? `<select class="t-move" data-move="${t.id}" aria-label="Move ${S.esc(t.title)} to another column">${moveOptions(t.status)}</select>` : ""}</div>`;
+      ${editable ? `<select class="t-move" data-move="${t.id}" aria-label="Move ${S.esc(t.title)} to another column">${moveOptions(t.status)}</select>` : ""}</div>`;
   }
 
   // The move control has to be able to show where the card IS, even when that is a status the board
@@ -1782,6 +1932,10 @@ window.TaskBoard = {
   function wireDnD(opts = {}) {
     let dragEl = null;
     S.qsa(".tcard").forEach((c) => {
+      // A read-only department card carries draggable="false" (see the card template), so it never
+      // starts a drag — but wire nothing to it either, so a browser that ignores the attribute
+      // cannot smuggle one through.
+      if (c.classList.contains("readonly")) return;
       c.ondragstart = (e) => { dragEl = c; c.classList.add("dragging"); e.dataTransfer.effectAllowed = "move"; };
       c.ondragend = () => {
         c.classList.remove("dragging");
@@ -2116,7 +2270,25 @@ window.TaskBoard = {
         <div class="tb-pane" data-pane="work">
           <div class="progress" style="margin:0 0 12px"><i id="d-bd-bar" style="width:0%"></i></div>
           <div id="d-breakdown"></div>
-          ${readOnly ? "" : `<button class="btn sm ghost" id="d-bd-addmain" style="margin-top:10px">${S.ICON.plus}Add main task</button>`}
+          ${/* 🔴 APPLY A SERVICE TEMPLATE TO A CARD THAT ALREADY EXISTS (2026-08-14).
+                Recipes could only be picked on the New Task form, so the commonest card on this
+                board — a quick-added title, which is the RIGHT way to log work that comes up during
+                the day (§3 of the task-placement guidelines) — could never be given a breakdown
+                without retyping every phase. The catalog only served people who opened the full form.
+
+                It lives at the BOTTOM of the Work pane, beside "Add main task", because that is
+                where somebody is standing when they realise the card needs a plan. Hidden entirely
+                for an Atrium card: its breakdown lives in Atrium's workspace JSON, and the route
+                refuses one rather than half-working. */""}
+          ${(readOnly || isAtrium) ? "" : `<div class="row" id="d-tpl-row" style="gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center">
+            <button class="btn sm ghost" id="d-bd-addmain">${S.ICON.plus}Add main task</button>
+            <span class="tb-sep"></span>
+            <select id="d-tpl" title="Fill this card's plan in from a service recipe">
+              <option value="">Apply a service template…</option>
+              ${templates.map((tp) => `<option value="${S.esc(tp.key)}">${S.esc(tp.dept)} — ${S.esc(tp.label)} (${tp.groups.length} phase${tp.groups.length === 1 ? "" : "s"})</option>`).join("")}
+            </select>
+          </div>`}
+          ${(readOnly || !isAtrium) ? "" : `<button class="btn sm ghost" id="d-bd-addmain" style="margin-top:10px">${S.ICON.plus}Add main task</button>`}
         </div>
         <div class="tb-pane" data-pane="comments" hidden>
           ${(isAtrium && t.atrium_visible) ? `<div class="muted" style="font-size:12px;margin-bottom:10px">This card is shared, so the client sees these.</div>` : ""}
@@ -2476,6 +2648,51 @@ window.TaskBoard = {
     if (S.qs("#d-bd-addmain")) S.qs("#d-bd-addmain").onclick = () => {
       t.maintasks.push({ id: "mt_new_" + Date.now(), title: "New main task", assignee_id: null, subs: [] });
       commit();
+    };
+    // Apply a service template to THIS card. 🔴 The mode is decided here and sent explicitly — the
+    // server refuses to guess (schemas.TaskApplyTemplateIn), because `replace` discards every tick
+    // and every step owner already on the card and that is not recoverable. An empty breakdown has
+    // nothing to lose, so it skips the question entirely rather than asking a pointless one.
+    const tplSel = S.qs("#d-tpl");
+    async function applyTemplate(key, mode) {
+      try {
+        const updated = await S.api(`/api/tasks/${id}/apply-template`,
+                                    { method: "POST", body: { service_key: key, mode } });
+        t.maintasks = Array.isArray(updated.maintasks) ? updated.maintasks : [];
+        renderBreakdown();
+        S.toast(mode === "replace" ? "Plan replaced from the service template"
+                                   : "Service template added to the plan", "ok");
+        load();
+      } catch (err) { S.toast(err.detail || "Couldn't apply that service template", "err"); }
+    }
+    if (tplSel) tplSel.onchange = () => {
+      const key = tplSel.value;
+      tplSel.value = "";                       // an action menu, not a stored value
+      if (!key) return;
+      const tpl = templates.find((x) => x.key === key);
+      // An empty breakdown has nothing to lose, so it skips the question rather than asking a
+      // pointless one. `append` and `replace` are identical in that case.
+      if (!t.maintasks.length) { applyTemplate(key, "append"); return; }
+      // 🔴 Otherwise the mode is a real choice and the user makes it. `replace` discards every tick
+      // and every step owner on the card, which nothing can undo — so the count of what is about to
+      // be lost is named, not implied. The server refuses to default this for the same reason.
+      const steps = tpl ? tpl.groups.reduce((n, g) => n + g.subs.length, 0) : 0;
+      const done = t.maintasks.reduce((n, m) => n + m.subs.filter((s) => s.done).length, 0);
+      const cm = S.modal({
+        title: "This card already has a plan",
+        body: `<p style="line-height:1.5">Add <strong>${S.esc(tpl ? tpl.label : key)}</strong>’s
+             ${tpl ? tpl.groups.length : 0} phase(s) and ${steps} step(s) to the
+             ${t.maintasks.length} already on this card, or start over from the recipe?<br>
+             <span class="muted">Starting over deletes the current breakdown${
+               done ? ` — including <strong>${done} step${done === 1 ? "" : "s"} already ticked</strong>` : ""},
+             and any owners named on it. This can't be undone.</span></p>`,
+        footer: `<button class="btn ghost" id="tpl-cancel">Cancel</button>
+                 <button class="btn danger" id="tpl-replace">Start over</button>
+                 <button class="btn primary" id="tpl-append">Add to the plan</button>`,
+      });
+      S.qs("#tpl-cancel").onclick = cm.close;
+      S.qs("#tpl-append").onclick = () => { cm.close(); applyTemplate(key, "append"); };
+      S.qs("#tpl-replace").onclick = () => { cm.close(); applyTemplate(key, "replace"); };
     };
     renderBreakdown();
     // Comment
@@ -2868,17 +3085,21 @@ window.TaskBoard = {
     // closed row. `isCampaignType` and `syncCampaign` were deleted with the condition — a reveal rule
     // for a field that is never hidden is dead code that reads as though it still governs something.
     // 🔴 WHO MAY NAME A PERSON — mirrors the server, and the server is what enforces it:
-    // an existing card asks `task_perms.can_reassign` (AM+ anywhere, a team lead while the card is
-    // routed to their OWN department); a new one asks `create_task`'s `may_delegate`, which is the
-    // same rule against the department being picked in this form right now.
+    // an existing card asks `task_perms.can_reassign` (AM+ anywhere, a team lead on anything they can
+    // see — `_lead_may_act`); a new one asks `create_task`'s `may_delegate`, which as of 2026-08-14
+    // is the same role test with no department condition attached.
+    //
+    // 🔴 The department condition that used to live on this line WAS THE SECOND HALF OF THE
+    // "Team Lead can't assign" REPORT. A lead who filled in the form without touching Department got
+    // `teamId == null`, so the picker locked with a message telling them that naming a person is "a
+    // lead or manager call" — addressed to a team lead. The server refused the same request with the
+    // same reasoning. Both were relaxed together; keep them that way.
     // This field was ungated until 2026-08-05 — the only one in the block that wasn't (Priority two
     // rows down always was) — so an employee could set it, hit Save, and lose the WHOLE edit to a
     // 403; on create the person they picked was silently dropped and the card landed on them.
-    const mayNamePerson = (teamId) => (existing
-      ? canReassign(existing)
-      : (canManage || (S.can("team_lead") && teamId != null && teamId === S.user.team_id)));
+    const mayNamePerson = () => (existing ? canReassign(existing) : (canManage || isLead));
     const LEAD_LOCKED = existing
-      ? "Only an account manager — or a team lead on this department's work — can change who leads this."
+      ? "Only an account manager, or a team lead, can change who leads this."
       : "Pick a department instead: its leads are notified and triage it. Naming a person is a lead or manager call.";
     // The Support multi-select's options. Mirrors the server's rule (routers/tasks.py
     // `_support_delegates`): a delegator may pick anyone; everyone else may only toggle THEMSELVES.
@@ -2889,7 +3110,7 @@ window.TaskBoard = {
     // unchanged. (Same reasoning as the breakdown's locked step pickers.)
     function supportOptions(t) {
       const current = t.support_ids || [];
-      const mayPick = mayNamePerson(t.assigned_team_id);
+      const mayPick = mayNamePerson();
       return people
         .filter((p) => mayPick || p.id === S.user.id || current.indexOf(p.id) >= 0)
         .map((p) => {
@@ -2943,8 +3164,8 @@ window.TaskBoard = {
             <div class="v"><select id="t-team"><option value="">Not routed yet</option>${teams.map((t) => `<option value="${t.id}" ${t.id === e.assigned_team_id ? "selected" : ""}>${S.esc(t.name)}</option>`).join("")}</select></div></div>
           <div class="tf-row" id="t-lead-row"><div class="k">${S.ICON.user}Lead</div>
             <div class="v">
-              <select id="t-assignee"${mayNamePerson(e.assigned_team_id) ? "" : " disabled"} title="${mayNamePerson(e.assigned_team_id) ? "" : S.esc(LEAD_LOCKED)}"><option value="">Unassigned</option>${people.map((p) => `<option value="${p.id}" ${p.id === e.assigned_to_id ? "selected" : ""}>${S.esc(p.name)}</option>`).join("")}</select>
-              <div class="rh" id="t-assignee-hint"${mayNamePerson(e.assigned_team_id) ? " hidden" : ""}>${LEAD_LOCKED}</div></div></div>
+              <select id="t-assignee"${mayNamePerson() ? "" : " disabled"} title="${mayNamePerson() ? "" : S.esc(LEAD_LOCKED)}"><option value="">Unassigned</option>${people.map((p) => `<option value="${p.id}" ${p.id === e.assigned_to_id ? "selected" : ""}>${S.esc(p.name)}</option>`).join("")}</select>
+              <div class="rh" id="t-assignee-hint"${mayNamePerson() ? " hidden" : ""}>${LEAD_LOCKED}</div></div></div>
           ${/* SUPPORT — many people, none accountable. The same control the Atrium client-card
                 form has always had; a Sentinel task had no equivalent, so the only way to put a
                 second name on one was to invent a checklist step for them — which moved the
@@ -2953,11 +3174,30 @@ window.TaskBoard = {
                 A non-delegator still gets the picker (it lists only THEM, exactly like the
                 breakdown's step owners) because joining and leaving work yourself has to stay
                 open or the field is unusable by the people who pick work up. */""}
+          ${/* 🔴 THE NATIVE `multiple` SELECT IS GONE (2026-08-14) — it was the worst control on this
+                form. Three rows tall for a whole company, no faces, and selection by ctrl-click:
+                a plain click on a second name silently DESELECTED the first, so the commonest way to
+                staff two people quietly staffed one. It also could not show what the field means —
+                Lead is accountable, Support is help — because both rendered as identical grey text.
+
+                What replaces it is a checkbox list with faces and a filter, and the `<select>` is
+                KEPT, hidden, as the value carrier. That is deliberate: the save path
+                (`support_ids: Array.from(#t-support.options).filter(selected)`) and the whole
+                `supportOptions` permission model — including `disabled` options for colleagues a
+                non-delegator may not remove, which round-trip as still-selected — go on working
+                untouched. A picker that rebuilt the payload itself would be a second copy of that
+                rule, and this file's history is a list of what second copies cost. */""}
           <div class="tf-row tall"><div class="k">${S.ICON.users}Support</div>
-            <div class="v"><select id="t-support" multiple size="3">${supportOptions(e).join("")}</select>
-              <div class="rh">${mayNamePerson(e.assigned_team_id)
-                ? "Anyone helping, as many as you need. They see the card and it counts toward their workload; the Lead stays accountable."
-                : "You can add or remove yourself. Naming a colleague is a lead or manager call."}</div></div></div>
+            <div class="v">
+              <select id="t-support" multiple hidden>${supportOptions(e).join("")}</select>
+              <div class="ppick" id="t-support-pick">
+                <div class="ppick-chips" id="t-support-chips"></div>
+                <input type="search" class="ppick-q" id="t-support-q" placeholder="Search teammates…" autocomplete="off">
+                <div class="ppick-list" id="t-support-list" role="group" aria-label="Support"></div>
+              </div>
+              <div class="rh">${mayNamePerson()
+                ? "Anyone helping, as many as you need. They see the card and it counts toward their workload; the <b>Lead</b> stays accountable for it."
+                : "You can add or remove <b>yourself</b>. Naming a colleague is a lead or manager call."}</div></div></div>
           ${canPrioritizeOnForm ? `<div class="tf-row"><div class="k">${S.ICON.target}Priority</div>
             <div class="v"><select id="t-priority">${vocab.priorities.map((p) => `<option ${p === (e.priority || "Medium") ? "selected" : ""}>${S.esc(p)}</option>`).join("")}</select></div></div>` : ""}
           ${/* Start and Due are ONE question, so they share a row. Each caption is a real <label>
@@ -3060,23 +3300,98 @@ window.TaskBoard = {
     };
     if (clientBox) clientBox.addEventListener("change", syncShare);
 
-    // A team lead's right to name somebody follows the DEPARTMENT they are filing into, so on a new
-    // card the picker has to follow that select rather than sit there enabled until the save fails.
-    // Only on create: on an existing card the server judges `can_reassign` against the department the
-    // card has NOW, not the one being picked in this form.
+    // 🔴 THE DEPARTMENT NO LONGER GATES THIS FIELD (2026-08-14). Until then a lead's right to name
+    // somebody followed the department being filed into, so this picker had to re-evaluate on every
+    // change of the Department select — and a lead who never touched that select got a locked picker
+    // and the message "Naming a person is a lead or manager call". That was the client half of the
+    // reported "Team Lead can't assign"; `create_task.may_delegate` was relaxed with it.
+    //
+    // `syncAssignee` is kept and still runs ONCE, because the lock is real for employees and interns
+    // — it just no longer depends on anything the user can change mid-form, so there is nothing left
+    // to re-sync and the `change` listener that used to drive it would now be a no-op that reads as
+    // though it still governs something.
     const assigneeBox = S.qs("#t-assignee");
     const syncAssignee = () => {
-      const allowed = mayNamePerson(numOrNull("t-team"));
+      const allowed = mayNamePerson();
       assigneeBox.disabled = !allowed;
       assigneeBox.title = allowed ? "" : LEAD_LOCKED;
       const hint = S.qs("#t-assignee-hint");
       if (hint) hint.hidden = allowed;
-      // Never leave a name sitting in a locked picker: the server now REFUSES it rather than quietly
+      // Never leave a name sitting in a locked picker: the server REFUSES it rather than quietly
       // dropping it, and a save that dies on a field they cannot even reach is no better than the
       // silent version.
       if (!allowed) assigneeBox.value = "";
     };
-    if (!existing) S.qs("#t-team").addEventListener("change", syncAssignee);
+    syncAssignee();
+
+    // --- Support picker (2026-08-14) --------------------------------------------------------
+    // Draws the hidden `#t-support` multi-select as faces + checkboxes. 🔴 THE SELECT REMAINS THE
+    // SINGLE SOURCE OF TRUTH: every toggle writes `option.selected` and every repaint reads it back,
+    // so the form's existing save path and `supportOptions`' permission rules (a `disabled` option is
+    // a colleague this user may not remove, and must stay selected) need no counterpart here.
+    (function wireSupportPicker() {
+      const sel = S.qs("#t-support");
+      const list = S.qs("#t-support-list");
+      const chips = S.qs("#t-support-chips");
+      const q = S.qs("#t-support-q");
+      if (!sel || !list) return;
+      const opts = Array.from(sel.options);
+      // A short list needs no search box — the filter would be one more control than the task.
+      if (opts.length <= 6 && q) q.hidden = true;
+
+      function paint() {
+        const term = (q && q.value || "").trim().toLowerCase();
+        const chosen = opts.filter((o) => o.selected);
+        // The lead is shown among the chips, distinctly, because "who is on this card" is the
+        // question being answered and the answer is incomplete without them. It is NOT a support
+        // chip and cannot be removed here — that is the Lead row's job, one field up.
+        const leadId = assigneeBox && assigneeBox.value ? Number(assigneeBox.value) : null;
+        const lead = leadId ? peopleById[leadId] : null;
+        chips.innerHTML =
+          (lead ? `<span class="ppick-chip is-lead" title="Accountable for this card — change it in the Lead row above">${S.avatar(lead, "xs")}${S.esc(lead.name)}<em>lead</em></span>` : "")
+          + (chosen.length
+            ? chosen.map((o) => {
+                const p = peopleById[Number(o.value)];
+                return `<span class="ppick-chip" data-v="${o.value}">${S.avatar(p, "xs")}${S.esc(p ? p.name : o.textContent)}${
+                  o.disabled ? "" : `<button type="button" class="ppick-x" data-off="${o.value}" aria-label="Remove ${S.esc(p ? p.name : "")}">✕</button>`}</span>`;
+              }).join("")
+            : (lead ? "" : `<span class="ppick-none">Nobody assigned yet</span>`));
+
+        const rows = opts.filter((o) => {
+          const p = peopleById[Number(o.value)];
+          return !term || (p ? p.name : o.textContent).toLowerCase().includes(term);
+        });
+        list.innerHTML = rows.length ? rows.map((o) => {
+          const p = peopleById[Number(o.value)];
+          return `<label class="ppick-row${o.disabled ? " locked" : ""}"${o.disabled ? ` title="Named by a lead — you can't remove them"` : ""}>
+            <input type="checkbox" value="${o.value}"${o.selected ? " checked" : ""}${o.disabled ? " disabled" : ""}>
+            ${S.avatar(p, "xs")}<span class="nm">${S.esc(p ? p.name : o.textContent)}</span>
+            ${p && p.id === S.user.id ? `<em class="ppick-you">you</em>` : ""}
+          </label>`;
+        }).join("") : `<div class="ppick-none">No teammate matches “${S.esc(term)}”.</div>`;
+
+        list.querySelectorAll("input[type=checkbox]").forEach((cb) => {
+          cb.onchange = () => {
+            const o = opts.find((x) => x.value === cb.value);
+            if (o && !o.disabled) o.selected = cb.checked;
+            paint();
+          };
+        });
+        chips.querySelectorAll(".ppick-x").forEach((b) => {
+          b.onclick = (ev) => {
+            ev.preventDefault();
+            const o = opts.find((x) => x.value === b.dataset.off);
+            if (o && !o.disabled) o.selected = false;
+            paint();
+          };
+        });
+      }
+      if (q) q.oninput = paint;
+      // The lead chip has to follow the Lead select, or the summary of "who is on this card"
+      // silently goes stale the moment somebody changes it.
+      if (assigneeBox) assigneeBox.addEventListener("change", paint);
+      paint();
+    })();
 
     // Service-type picker (new tasks only): filter recipes by the chosen department, preview the
     // checklist it will seed, and prefill the content type. The server does the actual seeding.

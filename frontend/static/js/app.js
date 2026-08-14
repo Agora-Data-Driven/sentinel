@@ -419,6 +419,14 @@
             ${avatar(USER)}
             <div class="who"><div class="n">${esc(USER.name)}</div><div class="r">${esc(USER.role_label || USER.role)}</div></div>
           </div>
+          ${/* Collapse the rail to icons. In the FOOTER, not the brand: the brand is a link to
+                agoradatadriven.com and putting a second control inside it makes both harder to hit.
+                It is desktop-only by CSS — under 900px the rail is already an off-canvas drawer with
+                its own hamburger, so a second way to narrow it would be two controls fighting over
+                one surface. */""}
+          <button class="side-collapse" id="side-collapse" aria-label="Collapse the sidebar" aria-pressed="false">
+            ${ICON.chev}<span class="nav-label">Collapse</span>
+          </button>
         </div>
       </aside>
       <div class="main">
@@ -446,6 +454,7 @@
     const side = qs("#side");
     const toggle = () => { side.classList.toggle("open"); scrim.classList.toggle("open"); };
     qs("#ham").onclick = toggle; scrim.onclick = toggle;
+    wireSideCollapse();
     // Hub siblings render as tabs in the context bar under the topbar (flat rail, no accordions).
     renderContextBar(path);
     qs("#logout").onclick = doLogout;
@@ -640,22 +649,102 @@
     tick(); setInterval(tick, 1000);
   }
 
+  // ---------------- Notifications ----------------
+  // 🔴 `type` HAS ALWAYS BEEN SENT AND WAS NEVER READ. `serializers.notification_dict` publishes it,
+  // `constants` defines six of them, and the panel rendered every row identically — so "your leave
+  // was approved", "this task is overdue" and an all-staff announcement were three lines of grey text
+  // that could only be told apart by reading them. This map is what makes the list scannable, and it
+  // is keyed by the SAME constants the server writes (constants.NOTIF_*), not by prose in the title.
+  //
+  // An unmapped type falls back to the bell rather than being dropped: a new notification type must
+  // never become invisible because nobody updated a lookup table here.
+  const NOTIF_KINDS = {
+    approval:      { icon: "inbox",  tone: "amber",  label: "Approval" },
+    task_assigned: { icon: "board",  tone: "green",  label: "Task" },
+    task_review:   { icon: "check",  tone: "amber",  label: "Review" },
+    task_overdue:  { icon: "clock",  tone: "red",    label: "Overdue" },
+    gym_missing:   { icon: "dumbbell", tone: "grey", label: "Gym" },
+    announcement:  { icon: "sparkle", tone: "violet", label: "Announcement" },
+  };
+  const notifKind = (t) => NOTIF_KINDS[t] || { icon: "bell", tone: "grey", label: "Update" };
+
+  /** Which day bucket a notification falls in, in the viewer's own timezone.
+   *  Day boundaries, not "24 hours ago" — "yesterday" has to mean the calendar day, or a 9am item
+   *  files under Today at 8am the next morning. */
+  function dayBucket(iso) {
+    if (!iso) return "Earlier";
+    const d = new Date(iso);
+    const midnight = new Date(); midnight.setHours(0, 0, 0, 0);
+    if (d >= midnight) return "Today";
+    const y = new Date(midnight); y.setDate(y.getDate() - 1);
+    if (d >= y) return "Yesterday";
+    return "Earlier";
+  }
+
   async function wireBell() {
     const bell = qs("#bell"), panel = qs("#notif-panel");
+    let unreadOnly = false;
+
+    function rowHTML(n) {
+      const k = notifKind(n.type);
+      return `<div class="notif ${n.is_read ? "" : "unread"}" data-id="${n.id}" data-link="${esc(n.link || "")}"
+                   role="button" tabindex="0">
+        <span class="n-ic ${k.tone}" title="${esc(k.label)}">${ICON[k.icon] || ICON.bell}</span>
+        <div class="n-body">
+          <div class="nt">${esc(n.title)}</div>
+          ${n.body ? `<div class="nb">${esc(n.body)}</div>` : ""}
+          <div class="ntime">${esc(k.label)} · ${timeAgo(n.created_at)}</div>
+        </div>
+        ${n.is_read ? "" : `<span class="n-dot" aria-label="Unread"></span>`}
+      </div>`;
+    }
+
     async function load() {
       const d = await api("/api/notifications");
       const badge = qs("#bell-count");
       if (d.unread_count > 0) { badge.textContent = d.unread_count; badge.style.display = ""; } else { badge.style.display = "none"; }
-      panel.innerHTML = `<div class="h"><strong>Notifications</strong><button class="btn sm ghost" id="read-all">Mark all read</button></div>
-        <div class="notif-list">${d.items.length ? d.items.map((n) => `
-          <div class="notif ${n.is_read ? "" : "unread"}" data-id="${n.id}" data-link="${esc(n.link || "")}">
-            <div style="flex:1"><div class="nt">${esc(n.title)}</div>${n.body ? `<div class="nb">${esc(n.body)}</div>` : ""}<div class="ntime">${timeAgo(n.created_at)}</div></div>
-          </div>`).join("") : '<div class="empty">You\'re all caught up.</div>'}</div>`;
+
+      const items = unreadOnly ? d.items.filter((n) => !n.is_read) : d.items;
+      // Grouped by day, in the order the server already sorted them (newest first) — the buckets are
+      // emitted in that same order rather than from a fixed list, so an empty one never prints a
+      // heading with nothing under it.
+      let body = "";
+      let lastBucket = "";
+      items.forEach((n) => {
+        const b = dayBucket(n.created_at);
+        if (b !== lastBucket) { body += `<div class="n-day">${b}</div>`; lastBucket = b; }
+        body += rowHTML(n);
+      });
+      const empty = unreadOnly
+        ? "Nothing unread. Switch to All to see everything."
+        : "You're all caught up.";
+
+      panel.innerHTML = `<div class="h">
+          <strong>Notifications${d.unread_count ? ` <span class="n-count">${d.unread_count}</span>` : ""}</strong>
+          <div class="seg sm" id="n-filter" role="tablist">
+            <button type="button" data-f="all" class="${unreadOnly ? "" : "on"}" role="tab">All</button>
+            <button type="button" data-f="unread" class="${unreadOnly ? "on" : ""}" role="tab">Unread</button>
+          </div>
+        </div>
+        <div class="notif-list">${body || `<div class="empty">${empty}</div>`}</div>
+        ${/* The action only exists while it can do something — a permanently visible "Mark all read"
+              on an empty inbox is a control that does nothing, the same rule the task board's Clear
+              button follows. */""}
+        ${d.unread_count ? `<div class="n-foot"><button class="btn sm ghost" id="read-all">Mark all ${d.unread_count} as read</button></div>` : ""}`;
+
       const ra = qs("#read-all", panel);
       if (ra) ra.onclick = async (e) => { e.stopPropagation(); await api("/api/notifications/read-all", { method: "PATCH" }); load(); };
-      qsa(".notif", panel).forEach((el) => el.onclick = async () => {
+      qsa("#n-filter button", panel).forEach((b) => b.onclick = (e) => {
+        e.stopPropagation(); unreadOnly = b.dataset.f === "unread"; load();
+      });
+      const open = async (el) => {
         await api(`/api/notifications/${el.dataset.id}/read`, { method: "PATCH" });
         if (el.dataset.link) location.href = el.dataset.link; else load();
+      };
+      qsa(".notif", panel).forEach((el) => {
+        el.onclick = () => open(el);
+        // The row is a `div` acting as a button, so it has to answer the keyboard like one.
+        el.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(el); } };
       });
     }
     bell.onclick = (e) => { e.stopPropagation(); panel.classList.toggle("open"); if (panel.classList.contains("open")) load(); };
@@ -781,9 +870,45 @@
     return true;
   }
 
-  // A single sidebar link.
+  // ---------------- Collapsible rail ----------------
+  // An icon-only sidebar, so a wide page (the task board is five 288px columns) gets its 172px back.
+  //
+  // 🔴 THE CLASS GOES ON `documentElement`, AND IT IS APPLIED AT SCRIPT PARSE TIME, NOT IN `mount()`.
+  // The frontend has no build step and every page is a thin shell that JS fills in, so the sidebar
+  // does not exist until `mount()` runs. If the collapsed state were applied there, every navigation
+  // would paint a 248px rail and then snap it to 76px — a visible flash on every page, on every load,
+  // for anyone who chose the collapsed rail. Applying it to `:root` while the body is still empty
+  // means the very first paint is already correct. (Same reasoning as the `data-theme` attribute,
+  // which is set the same way for the same reason.)
+  const SIDE_KEY = "sentinel.side.collapsed";
+  const sideCollapsed = () => {
+    try { return localStorage.getItem(SIDE_KEY) === "1"; } catch (e) { return false; }
+  };
+  if (sideCollapsed()) document.documentElement.classList.add("side-narrow");
+
+  function wireSideCollapse() {
+    const btn = qs("#side-collapse");
+    if (!btn) return;
+    const paint = () => {
+      const on = document.documentElement.classList.contains("side-narrow");
+      btn.setAttribute("aria-pressed", String(on));
+      btn.setAttribute("aria-label", on ? "Expand the sidebar" : "Collapse the sidebar");
+      btn.title = on ? "Expand the sidebar" : "Collapse the sidebar";
+    };
+    paint();
+    btn.onclick = () => {
+      const on = document.documentElement.classList.toggle("side-narrow");
+      try { localStorage.setItem(SIDE_KEY, on ? "1" : "0"); } catch (e) { /* private mode */ }
+      paint();
+    };
+  }
+
+  // A single sidebar link. `title` is load-bearing rather than decorative: when the rail is
+  // collapsed to icons the label span is hidden, and without a title the whole rail becomes a column
+  // of unlabelled glyphs. It is set here, on the one function that builds every row, so a new
+  // destination cannot arrive without one.
   function navLink(n, path) {
-    return `<a href="${n.href}" class="${path === n.href ? "active" : ""}">${ICON[n.icon]}<span>${n.label}</span></a>`;
+    return `<a href="${n.href}" class="${path === n.href ? "active" : ""}" title="${esc(n.label)}">${ICON[n.icon]}<span class="nav-label">${esc(n.label)}</span></a>`;
   }
 
   // Renders the flat rail. Leaves and hubs are BOTH single links. A hub links to its primary
@@ -806,7 +931,12 @@
       const kids = n.children.filter(navAllowed);
       if (!kids.length) return;
       const here = kids.some((k) => k.href === path);
-      buf += `<a href="${kids[0].href}" class="${here ? "active" : ""}">${ICON[n.icon]}<span>${esc(n.group)}</span></a>`;
+      // 🔴 Built through `navLink` rather than inline, so a HUB row is identical to a leaf row:
+      // same `title` and same `.nav-label` span. Both are what the collapsed icon rail depends on,
+      // and this branch used to hand-roll its own markup — which meant "Growth" and "Time & Leave"
+      // were the two rows in the whole sidebar that lost their label and gained no tooltip when the
+      // rail narrowed. Caught by the jsdom mount harness, not by eye.
+      buf += navLink({ href: kids[0].href, icon: n.icon, label: n.group }, here ? kids[0].href : path);
     });
     flush();
     return out;

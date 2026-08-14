@@ -74,20 +74,36 @@ def _titles(cards) -> set[str]:
 
 
 # --- scoping: whose board is this? -------------------------------------------------------------
-def test_employee_sees_own_work_and_the_team_queue_but_not_a_colleagues_card(db, make_user, make_team):
-    """`can_view`'s three states, in the payload the coach reads. The third one is the point."""
+def test_employee_sees_their_department_but_never_another_one(db, make_user, make_team):
+    """`can_view`'s states, in the payload the coach reads — and the SPLIT between `mine` and
+    `board.others` is what carries the meaning.
+
+    🔴 Widened on 2026-08-14 with `task_perms._dept`: a colleague's card in the SAME department is now
+    visible here, because this digest filters on exactly the predicate the real board filters on and
+    the module's stated failure mode is the coach denying work the person can see on their own
+    screen. It also makes "who on my team is buried?" — quoted in this module's own docstring as a
+    thing the coach should answer — answerable for the first time.
+
+    What must NOT drift: the colleague's card lands in `board.others` (the wider, cappable,
+    truncation-declaring bucket), never in `mine`. `mine` is accountability and stays
+    `task_perms.is_assigned`. And ANOTHER department is still nobody's business — that is the line
+    the widening did not cross, and the reason this test names two teams.
+    """
     team = make_team()
     me = make_user(team_id=team.id)
     mate = make_user(team_id=team.id)
     _task(db, title="Mine", assignee=me)
     _task(db, title="Team queue", team_id=team.id)                  # routed, owned by nobody
-    _task(db, title="Colleague's", assignee=mate, team_id=team.id)  # owned — not my business
+    _task(db, title="Colleague's", assignee=mate, team_id=team.id)  # same department — visible now
     _task(db, title="Another team's", team_id=make_team(name="Acquisition").id)
 
     d = work_digest.work_digest(db, me)
     seen = _titles(d["mine"]["open"]) | _titles(d["board"]["others"])
-    assert seen == {"Mine", "Team queue"}
+    assert seen == {"Mine", "Team queue", "Colleague's"}
+    assert "Another team's" not in seen
+    # Visible is not the same as ON me — the coach must never brief this person as if it were theirs.
     assert _titles(d["mine"]["open"]) == {"Mine"}
+    assert "Colleague's" in _titles(d["board"]["others"])
 
 
 def test_a_card_led_by_someone_else_with_a_step_on_me_is_MINE(db, make_user):

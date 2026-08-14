@@ -309,7 +309,19 @@ def task_card(t: Task, db: Session, viewer: User | None = None,
                 # you lead the work, support it, or hold one step of it, and a list that renders all
                 # three identically is indistinguishable from the July 2026 bug where a board showed
                 # other people's work. The support half of what `my_slots` does for the breakdown.
-                "supporting": task_perms.is_supporting(viewer, t)}
+                "supporting": task_perms.is_supporting(viewer, t),
+                # 🔴 MAY THIS VIEWER TOUCH THIS CARD? Added 2026-08-14 with the department-read
+                # branch in `task_perms.can_view`, and required by it. Before that, everything on an
+                # employee's board was editable by definition (`can_edit` was `can_view` minus the
+                # viewer seat), so the frontend could infer it and never asked. Now an employee's
+                # board carries their whole DEPARTMENT, most of which is read-only to them — and a
+                # card that renders draggable, then 403s on drop, is exactly the "the button is
+                # broken" report this release is fixing elsewhere. The server answers instead of the
+                # client guessing, so there is no second copy of the rule to drift.
+                #
+                # Viewer-relative, so it lives in this dict and follows the same absent-never-faked
+                # contract as `mine`: people.py's profile card names no viewer and publishes neither.
+                "can_edit": task_perms.can_edit(viewer, t)}
     # SUPPORT — many people, none accountable (models.TaskSupporter). On the CARD, not just the
     # drawer: the board has to show who is on a piece of work, and the whole reason this field exists
     # is that people were inventing checklist steps to get a second name onto a card.
