@@ -3,7 +3,7 @@
 Importing this package registers every mapper on ``Base.metadata`` so ``create_all`` builds the
 full schema. The tables:
 
-    users, teams, qr_tokens                          -> user.py
+    users, teams, user_teams, qr_tokens              -> user.py
     clients                                          -> client.py
     tasks, task_comments, task_history,
     atrium_approvals                                 -> task.py
@@ -43,11 +43,12 @@ from .payroll import PayrollEntry
 from .system import AuditLog, SystemSetting
 from .task import (AtriumApproval, RecurringService, ServiceTemplate, Task, TaskComment,
                    TaskHistory, TaskRequest, TaskSupporter, TaskVocabItem)
-from .user import QRToken, ShiftTemplate, Team, User
+from .user import QRToken, ShiftTemplate, Team, User, UserTeam
 
 __all__ = [
     "Team",
     "User",
+    "UserTeam",
     "QRToken",
     "ShiftTemplate",
     "Client",

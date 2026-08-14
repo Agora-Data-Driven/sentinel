@@ -262,6 +262,39 @@ inside any comment that lives in a template literal**, never with a backtick.
   so dropping the old keys would quietly change what their view shows. And the **client request queue
   moved behind More**, so `refreshRequestCount` also lights a dot on the menu — a waiting request
   that is invisible until someone opens a menu is a request nobody answers.
+- 🔴 **The filter bar is ROLE-SHAPED — one bar for everyone was two different bad bars** (2026-08-14,
+  reported as "fix the filters of a team lead"). Every viewer got the same row of controls, so the
+  two ends of the ladder both got a bar that could not be used to ask anything: an **employee** was
+  offered a picker of every department in the company, all but one of which empty their board; a
+  **team lead** got that same flat list with nothing marking the departments they actually lead, and
+  no way at all to ask "what is on ME today" except by reading past everyone else's cards. Neither
+  control was *wrong* — the server has always scoped the answer — they just answered no question.
+
+  | | employee / intern | team lead | AM · admin · super · viewer |
+  |---|---|---|---|
+  | `#f-team` | only when they are in **2+** departments | grouped: **My departments** / Other | flat, all of them |
+  | `#f-assignee` | — (they have no multi-person view) | grouped: **My departments** / Elsewhere | flat |
+  | `#scope-seg` | **On me** (default) · My department | **Everything** (default) · My department(s) | — |
+
+  Four rules behind that table, each of which the obvious alternative breaks:
+  - 🔴 **Group, never truncate.** Every one of these filters can legitimately reach outside the
+    viewer's own department — a card they raised for another team (`_created`), a person from
+    another team holding their work (a lead may name anybody they can see). Cutting those options
+    removes real queries; labelling them removes only the confusion.
+  - 🔴 **Each role's DEFAULT scope reproduces the board that role already had.** An employee opens
+    on `mine`, a lead on `all`. An upgrade that quietly narrows somebody's board is indistinguishable
+    from cards going missing.
+  - 🔴 **A lead gets no "On me" tab** — the attention pills two controls to the right already carry
+    **on you**, and a tab that repeats a pill on the same bar is the duplication this toolbar was cut
+    from fourteen controls to six to remove. The employee's `mine` is not that duplicate: it is their
+    *default scope*, so it defines the board rather than filtering it.
+  - **A control that cannot change the answer is not rendered** (`showTeamFilter`, `showScopeSeg`) —
+    the same rule the saved-views picker, Clear and the campaign filter already follow.
+
+  The scope switch only ever NARROWS: every card on the board already passed the server's `can_view`,
+  so it can hide but never reveal. `dept` tests the card's `assigned_team_id` against the viewer's
+  set and deliberately does **not** fall back to `mine` for a card with no department — "what is my
+  team carrying" is a question about routed work.
 - 🟡 **A `height` on a form control must reset its padding.** The base rule gives every `select` a
   `padding:10px 12px`; forcing `height:30px` on top of that leaves a **ten-pixel content box**, and a
   select clips its label to that box — the bulk bar's three dropdowns read as "Move to" with the

@@ -47,6 +47,35 @@ class Team(Base):
     members: Mapped[list["User"]] = relationship(back_populates="team")
 
 
+class UserTeam(Base):
+    """ONE ADDITIONAL department for a user — the join row behind multi-department membership.
+
+    Added 2026-08-14. `users.team_id` stays the **primary/home** department and is deliberately not
+    replaced by this table, because several rules genuinely need ONE answer and would become
+    ambiguous the moment a person had two:
+
+    * **shift + attendance** — `Team.shift_template_id` decides when somebody is late. Two teams
+      means two shifts, and "which one is this punch against?" has no honest answer;
+    * **payroll + the People directory's Department column** — one row, one department;
+    * **`Task.assigned_team_id` defaults and `_derived_labels`** — a card is routed to one team.
+
+    So this table answers the OTHER question — "which departments' work does this person take part
+    in?" — and `services/teams.team_ids` is the one place the two are unioned. Every scope rule asks
+    that function; nothing outside it should read this relationship directly.
+
+    🔴 The row is a MEMBERSHIP, not a role grant. A team lead in two departments leads both (their
+    role is a property of the person, and `task_perms._leads_team` tests the union); an employee in
+    two departments reads both and — exactly as with their primary one — writes to neither
+    colleague's card. Adding a department can therefore only ever widen what somebody SEES.
+    """
+
+    __tablename__ = "user_teams"
+
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    team_id: Mapped[int] = mapped_column(ForeignKey("teams.id"), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -76,6 +105,17 @@ class User(Base):
 
     team: Mapped[Team | None] = relationship(back_populates="members")
     qr_tokens: Mapped[list["QRToken"]] = relationship(back_populates="user")
+    # 🔴 `selectin`, NOT the default lazy load. `task_perms._dept` asks for this set once per CARD
+    # while filtering the board, so a lazy relationship here would be a SELECT per card the first
+    # time each user object was touched — the exact shape of the 2,946-query board `CardPrefetch`
+    # was written to end (AGENTS.md §5, "the board has a QUERY BUDGET"). `selectin` loads it in one
+    # extra query alongside whoever was fetched, and the signed-in user is fetched once per request.
+    # `delete-orphan` so removing a department from the form really deletes the row, and deleting a
+    # person takes their memberships with them.
+    extra_teams: Mapped[list["UserTeam"]] = relationship(
+        lazy="selectin", cascade="all, delete-orphan",
+        primaryjoin="User.id == UserTeam.user_id",
+    )
 
     @property
     def initials(self) -> str:

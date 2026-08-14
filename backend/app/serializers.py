@@ -95,9 +95,31 @@ def user_full(u: User, team: Team | None = None) -> dict:
             "hired_date": _d(u.hired_date),
             "shift_template_id": u.shift_template_id,
             "team_name": team.name if team else None,
+            # 🔴 EVERY department this person takes part in, primary FIRST (2026-08-14). `team_id`
+            # above is still their primary one and still what `team_name`, their shift and their
+            # payroll row follow — this is participation, which is a set (see `services/teams`).
+            #
+            # Deliberately NOT on `user_public`: that shape is serialized once per CARD for every
+            # assignee and supporter on the board, and this needs the `extra_teams` relationship —
+            # a per-user read on any surface that did not fetch users in bulk. The places that
+            # actually need the set (`/api/auth/me`, the People directory, the board's people list)
+            # all go through `user_full`, all fetch in bulk, and all already load `/api/teams` to
+            # turn these ids into names. See AGENTS.md §5, "the board has a QUERY BUDGET".
+            "team_ids": _team_ids_ordered(u),
         }
     )
     return d
+
+
+def _team_ids_ordered(u: User) -> list[int]:
+    """The user's departments with the PRIMARY one first, then the rest alphabetically by id.
+
+    Order is part of the contract: the UI prints these as "Design + Acquisition" and the first name
+    is the one that answers "which department are they in?" on a form with room for one answer.
+    """
+    extra = sorted({t.team_id for t in (getattr(u, "extra_teams", None) or [])
+                    if t.team_id is not None and t.team_id != u.team_id})
+    return ([u.team_id] if u.team_id is not None else []) + extra
 
 
 def team_dict(t: Team) -> dict:

@@ -30,6 +30,7 @@ from ..serializers import leave_balance_dict, leave_request_dict, leave_type_dic
 from ..services import audit
 from ..services import leave as leave_svc
 from ..services import notifications as notif
+from ..services import teams as teams_svc
 from ..utils.time import today_ph, utcnow
 
 router = APIRouter(prefix="/api/leave", tags=["leave"])
@@ -118,7 +119,15 @@ def all_requests(
         q = q.where(LeaveRequest.status == status)
     rows = db.execute(q).scalars().all()
     if reviewer.role == ROLE_TEAM_LEAD:
-        rows = [r for r in rows if (db.get(User, r.user_id) or User()).team_id == reviewer.team_id]
+        # Anyone who shares a DEPARTMENT with this lead — all of theirs, not just their primary one
+        # (`services/teams`, 2026-08-14). A lead covering a second department approves that
+        # department's leave too; that is what covering it means, and the requests were previously
+        # invisible to them with no queue anywhere saying so.
+        #
+        # 🔴 An empty set now matches nobody, where `None == None` used to match every
+        # department-less person. A lead with no department of their own sees no requests here —
+        # which is the honest answer, and `require_min_role` still lets any admin above them decide.
+        rows = [r for r in rows if teams_svc.shares_department(db.get(User, r.user_id), reviewer)]
     return [leave_request_dict(r, db) for r in rows]
 
 

@@ -41,7 +41,14 @@ owns yet. Unassigned team work is a shared queue and belongs on every member's b
 is owned it is that person's job and leaves everyone else's. See `_team_queue`.
 "own"  = "assigned", or task.created_by_id == user.id (the automatic creator tag) — a team lead
 keeps sight of what they raised for another team.
-"team" = task.assigned_team_id == user.team_id (a team lead's own team).
+"team" = task.assigned_team_id is one of the user's DEPARTMENTS.
+
+🔴 "one of" is literal: a person may belong to SEVERAL departments (2026-08-14, `models.UserTeam`).
+`users.team_id` is still their primary one — it is what decides their shift, their payroll row and
+the Department column in People — but participation is a SET, and every rule in this module tests
+the set through `services/teams.team_ids`. Nothing here compares two team ids directly any more;
+if you add a rule that does, it will be correct for the estate's single-department majority and
+quietly wrong for exactly the people this was written for.
 """
 from __future__ import annotations
 
@@ -55,6 +62,7 @@ from ..constants import (
 )
 from ..models import Task, User
 from . import maintasks as MT
+from . import teams as TEAMS
 
 # Full-authority roles: see/do everything, anywhere.
 FULL = ADMIN_ROLES | {ROLE_ACCOUNT_MANAGER}          # account_manager, admin, super_admin
@@ -84,17 +92,33 @@ def _is_viewer(user: User) -> bool:
 
 
 def _dept(user: User, task: Task) -> bool:
-    """This work is routed to the user's OWN department. Read-relevant for everyone.
+    """This work is routed to ONE OF the user's departments. Read-relevant for everyone.
 
     🔴 Split out of `_leads_team` on 2026-08-14 because two different questions were sharing one
     function: "does this belong to my department?" (a fact about the card, true for every member)
     and "am I the lead of the department it belongs to?" (a permission). An employee now needs the
     first one — see `can_view` — and giving them the second would be a role escalation.
+
+    🔴 **A PERSON MAY BE IN SEVERAL DEPARTMENTS (2026-08-14, later the same day).** This was
+    `task.assigned_team_id == user.team_id`, one integer against one integer — which silently
+    asserted that everybody belongs to exactly one team. People here do not: a designer who also
+    sits with Acquisition, or a lead covering a second department while it has no lead of its own,
+    could see only their PRIMARY team's board and were invisible to the other one's rollups. The
+    union lives in `services/teams.team_ids`, which is also where `users.team_id`'s surviving job
+    (shift, payroll, the directory column) is written down. Ask that function; never re-derive it.
     """
-    return task.assigned_team_id is not None and task.assigned_team_id == user.team_id
+    return task.assigned_team_id is not None and task.assigned_team_id in TEAMS.team_ids(user)
 
 
 def _leads_team(user: User, task: Task) -> bool:
+    """This user is a team lead AND the card is routed to one of THEIR departments.
+
+    A lead of two departments leads both — the role is a property of the person and `_dept` is now a
+    set test (`services/teams`), so nothing here had to change to support that. What it deliberately
+    does NOT mean is "a lead of any department may act on any department's card": the `_dept` half
+    is still the whole point of this predicate, which is why `can_delete` keeps asking it while
+    every other lead power moved to `_lead_may_act`.
+    """
     return user.role == ROLE_TEAM_LEAD and _dept(user, task)
 
 
@@ -194,10 +218,12 @@ def _team_queue(user: User, task: Task) -> bool:
     So: **unassigned** team work is a shared queue and shows; the moment somebody owns it, it is
     their job and drops off everyone else's board. That is what makes "routed but unassigned" a
     first-class state rather than a gap.
+
+    🔴 Reads ALL of the user's departments (`_dept`), not just their primary one — somebody who
+    takes part in two departments is in both triage queues, which is the whole reason they are in
+    both departments.
     """
-    return (task.assigned_team_id is not None
-            and task.assigned_team_id == user.team_id
-            and task.assigned_to_id is None)
+    return _dept(user, task) and task.assigned_to_id is None
 
 
 def _unowned_client_work(task: Task) -> bool:

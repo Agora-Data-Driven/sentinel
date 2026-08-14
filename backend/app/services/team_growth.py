@@ -58,6 +58,7 @@ from ..models import (
 from ..serializers import physical_goal_progress, user_public
 from ..utils.time import today_ph, to_ph, utcnow
 from . import engine_bridge
+from . import teams as teams_svc
 
 # Which engine programs feed which dimension. MIRRORS `DIM_PROGRAMS` in frontend/static/js/growth.js
 # — a worker's own ring and their row in this table must be the same number, so if one side gains a
@@ -93,8 +94,10 @@ def visible_users(db: Session, viewer: User) -> list[User]:
     rows = db.execute(select(User).where(User.is_active.is_(True))).scalars().all()
     if viewer.role in ADMIN_ROLES:
         people = list(rows)
-    elif viewer.role == ROLE_TEAM_LEAD and viewer.team_id:
-        people = [u for u in rows if u.team_id == viewer.team_id]
+    elif viewer.role == ROLE_TEAM_LEAD and teams_svc.team_ids(viewer):
+        # All of the lead's departments, and everyone in them (`services/teams`, 2026-08-14).
+        mine = teams_svc.member_ids(db, teams_svc.team_ids(viewer))
+        people = [u for u in rows if u.id in mine or u.id == viewer.id]
     else:
         people = []
     return sorted(people, key=lambda u: (u.name or u.email or "").lower())

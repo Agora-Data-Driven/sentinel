@@ -2,6 +2,14 @@ window.pageInit = async (S) => {
   const view = S.view();
   const isAdmin = S.can("admin");  // gates the QR badge view (managers+); all edits now live in Manage
   const [teams, vocab] = await Promise.all([S.api("/api/teams"), S.api("/api/vocab")]);
+  // A person may belong to several departments (models.UserTeam, 2026-08-14). `team_name` is their
+  // MAIN one and always will be — it is what their shift and payroll follow — so every surface that
+  // prints "which department are they in?" has to print the rest of the answer too, or somebody who
+  // works across two teams is listed under one of them and looks absent from the other.
+  const teamName = (id) => (teams.find((t) => t.id === id) || {}).name || "";
+  const deptNames = (u) => ((u.team_ids && u.team_ids.length)
+    ? u.team_ids.map(teamName).filter(Boolean)
+    : [u.team_name].filter(Boolean));
   let filters = { search: "", team: "", role: "", status: "" };
 
   view.innerHTML = `<div class="pagehead"><div><h2>People</h2><div class="lead">Employee directory: profiles, QR badges, attendance & gym at a glance. Add or edit people in the Manage console.</div></div></div>
@@ -32,7 +40,7 @@ window.pageInit = async (S) => {
       <tbody>${rows.length ? rows.map((u) => `<tr>
         <td class="t-name">${S.avatar(u, "sm")}<strong>${S.esc(u.name)}</strong></td>
         <td class="sub">${S.esc(u.email)}</td>
-        <td>${S.esc(u.team_name || "—")}</td>
+        <td>${S.esc(deptNames(u).join(" · ") || "—")}</td>
         <td>${S.esc(u.role_label)}</td>
         <td>${S.statusPill(u.status)}</td>
         <td><button class="btn sm ghost" data-view="${u.id}">View</button></td></tr>`).join("") : '<tr><td colspan="6"><div class="empty">No people match.</div></td></tr>'}</tbody></table></div>`;
@@ -55,7 +63,7 @@ window.pageInit = async (S) => {
         <div>${S.statusPill(p.status)}</div>
         <div class="stack" style="margin-top:14px;text-align:left">
           ${row("Email", p.email)}${row("Phone", p.phone)}${row("Role", p.role_label)}
-          ${row("Department", p.team_name)}${row("Hired", p.hired_date ? S.fmtDateFull(p.hired_date + "T00:00:00+08:00") : "—")}
+          ${row(deptNames(p).length > 1 ? "Departments" : "Department", deptNames(p).join(" · "))}${row("Hired", p.hired_date ? S.fmtDateFull(p.hired_date + "T00:00:00+08:00") : "—")}
         </div>
         ${isAdmin ? `<div style="margin-top:16px"><div class="section-label">Badge QR</div>
           <img src="/api/people/${id}/qr" alt="QR" style="width:150px;height:150px;margin-top:8px;border:1px solid var(--line);border-radius:10px;padding:6px;background:#fff">

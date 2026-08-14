@@ -49,6 +49,7 @@ from ..services import task_analytics
 from ..services import maintasks as maintasks_svc
 from ..services import notifications as notif
 from ..services import atrium_identity
+from ..services import teams as teams_svc
 from ..services import (task_adoption, task_bridge, task_config, task_origin, task_perms,
                         task_recurring, task_templates, task_workflow)
 from ..utils.time import today_ph, to_ph, utcnow
@@ -457,10 +458,20 @@ def employee_summary(days: int = Query(30, ge=7, le=180,
     if not (is_manager(user) or task_perms.is_read_only(user)):
         raise HTTPException(status_code=403, detail="Only managers can monitor the team")
 
-    # Who this manager may see: all active staff, or (team lead) just their own team.
+    # Who this manager may see: all active staff, or (team lead) the people in THEIR departments.
+    # 🔴 `teams.member_ids`, not `p.team_id == user.team_id` (2026-08-14). Both halves of that
+    # comparison became sets when multi-department membership landed: a lead covering two
+    # departments monitors both, and somebody whose SECOND department is this lead's belongs in this
+    # cohort — they do that work. Getting either half wrong is silent, because a missing row on the
+    # Monitor looks exactly like a person with nothing on their plate.
     people = db.execute(select(User).where(User.is_active.is_(True))).scalars().all()
     if user.role == ROLE_TEAM_LEAD:
-        people = [p for p in people if p.team_id == user.team_id]
+        mine = teams_svc.member_ids(db, teams_svc.team_ids(user))
+        # `or p.id == user.id` because a lead with NO department now matches nobody (an empty set
+        # matches nothing, deliberately — see `teams.member_ids`), and a Monitor with zero rows
+        # reads as a broken page. The old `None == None` comparison quietly grouped every
+        # department-less person together instead, which was never a team.
+        people = [p for p in people if p.id in mine or p.id == user.id]
     people = sorted(people, key=lambda p: (p.name or "").lower())
 
     # Filed rows are fetched too: they are off people's plates but they are exactly what "Done · 7d"
@@ -730,11 +741,11 @@ def throughput_history(weeks: int = Query(8, ge=2, le=26),
     this_week_start = today - timedelta(days=today.weekday())      # Monday
     first_week_start = this_week_start - timedelta(weeks=weeks - 1)
 
-    # Same scope as the Monitor rollup: a team lead sees their own team, AM+ sees everyone.
+    # Same scope as the Monitor rollup, through the same helper so the two can never drift: a team
+    # lead sees the people in THEIR departments (all of them — see `teams.member_ids`), AM+ everyone.
     visible_ids = None
     if user.role == ROLE_TEAM_LEAD:
-        visible_ids = {u.id for u in db.execute(
-            select(User).where(User.team_id == user.team_id)).scalars().all()}
+        visible_ids = teams_svc.member_ids(db, teams_svc.team_ids(user)) | {user.id}
 
     done_statuses = {s for s in task_config.statuses(db) if task_config.is_completed(db, s)}
     rows = db.execute(select(Task).where(Task.completed_at.is_not(None))).scalars().all()
