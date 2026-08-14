@@ -665,6 +665,10 @@ window.TaskBoard = {
             ${canManage ? `<button class="btn ghost" id="tb-requests" title="What clients have asked for, awaiting triage">Requests<span id="tb-req-n" class="pill violet" hidden></span></button>` : ""}
             <button class="btn ghost" id="filed-by-me" title="Work you raised for another team, and where it went">Filed by me</button>
             <button class="btn ghost" id="past-work" title="Completed work that has been filed">Past work</button>
+            ${/* 🔴 In the MENU, not the header. That toolbar was deliberately cut from fourteen
+                  controls to six (a6dc4a9); a density switch is set once and then never touched,
+                  which is exactly the profile of everything else behind More. */""}
+            <button class="btn ghost" id="tb-density" title="Narrower columns, so more of the board fits on screen at once"></button>
             ${!readOnly ? `<hr><button class="btn ghost" id="tb-select-toggle" title="Pick several cards and change them together">Select several…</button>` : ""}
             <hr><button class="btn ghost" id="f-save-view">Save this view…</button>
             <button class="btn ghost" id="f-manage-views">Manage saved views…</button>
@@ -746,6 +750,28 @@ window.TaskBoard = {
   if (canCreate) S.qs("#new-task").onclick = () => taskForm(null);
   S.qs("#past-work").onclick = () => showPastWork();
   S.qs("#filed-by-me").onclick = () => showFiledByMe();
+
+  // --- Column density -----------------------------------------------------------------------------
+  // A `.col` is `flex: 0 0 var(--col-w)` and `--col-w` is a clamp() (styles.css, "THE COLUMN WIDTH
+  // IS A VARIABLE"), so the board already narrows itself as the viewport shrinks. This is the
+  // manual override for the case the clamp cannot answer: five-plus columns on a 1280px viewport,
+  // where the honest choice between "see everything" and "read comfortably" belongs to the person
+  // reading it. Per browser, like the saved views — a working habit, not org configuration.
+  const DENSITY_KEY = "sentinel.tb.density";
+  let dense = false;
+  try { dense = localStorage.getItem(DENSITY_KEY) === "compact"; } catch (e) { /* private mode */ }
+  // Appended to the view's own class, never assigned over it: renderBoard/renderByEmployee set
+  // `board.className` outright, and the Monitor is a table with no columns to compress.
+  const densityCls = () => (dense ? " dense" : "");
+  const densityBtn = S.qs("#tb-density");
+  const syncDensityBtn = () => { densityBtn.textContent = dense ? "Comfortable columns" : "Compact columns"; };
+  syncDensityBtn();
+  densityBtn.onclick = () => {
+    dense = !dense;
+    try { localStorage.setItem(DENSITY_KEY, dense ? "compact" : "comfortable"); } catch (e) { /* private mode */ }
+    syncDensityBtn();
+    render();
+  };
 
   S.qsa("#view-seg button").forEach((b) => b.onclick = () => setMode(b.dataset.view));
 
@@ -1187,7 +1213,7 @@ window.TaskBoard = {
     S.qsa("#view-seg button").forEach((b) => b.classList.toggle("on", b.dataset.view === mode));
     S.qs("#f-search").closest(".tb-bar").style.display = mode === "monitor" ? "none" : "";
     const board = S.qs("#board");
-    board.className = mode === "board" ? "board" : "";
+    board.className = mode === "board" ? "board" + densityCls() : "";
     // 🔴 STRICTLY BEFORE the filter below, because it can CLEAR a stale `campaign` (see its own
     // comment) and `inScope` reads that variable. Run it afterwards and the board would spend one
     // whole render filtered by a campaign the select had already stopped offering.
@@ -1221,7 +1247,7 @@ window.TaskBoard = {
     const cols = columnsFor(tasks);
     const byStatus = Object.fromEntries(cols.map((s) => [s, []]));
     tasks.forEach((t) => (byStatus[t.status] || (byStatus[t.status] = [])).push(t));
-    board.className = "board";
+    board.className = "board" + densityCls();
     board.innerHTML = cols.map((st) => {
       // An orphan column is work stranded on a retired status. It renders so nobody loses it, but it
       // takes no NEW cards: `create_task` 400s a status that isn't in `task_config.statuses`, so an
@@ -1276,7 +1302,7 @@ window.TaskBoard = {
 
     if (!keys.length) { board.innerHTML = `<div class="empty">No tasks match.</div>`; return; }
 
-    board.className = "swimlanes";
+    board.className = "swimlanes" + densityCls();
     // Same columns in every lane (they have to line up), derived from the WHOLE filtered set so an
     // orphan status doesn't swallow one person's cards the way it used to swallow the board's.
     const cols = columnsFor(tasks);
@@ -1350,9 +1376,19 @@ window.TaskBoard = {
     const BAND = { heavy: ["red", "Heavy"], steady: ["grey", "Steady"], light: ["blue", "Light"] };
     const bandPill = (r) => {
       const b = BAND[r.load_band];
-      if (!b) return NA;
+      // 🔴 A bare em dash here read as a broken column, because it is what the WHOLE table showed:
+      // the band is suppressed when the cohort's median open work is under two cards, and the
+      // cohort used to include everybody with nothing open at all — so on any board where work is
+      // concentrated on a few people the median was 0 or 1 and not one row ever got a band
+      // (task_analytics.apply_load_bands). The cohort is the people carrying work now, and when a
+      // band is still genuinely unavailable the dash SAYS why rather than looking like a failure.
+      if (!b) return '<span class="muted" title="No band yet — this cohort\'s median open work is under two cards, so &quot;more than the median&quot; would be a single card.">—</span>';
       return `<span class="pill ${b[0]}" title="Relative to this team's median open work">${b[1]}</span>`;
     };
+    // The busiest plate in the cohort on screen sets the scale for every bar — the same rule the
+    // Load band already follows (compare a team against itself; AGENTS.md §5). `1` as the floor
+    // keeps the arithmetic safe on a board where nobody has anything open.
+    const maxOpen = Math.max(1, ...rows.map((r) => r.open_total || 0));
     // Capacity sits beside the NAME, not in its own column: "is this person even here?" changes how
     // you read every other number in the row, so it has to be seen at the same moment.
     const capacity = (r) => (r.on_leave_today
@@ -1374,6 +1410,9 @@ window.TaskBoard = {
         const u = r.user;
         const open = r.open_total || 0;
         const segs = barSegs.map((st) => { const n = r.counts[st] || 0; return n ? `<i class="${segCls[st]}" style="flex:${n}" title="${S.esc(st)}: ${n}"></i>` : ""; }).join("");
+        // Length = how much, colour = what kind. `segs` are flex-GROW, so they only ever divide up
+        // whatever width the bar is given; the width is this row's share of the busiest plate.
+        const wlPct = Math.round((open / maxOpen) * 100);
         // "9 (4 as steps)" — a row that is mostly other people's cards is a different working life
         // from one that is all your own, and before 2026-08-05 those cards weren't counted at all.
         // Two sub-lines under the Open count, each answering "why is that number what it is":
@@ -1396,9 +1435,9 @@ window.TaskBoard = {
         // side, so this line can be smaller than Open without the difference being planned work.
         const addedNote = r.added_open ? `<span class="mon-sub" title="Open work that was ADDED during the day rather than planned in — an unexpected revision, a budget change, a report suddenly needed. Tasks raised before this was tracked count as neither.">${r.added_open} added</span>` : "";
         return `<tr data-uid="${u.id}" tabindex="0">
-          <td class="who">${S.avatar(u, "sm")}<div><div class="n">${S.esc(u.name)} ${capacity(r)}</div><div class="r">${S.esc(u.role_label || u.role || "")}</div></div></td>
+          <td class="who"><div class="who-in">${S.avatar(u, "sm")}<div><div class="n">${S.esc(u.name)} ${capacity(r)}</div><div class="r">${S.esc(u.role_label || u.role || "")}</div></div></div></td>
           <td>${bandPill(r)}</td>
-          <td class="wl"><div class="wl-bar">${segs || '<i class="s-none" style="flex:1" title="No open tasks"></i>'}</div></td>
+          <td class="wl"><div class="wl-track" title="${open} open of ${maxOpen} on the busiest plate here"><div class="wl-bar" style="--wl:${wlPct}%">${segs}</div></div></td>
           <td class="num">${open}${stepNote}${supportNote}${clientNote}${addedNote}</td>
           <td class="num ${r.overdue ? "bad" : ""}">${r.overdue || 0}</td>
           <td class="num ${r.stale_open ? "warn" : ""}">${r.stale_open || 0}</td>
@@ -1409,7 +1448,10 @@ window.TaskBoard = {
       }).join("")}</tbody></table>
       <p class="mon-legend">
         <b>Load</b> compares each person against this team's median open work — tasks carry no size
-        estimate, so it ranks who is carrying more, it does not measure hours.
+        estimate, so it ranks who is carrying more, it does not measure hours. It stays blank until
+        that median reaches two cards, because below it "more than the median" is a single card.
+        <b>Workload</b> bar: its LENGTH is this person's open work against the busiest plate here,
+        its COLOURS are which columns that work sits in.
         <b>Cycle</b> and <b>On time</b> cover the last ${MONITOR_WINDOW_DAYS} days and count
         Sentinel rows only — Atrium sends no completion date, so a person's <b>client</b> cards
         show under Open but cannot reach those two columns.
