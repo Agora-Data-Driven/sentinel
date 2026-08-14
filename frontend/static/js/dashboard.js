@@ -263,7 +263,12 @@ window.pageInit = async (S) => {
     const stepPill = (t) => (t.assigned_to_id !== S.user.id && t.my_slots
       ? `<span class="pill blue" title="${t.assignee ? S.esc(t.assignee.name) + " leads this card" : "Nobody leads this card"}">${plural(t.my_slots, "step")} on you</span>`
       : "");
-    const flags = (t) => (t.on_hold ? '<span class="pill grey">Paused</span>' : "")
+    // 🔴 Being in the parked column IS the hold — the same derivation the board's card uses
+    // (`isParked` in taskboard.js, 2026-08-14). `on_hold` alone misses an ATRIUM card, whose stage
+    // this board moves and whose `on_hold` is a separate flag of Atrium's own, and a Sentinel row
+    // dragged into that column before `task_workflow._sync_hold` shipped. By STAGE, never the
+    // label — see the note on STAGE_OF above.
+    const flags = (t) => ((t.on_hold || STAGE_OF[t.status] === "blocked") ? '<span class="pill grey">Paused</span>' : "")
       + (t.review_state === "pending" ? '<span class="pill amber">In review</span>' : "")
       + stepPill(t);
 

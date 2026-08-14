@@ -571,12 +571,33 @@ textarea { resize: vertical; min-height: 78px; }
 .board { display: flex; gap: 14px; overflow-x: auto; padding-bottom: 12px; align-items: flex-start; }
 /* 🔴 The `0` in the middle of `flex: 0 0 …` is flex-SHRINK, and it is load-bearing for the same
    reason `.col-list > .tcard { flex: 0 0 auto }` is (see taskboard.js): the column scrolls, the
-   column never squashes. Only the basis is a variable. */
-.col { flex: 0 0 var(--col-w); background: var(--canvas); border: 1px solid var(--line); border-radius: var(--radius); display: flex; flex-direction: column; max-height: calc(100vh - 230px); }
+   column never squashes. Only the basis is a variable.
+
+   🔴 AND `min-width: 0` IS WHAT MAKES THE BASIS BINDING. `flex: 0 0 <w>` reads as "be exactly this
+   wide" and is not: a flex item's `min-width` defaults to `auto`, which resolves to its CONTENT-based
+   automatic minimum, and per CSS a minimum BEATS a maximum. So `flex-shrink: 0` stopped a column
+   shrinking below the basis while nothing stopped its content pushing it ABOVE the basis — one card
+   whose top line could not shrink made its whole column wider than every other column, and stretched
+   every other card in it to match. Observed live on the To Do column (a card printing
+   "ROOMING HOUSE EXPERT / RHE Rooming HouseExtension" un-truncated while every other card on the
+   board ellipsized). It is self-reinforcing: `text-overflow: ellipsis` only fires in a CONSTRAINED
+   box, so a column free to widen never truncates anything and never reveals why it grew.
+   `max-width` is the belt to that braces — redundant while grow is 0, kept because this bug class
+   has already shipped once and the pair states the intent that neither line states alone. */
+.col { flex: 0 0 var(--col-w); min-width: 0; max-width: var(--col-w); background: var(--canvas); border: 1px solid var(--line); border-radius: var(--radius); display: flex; flex-direction: column; max-height: calc(100vh - 230px); }
 .col-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; position: sticky; top: 0; }
 .col-head .t { font-weight: 800; font-size: 13px; color: var(--ink); }
 .col-head .c { font-size: 11px; font-weight: 800; color: var(--sub); background: #fff; border: 1px solid var(--line); border-radius: var(--pill); padding: 1px 8px; }
 .col-list { padding: 4px 10px 12px; display: flex; flex-direction: column; gap: 9px; overflow-y: auto; min-height: 40px; }
+/* 🔴 The other half of the `.col` fix above: the shrink has to REACH the spans that carry
+   `text-overflow: ellipsis`. `.t-client` and `.t-camp` (taskboard.js) already set `min-width: 0`
+   each, but an ancestor whose own automatic minimum is content-based re-establishes the floor
+   ABOVE them — so those spans never get a constrained box, the ellipsis never fires, and the card
+   ends up as wide as its longest unbreakable line. Capping `.col` without this would clip that
+   text dead instead of ellipsizing it, so the two belong together.
+   These live here rather than in taskboard.js's injected block because that block sets no
+   `min-width` at all, so there is nothing to conflict with and one less template literal to edit. */
+.tcard, .tcard .t-top { min-width: 0; }
 .col.drag-over { outline: 2px dashed var(--violet); outline-offset: -4px; }
 .col-add {
   display: flex; align-items: center; gap: 6px; margin: 0 10px 12px; padding: 8px 10px;

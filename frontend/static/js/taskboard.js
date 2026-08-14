@@ -1553,6 +1553,25 @@ window.TaskBoard = {
   const daysLate = (due) => Math.round(
     (Date.parse(PH_TODAY + "T00:00:00Z") - Date.parse(due + "T00:00:00Z")) / 864e5);
 
+  // 🔴 SITTING IN THE PARKED COLUMN *IS* THE HOLD — `on_hold` alone was never the question
+  // (2026-08-14). `task_workflow._sync_hold` made that true on both sides of every Sentinel move, so
+  // the two can only disagree on a card whose `on_hold` this board does not write:
+  //
+  //   an ATRIUM card — moving one parks nothing. `PATCH /{id}/status` takes the Atrium branch and
+  //                    calls `atrium_tasks.move_task`, which moves the STAGE and only the stage;
+  //                    over there `on_hold` is a separate flag of Atrium's own, tested
+  //                    independently of the column (its `report_ai` asks `stage == "blocked" OR
+  //                    on_hold`). So a client card reaches this column with `on_hold` false.
+  //   a legacy row   — dragged into the column before `_sync_hold` shipped and untouched since.
+  //
+  // Both then rendered as ordinary live work sitting in the Parked column: no PARKED flag, no
+  // dashed quiet card, nothing at a glance to separate them from In Progress next door — which is
+  // exactly the "two kinds of parked card that behave differently" `_sync_hold` was written to end,
+  // surviving in the half of the board it could not reach.
+  //
+  // By STAGE, never the label: Manage renames that column (D13).
+  const isParked = (t) => !!t.on_hold || STAGE_OF[t.status] === "blocked";
+
   // 🔴 ONE FLAG PER CARD. This ladder IS the "say the important thing" rule, in one place: the
   // worst true thing wins and everything else stays quiet and lives in the record. It replaces a
   // row of five pills (parked / review / approved / changes / stale) that could all be on at once,
@@ -1570,7 +1589,7 @@ window.TaskBoard = {
     if (t.review_state === "changes_requested") return { t: "Changes", c: "warn" };
     if (t.review_state === "approved") return { t: "Approved", c: "" };
     if (t.priority === "Urgent") return { t: "Urgent", c: "bad" };
-    if (t.on_hold) return { t: "Parked", c: "" };
+    if (isParked(t)) return { t: "Parked", c: "" };
     if (t.archived) return { t: "Filed", c: "" };
     // Bottom rung: routed to a department, owned by nobody. On a manager's board it is work that
     // needs staffing; on a team member's it is the one card there that is not theirs (the team
@@ -1678,7 +1697,7 @@ window.TaskBoard = {
         : "");
     const pct = t.checklist_total ? Math.round(100 * t.checklist_done / t.checklist_total) : 0;
     const camp = campaignOf(t);
-    return `<div class="tcard${t.on_hold ? " quiet" : ""}" draggable="true" data-id="${t.id}">
+    return `<div class="tcard${isParked(t) ? " quiet" : ""}" draggable="true" data-id="${t.id}">
       <div class="t-top">
         ${pickable ? `<input type="checkbox" class="t-pick" aria-label="Select ${S.esc(t.title)}">` : ""}
         ${label ? `<span class="t-disc" style="background:${S.esc(S.colors.labels[label] || "#6B7280")}" title="${S.esc(t.labels.join(", "))}"></span>` : ""}
@@ -1922,7 +1941,7 @@ window.TaskBoard = {
       : overdue ? "overdue"
       : t.review_state === "pending" ? "review"
       : t.review_state === "changes_requested" ? "rework"
-      : t.on_hold ? "parked"
+      : isParked(t) ? "parked"
       : t.archived ? "filed"
       : t.review_state === "approved" ? "approved"
       : "";
