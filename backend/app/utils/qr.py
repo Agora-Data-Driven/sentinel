@@ -16,6 +16,10 @@ anywhere** — there is no rotation, no expiry, no device binding, no geofence a
 (``?kiosk_key=``), which lands in access logs and browser history, and it is fully open in
 development when no key is set.
 
+🔴 **The full write-up is [`docs/KIOSK_SECURITY_DRAFT.md`](../../../docs/KIOSK_SECURITY_DRAFT.md)** —
+options, the constraints any fix must respect (the kiosk boots OFFLINE; punches queue in IndexedDB
+and sync later), and the open questions. Read it before starting; it is a DRAFT, nothing is built.
+
 Ordered by effort, each independently deployable:
 
 1. **Rotate on demand** — a "reissue badge" action that mints a new token and invalidates the old
