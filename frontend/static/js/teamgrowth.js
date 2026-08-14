@@ -259,8 +259,10 @@ async function mountTeam(S, root, opts) {
     return `<tr data-uid="${u.id}" class="${on ? "on" : ""}">
       <td class="tg-tick"><button type="button" class="tg-box" aria-pressed="${on ? "true" : "false"}"
         aria-label="Scope the dashboard to ${esc(u.name)}">${on ? "✓" : ""}</button></td>
-      <td class="who">${S.avatar(u, "sm")}<div><div class="n">${esc(u.name)}</div>
-        <div class="r">${esc(row.team || u.role_label || u.role || "")}</div></div></td>
+      ${/* The flex is on `.who-in`, NEVER on the <td> — a table cell with display:flex stops being
+            a cell and the row's border/padding paint on the wrong box. See styles.css `.who > .who-in`. */""}
+      <td class="who"><div class="who-in">${S.avatar(u, "sm")}<div><div class="n">${esc(u.name)}</div>
+        <div class="r">${esc(row.team || u.role_label || u.role || "")}</div></div></div></td>
       ${G.DIMS.map((d) => dimCell(row, d)).join("")}
       <td class="num">${row.overall == null ? '<span class="tg-na">—</span>' : Math.round(row.overall) + "%"}</td>
       <td class="tg-speed"${stale}>${G.speedChip(row.velocity, row.overall, lastDeadline(row))}</td>

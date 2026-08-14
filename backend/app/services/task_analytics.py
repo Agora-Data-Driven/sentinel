@@ -292,8 +292,20 @@ def apply_load_bands(rows: list[dict]) -> None:
       median" is one card, and flagging somebody heavy for that is worse than saying nothing;
     * `overdue` promotes a row to `heavy` regardless of volume. Three cards that are all late is a
       person in trouble, and a purely volumetric band would render them as `light`.
+
+    🔴 **The median is taken over the people CARRYING work, not over the whole roster** (fixed
+    2026-08-14). The relative principle above is unchanged — what was wrong was the cohort. Every
+    row with `open_total == 0` was in the sample, so on a board where the work is concentrated (the
+    normal shape here: ~40 open cards across four names out of a roster of fifteen) the median was
+    dragged to 0 or 1, the `med < 2` guard fired for EVERY row, and the Monitor's Load column showed
+    an em dash for the entire company — permanently, and looking for all the world like a broken
+    column rather than a withheld judgement. A person with nothing open is still banded (`light`,
+    which is simply true of them); they just no longer get a vote on where the middle is.
+
+    The guard itself is deliberately kept: a cohort where the people who DO have work carry a median
+    of one card is still too quiet to rank, and it now means what it says.
     """
-    counts = sorted(r["open_total"] for r in rows)
+    counts = sorted(r["open_total"] for r in rows if r["open_total"])
     med = _median([float(c) for c in counts]) or 0.0
     for r in rows:
         if med < 2:

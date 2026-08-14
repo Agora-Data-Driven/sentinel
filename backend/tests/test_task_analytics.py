@@ -249,6 +249,34 @@ def test_load_band_ranks_against_the_cohort_median():
     assert bands[3] == "light"
 
 
+def test_the_median_ignores_people_with_nothing_open():
+    """🔴 The regression that blanked the Load column for the whole company.
+
+    A real Agora board: ~40 open cards concentrated on four people, out of a roster of a dozen.
+    Counting every idle row in the sample dragged the median to 0, `med < 2` fired for EVERY row,
+    and the Monitor's one judgement column showed an em dash for everybody — indefinitely, and
+    indistinguishable from a broken column. The cohort is the people carrying work; an idle person
+    is still banded, they just don't get a vote on where the middle is.
+    """
+    busy = [{"open_total": n, "overdue": 0} for n in (18, 12, 9, 4)]
+    idle = [{"open_total": 0, "overdue": 0} for _ in range(8)]
+    rows = busy + idle
+    task_analytics.apply_load_bands(rows)
+    assert all(r["load_band"] is not None for r in rows), "the whole column went blank again"
+    assert rows[0]["load_band"] == "heavy"          # 18 vs a median of 10.5
+    assert rows[3]["load_band"] == "light"          # 4 <= 10.5 * 0.5
+    assert all(r["load_band"] == "light" for r in idle)
+
+
+def test_a_quiet_board_is_still_suppressed_when_everybody_who_has_work_has_one_card():
+    """The noise guard survives the cohort change — it just means what it says now. Four people
+    holding a single card each cannot be ranked, however many idle rows sit beside them."""
+    rows = [{"open_total": 1, "overdue": 0} for _ in range(4)] + \
+           [{"open_total": 0, "overdue": 0} for _ in range(4)]
+    task_analytics.apply_load_bands(rows)
+    assert all(r["load_band"] is None for r in rows)
+
+
 def test_overdue_makes_a_small_pile_heavy():
     """Three late cards is a person in trouble; a purely volumetric band calls them 'light'."""
     rows = [{"open_total": 10, "overdue": 0}, {"open_total": 8, "overdue": 0},

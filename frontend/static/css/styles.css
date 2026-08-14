@@ -542,8 +542,37 @@ textarea { resize: vertical; min-height: 78px; }
 .checklist li.done span { color: var(--muted); text-decoration: line-through; }
 
 /* ---------- Kanban ---------- */
+/* 🔴 THE COLUMN WIDTH IS A VARIABLE, NOT A CONSTANT — 288px never fitted the machines this
+   board is actually read on, and nothing in this file was responsive for it. Do the arithmetic
+   before changing either number:
+
+     needed   5 statuses x 288px + 4 x 14px gap                        = 1496px
+     given    min(1400px, viewport - 248px sidebar) - 52px .content pad
+              at a 1280px viewport (a 1920x1080 laptop at Windows' 150%
+              display scaling — the common case on this estate)        =  980px  -> 3.2 columns
+
+   AGENTS.md §5 records the board as "already scrolling at ~1800px"; at 1280 it scrolls with two
+   thirds of the work off-screen, which reads as "the columns suddenly got huge". clamp() keeps the
+   roomy 288px wherever there is room for it and gives width up only as the viewport takes it away.
+   232px is not a guess — it is the width the By Employee lanes have shipped at since they were
+   written, so it is already proven to hold a card's title, faces and date. */
+.board { --col-w: clamp(232px, 19vw, 288px); }
+.swimlanes { --col-w: clamp(208px, 17vw, 232px); }
+/* COMPACT is a PER-PERSON preference (localStorage, like the saved views — one person's working
+   habits, not org configuration). "Show me every column at once" and "let the titles breathe" are
+   both legitimate and no single width serves both, so this is a toggle rather than a new default.
+   🔴 It narrows the column and tightens padding ONLY. Font sizes are deliberately untouched:
+   compact must be denser, never harder to read. */
+.board.dense { --col-w: 216px; }
+.swimlanes.dense { --col-w: 196px; }
+.board.dense .col-head, .swimlanes.dense .col-head { padding: 10px 11px; }
+.board.dense .col-list, .swimlanes.dense .col-list { gap: 7px; padding: 4px 8px 10px; }
+.board.dense .tcard, .swimlanes.dense .tcard { padding: 9px 10px 11px; }
 .board { display: flex; gap: 14px; overflow-x: auto; padding-bottom: 12px; align-items: flex-start; }
-.col { flex: 0 0 288px; background: var(--canvas); border: 1px solid var(--line); border-radius: var(--radius); display: flex; flex-direction: column; max-height: calc(100vh - 230px); }
+/* 🔴 The `0` in the middle of `flex: 0 0 …` is flex-SHRINK, and it is load-bearing for the same
+   reason `.col-list > .tcard { flex: 0 0 auto }` is (see taskboard.js): the column scrolls, the
+   column never squashes. Only the basis is a variable. */
+.col { flex: 0 0 var(--col-w); background: var(--canvas); border: 1px solid var(--line); border-radius: var(--radius); display: flex; flex-direction: column; max-height: calc(100vh - 230px); }
 .col-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; position: sticky; top: 0; }
 .col-head .t { font-weight: 800; font-size: 13px; color: var(--ink); }
 .col-head .c { font-size: 11px; font-weight: 800; color: var(--sub); background: #fff; border: 1px solid var(--line); border-radius: var(--pill); padding: 1px 8px; }
@@ -590,7 +619,9 @@ textarea { resize: vertical; min-height: 78px; }
 .lane-head .ln .r { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--green-d); }
 .lane-head .lane-count { margin-left: auto; font-size: 11px; font-weight: 800; color: var(--sub); background: var(--input); border: 1px solid var(--line); border-radius: var(--pill); padding: 2px 10px; }
 .lane-board { display: flex; gap: 12px; overflow-x: auto; padding: 12px 14px; align-items: flex-start; }
-.lane-board .col { flex: 0 0 232px; background: var(--canvas); max-height: none; }
+/* Inherits `--col-w` from `.swimlanes` above — the lanes are deliberately narrower than the plain
+   board (a lane is a horizontal strip, so its columns never get the full page width). */
+.lane-board .col { flex: 0 0 var(--col-w); background: var(--canvas); max-height: none; }
 .lane-board .col-list { min-height: 34px; }
 
 /* ---------- Task Board: Monitor rollup ---------- */
@@ -602,7 +633,13 @@ textarea { resize: vertical; min-height: 78px; }
 .mon-tbl tbody tr { cursor: pointer; transition: background .12s; }
 .mon-tbl tbody tr:hover { background: var(--hover); }
 .mon-tbl tbody tr:last-child td { border-bottom: none; }
-.mon-tbl .who { display: flex; align-items: center; gap: 10px; }
+/* 🔴 THE FLEX GOES ON A DIV INSIDE THE CELL, NEVER ON THE `<td>` ITSELF. `display:flex` on a
+   table cell stops it being a table-cell, so the browser wraps it in an ANONYMOUS cell: this
+   cell's own `padding`/`border-bottom` (from `.mon-tbl td` above) then paint on the flex box
+   instead of on the row. The visible result was a row divider that stopped dead at the Load
+   column and a name block sitting off the numbers' baseline — a table that looked broken with
+   nothing wrong in the data. Same fix on `.tg-tbl .who` below; both markups wrap in `.who-in`. */
+.mon-tbl .who > .who-in, .tg-tbl .who > .who-in { display: flex; align-items: center; gap: 10px; }
 /* Flex so the capacity pill ("On leave") sits inline with the name — capacity has to be read at the
    same glance as the counts, or the counts get read wrong. */
 .mon-tbl .who .n { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; font-weight: 700; color: var(--ink); font-size: 13.5px; }
@@ -610,11 +647,24 @@ textarea { resize: vertical; min-height: 78px; }
 .mon-tbl td.num { font-weight: 800; color: var(--ink); font-size: 14px; }
 .mon-tbl td.num.bad { color: var(--danger); } .mon-tbl td.num.good { color: var(--green-d); }
 .mon-tbl .wl { width: 34%; min-width: 180px; }
-.wl-bar { display: flex; height: 12px; border-radius: var(--pill); overflow: hidden; background: var(--input); }
+/* 🔴 LENGTH IS AMOUNT, COLOUR IS MIX — and until 2026-08-14 length said nothing at all. The
+   segments carry `flex:<n>` (which is flex-GROW) inside a flex bar, so the bar always filled its
+   cell: a person with 1 open card and a person with 25 drew the SAME length of bar and only the
+   colours differed. Three teammates therefore rendered as three identical full-width bars in a
+   column headed "Workload", which reads as a rendering fault and is in fact the design.
+   So the track is now the full cell and the bar is a share of it (`--wl`, set per row from that
+   person's open count over the cohort's busiest). The segments keep their flex proportions INSIDE
+   the bar, so the mix survives unchanged.
+   `--wl` defaults to 100% on purpose: a caller that forgets to set it gets the old, readable
+   behaviour rather than an invisible zero-width bar. */
+.wl-track { height: 12px; border-radius: var(--pill); overflow: hidden; background: var(--input); }
+.wl-bar { display: flex; height: 100%; width: var(--wl, 100%); border-radius: var(--pill); overflow: hidden; }
 .wl-bar i { display: block; }
 .wl-bar .s-todo { background: var(--muted); } .wl-bar .s-prog { background: var(--info); }
 .wl-bar .s-rev { background: var(--warn); } .wl-bar .s-block { background: var(--danger); }
-.wl-bar .s-none { background: transparent; }
+/* No `.s-none` placeholder any more: with a real track behind it, "nothing open" is an EMPTY track,
+   which is both honest and the shortest bar in the column. A full-width transparent segment used to
+   be the only way to draw that, and it made an idle row look identical to a buried one. */
 /* Monitor's derived columns (WP: workload analytics). `.warn` is the middle rung between a plain
    count and `.bad` — "sitting" work is a nudge, not a failure, and colouring it danger-red next to
    real overdue would flatten the difference the two columns exist to draw. */
@@ -1108,7 +1158,8 @@ a.day-item:hover { border-color:var(--green-line); box-shadow:var(--shadow-sm); 
 .tg-tbl tbody tr:last-child td { border-bottom:none; }
 .tg-tbl tbody tr.on { background:var(--green-soft); }
 .tg-tbl tbody tr.on:hover { background:var(--green-soft); }
-.tg-tbl .who { display:flex; align-items:center; gap:10px; }
+/* The flex lives on `.who > .who-in` (shared rule up in the .mon-tbl block) — never on the `<td>`;
+   see the 🔴 there for what putting it on the cell does to the row. */
 .tg-tbl .who .n { font-weight:700; color:var(--ink); font-size:13.5px; white-space:nowrap; }
 .tg-tbl .who .r { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.4px; color:var(--green-d); }
 .tg-tbl th.num, .tg-tbl td.num { text-align:right; font-variant-numeric:tabular-nums;

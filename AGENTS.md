@@ -833,6 +833,42 @@ wherever these numbers are shown:
 > that way. Do **not** "fix" the double count by attributing each card to one owner — picking a
 > winner re-hides exactly the work this surfaced.
 
+### 🔴 The board's column width is a VARIABLE, and the Monitor's `<td>`s are not flex containers
+
+Two unrelated layout bugs found together on 2026-08-14, both of which had been there from the start
+and both of which read to a user as "the UI is broken".
+
+**1. `.col` is `flex: 0 0 var(--col-w)`, and `--col-w` is a `clamp()`.** The width was a hardcoded
+`288px` with **no responsive rule for the kanban anywhere** — the `@media` blocks at 900/640/480px
+touch `.app`, `.tabs`, `.kpis`, `.grid` and never `.board`. Do this arithmetic before changing either
+number:
+
+| | |
+|---|---|
+| needed | 5 statuses × 288px + 4 × 14px gap = **1496px** |
+| given | `min(1400px, viewport − 248px sidebar) − 52px` of `.content` padding |
+| at a **1280px** viewport (a 1920×1080 laptop at Windows' **150% display scaling** — the common case on this estate) | **≈980px = 3.2 columns** |
+
+So two thirds of the work sat off-screen and every card looked oversized, with nothing having changed
+in the CSS — which is exactly how it gets reported ("the columns suddenly got huge"). The clamp keeps
+the roomy 288px wherever there is room and gives width up only as the viewport takes it. **232px is
+not a guess** — it is the width the By Employee lanes have shipped at since they were written.
+
+- 🔴 **The `0` in the middle of `flex: 0 0 var(--col-w)` is flex-SHRINK and stays `0`.** The column
+  scrolls; cards never squash. Same rule as `.col-list > .tcard { flex: 0 0 auto }` — see the
+  comment on it in `taskboard.js`, which explains what squashing does to a card's footer.
+- **`.dense` is a per-person preference** (`localStorage`, `sentinel.tb.density`), toggled from the
+  **More** menu because that toolbar was deliberately cut from fourteen controls to six. It narrows
+  the column and tightens padding **only** — font sizes are untouched, so compact is denser, never
+  harder to read.
+
+**2. 🔴 `display: flex` was on a `<td>` — in TWO tables.** `.mon-tbl .who` and `.tg-tbl .who`. A
+table cell whose `display` changes stops being a table-cell, so the browser wraps it in an
+**anonymous** cell: the `td`'s own `padding` and `border-bottom` then paint on the flex box instead of
+on the row. Visible result was a row divider that stopped dead at the Load column and a name block
+sitting off the numbers' baseline — a table that looks broken with nothing wrong in the data. The flex
+belongs on a `div.who-in` **inside** the cell; both markups (`taskboard.js`, `teamgrowth.js`) wrap.
+
 ### 🟡 Monitor's workload metrics are DERIVED — a task on this board has no size
 
 `services/task_analytics.py`, added 2026-08-05. The honest constraint first: **there is no effort,
@@ -847,7 +883,27 @@ board already keeps honestly:
 | on-time rate | `completed_at` vs `due_date` | **`None`, never `0`, when nothing dated shipped.** Zero means "everything was late"; undated completions are excluded, not counted as on time — a card with no due date made no promise |
 | sitting | `updated_at` of OPEN cards (`STALE_DAYS`) | Two clocks on purpose: `oldest_open_days` is `created_at` (how long owed), `stale_open` is `updated_at` (untouched). Old ≠ stale |
 | capacity | approved `LeaveRequest` | Only **approved** leave — a pending request is a question, not a fact about who is at their desk |
-| `load_band` | open work **vs the cohort's own median** | Never absolute. Suppressed entirely when the median is < 2 (there, "double the median" is one card), and `overdue >= 3` forces `heavy` so a small-but-late pile isn't rendered `light` |
+| `load_band` | open work **vs the cohort's own median** | Never absolute. Suppressed entirely when the median is < 2 (there, "double the median" is one card), and `overdue >= 3` forces `heavy` so a small-but-late pile isn't rendered `light`. 🔴 **The median is taken over the people who HAVE open work** — see below |
+
+🔴 **The Load column was blank for the whole company, permanently (fixed 2026-08-14).** The median
+was taken over every row, idle ones included — so on the normal shape of this board (~40 open cards
+concentrated on four names out of a roster of fifteen) it was dragged to 0 or 1, the `med < 2` guard
+fired for **every** row, and the Monitor's one judgement column showed an em dash for everybody. The
+relative principle is unchanged; the **cohort** was wrong. A person with nothing open is still banded
+(`light`, which is simply true of them) — they just no longer get a vote on where the middle is. The
+guard itself is kept and now means what it says. Two rules that came with it:
+
+- **A withheld judgement has to say so.** `bandPill` renders a *titled* dash explaining that the
+  median is under two cards. A bare `—` in a column that is never populated is indistinguishable from
+  a broken column, which is how this survived so long.
+- 🔴 **The workload bar's LENGTH is amount; its COLOURS are mix.** The segments carry `flex:<n>` —
+  which is flex-*grow* — so inside a flex bar they only ever divide up whatever width the bar is
+  given, and the bar filled its cell unconditionally: **one open card and twenty-five drew the same
+  length**. Three teammates rendered as three identical full-width bars in a column headed
+  "Workload". There is a `.wl-track` (the cell) and a `.wl-bar` (`width: var(--wl)`, this person's
+  open work over the busiest plate in the cohort on screen) now, and the legend states both halves.
+  Scaled against the **cohort on screen**, matching `load_band` — a comparison must be about the
+  people it appears to be about.
 
 **Atrium's client cards count toward the lead they resolve to (2026-08-05).** The rollup queried
 Sentinel's own `tasks` table only, so every card Atrium owns counted toward **nobody** — a person
