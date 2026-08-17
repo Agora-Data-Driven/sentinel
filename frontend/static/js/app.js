@@ -18,6 +18,36 @@
   // so the shared pills/dots colour custom (admin-defined) values, not just the hardcoded ones.
   let COLORS = { statuses: {}, priorities: {}, labels: {} };
 
+  // 🔴 ONE `/api/vocab` PER PAGE LOAD, NOT TWO — AND IT IS SEVEN DB QUERIES (2026-08-17).
+  //
+  // `boot()` has always fetched the vocabulary (for `COLORS`), and then `dashboard.js`, `manage.js`,
+  // `people.js` and `taskboard.js` each fetched it AGAIN. Nobody noticed because it is a fast, cached
+  // -looking GET — but on the server `routers/meta.vocab()` calls `services/task_config` seven times
+  // and that module memoizes NOTHING, so every call is seven SELECTs. Loading /people ran FOURTEEN
+  // queries for configuration that changes about once a month, on a shared-core db-f1-micro.
+  //
+  // So the answer boot() already has is published here and pages read `S.vocab`.
+  //
+  // 🔴 IT IS A SNAPSHOT, AND MANAGE EDITS THE VOCABULARY. Statuses, priorities and labels are all
+  // renameable in Manage (which is why nothing here may key off a label — AGENTS.md D13). A page that
+  // holds this object across a vocabulary WRITE is holding a stale list, so `manage.js` calls
+  // `S.refreshVocab()` after every save and delete. Any future surface that edits vocabulary must do
+  // the same; reading `S.vocab` is only safe for a surface that does not change it.
+  let VOCAB = null;
+
+  function setVocab(v) {
+    VOCAB = v || null;
+    if (v && v.colors) COLORS = v.colors;
+  }
+
+  // Re-reads the vocabulary and re-publishes it. Returns the fresh object so a caller can use it
+  // directly. Swallows failure on purpose: a failed refresh must leave the last-known-good snapshot
+  // in place rather than blanking every picker on the page.
+  async function refreshVocab() {
+    try { setVocab(await api("/api/vocab")); } catch (e) { /* keep the previous snapshot */ }
+    return VOCAB;
+  }
+
   // ---- Inline icon set (Atrium stroked style: 24x24, stroke-width 1.8) ----
   // 🔴 EVERY ICON IN THE APP IS DECORATIVE, AND SAYS SO (2026-08-17). Every one of the ~60 entries in
   // `ICON` is built here, so these two attributes cover the whole product from one line — which is the
@@ -1410,13 +1440,32 @@
       if (window.pageInit) window.pageInit(Sentinel);
       return;
     }
+    // 🔴 THESE TWO RUN IN PARALLEL, AND THAT IS THE POINT (2026-08-17).
+    //
+    // They used to be two sequential `await`s, so EVERY navigation in the app paid two full round
+    // trips end to end before the shell was even built — measured at 250-440ms each to
+    // asia-southeast1, i.e. half a second of pure waterfall on every page, forever. `/api/vocab`
+    // does not depend on the answer to `/api/auth/me`; it only needs the same cookie.
+    //
+    // Two details that make this safe:
+    //  • vocab carries its OWN `.catch`, so it can never reject the `Promise.all` — only `auth/me`
+    //    decides whether we are signed in, exactly as before.
+    //  • when `auth/me` 401s we redirect, and the parallel vocab request 401s harmlessly alongside
+    //    it. One wasted request on the sign-in path is cheaper than a guaranteed serial round trip
+    //    on every authenticated page load.
+    let vocabRes = null;
     try {
-      USER = await api("/api/auth/me");
+      const [me, v] = await Promise.all([
+        api("/api/auth/me"),
+        api("/api/vocab").catch(() => null),
+      ]);
+      USER = me;
+      vocabRes = v;
     } catch (e) {
       location.href = "/login"; return;
     }
     Sentinel.user = USER;
-    try { const v = await api("/api/vocab"); if (v && v.colors) COLORS = v.colors; } catch (e) { /* keep fallback */ }
+    setVocab(vocabRes);
     buildShell();
     applyBrandLogo();
     if (window.pageInit) {
@@ -1430,8 +1479,14 @@
     engineUrl, theme: currentTheme,
     fmtTime, fmtDate, fmtDateFull, timeAgo, priorityDot, labelPills, statusPill,
     roleRank: ROLE_RANK,
+    refreshVocab,
     get user() { return USER; }, set user(u) { USER = u; },
     get colors() { return COLORS; },
+    // The snapshot boot() already paid for. A getter, so a `refreshVocab()` is picked up by anyone
+    // holding `S` rather than a stale copy of the object. Never null-guard-free: an outage on the
+    // parallel vocab fetch leaves it null and every consumer already tolerates that (see the
+    // consumers' own fallbacks), because a missing colour is cosmetic and a missing page is not.
+    get vocab() { return VOCAB; },
     view: () => qs("#view"),
     can: (min) => (ROLE_RANK[USER.role] || 0) >= ROLE_RANK[min],
   };

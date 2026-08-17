@@ -1,7 +1,11 @@
 window.pageInit = async (S) => {
   const view = S.view();
   const isAdmin = S.can("admin");  // gates the QR badge view (managers+); all edits now live in Manage
-  const [teams, vocab] = await Promise.all([S.api("/api/teams"), S.api("/api/vocab")]);
+  // `S.vocab` is the snapshot boot() already fetched — this page used to re-request it, which cost a
+  // second round trip and another seven SELECTs (see the note on VOCAB in app.js). This page only
+  // READS `roles`, which are code constants, so a snapshot is always current for it.
+  const teams = await S.api("/api/teams");
+  const vocab = S.vocab || { roles: [] };
   // A person may belong to several departments (models.UserTeam, 2026-08-14). `team_name` is their
   // MAIN one and always will be — it is what their shift and payroll follow — so every surface that
   // prints "which department are they in?" has to print the rest of the answer too, or somebody who

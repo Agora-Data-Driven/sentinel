@@ -620,8 +620,18 @@ window.TaskBoard = {
     document.head.appendChild(st);
   }
 
+  // 🔴 SNAPSHOT FIRST, FETCH ONLY AS A FALLBACK. `S.vocab` is what boot() already fetched moments ago
+  // (see the VOCAB note in app.js — one `/api/vocab` is seven SELECTs, and this page used to make it
+  // the eighth through fourteenth). The board mounts immediately after boot, so the snapshot is
+  // milliseconds old.
+  //
+  // But unlike the other consumers, this board CANNOT RENDER without `task_statuses` — they are its
+  // columns. So a missing snapshot (boot's parallel vocab request failed) falls back to a real fetch
+  // rather than dereferencing null and dying with a TypeError behind the generic "Couldn't load the
+  // task board" toast. Reading a snapshot must never be the reason a page has no columns.
   const [vocab, clients, teams, people, templates] = await Promise.all([
-    S.api("/api/vocab"), S.api("/api/clients"), S.api("/api/teams"), S.api("/api/people"),
+    S.vocab ? Promise.resolve(S.vocab) : S.api("/api/vocab"),
+    S.api("/api/clients"), S.api("/api/teams"), S.api("/api/people"),
     S.api("/api/tasks/templates"),
   ]);
   const STATUSES = vocab.task_statuses;
