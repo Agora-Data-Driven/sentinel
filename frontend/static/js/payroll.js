@@ -147,7 +147,9 @@ window.pageInit = async (S) => {
     try {
       data = await S.api(`/api/payroll?period=${encodeURIComponent(period)}`);
     } catch (e) {
-      body.innerHTML = `<div class="empty">${S.esc(e.detail || "Failed to load payroll")}</div>`;
+      // Was a bare `.empty` with the message and no way out — the period picker was still live, but
+      // re-picking the SAME period did nothing, so the only recovery was a page refresh.
+      S.loadErr(body, e, load);
       return;
     }
     renderStats(data.totals);

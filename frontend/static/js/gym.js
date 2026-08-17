@@ -517,7 +517,7 @@ window.pageInit = async (S) => {
       box.innerHTML = draft.exercises.map((ex, i) => `
         <div class="card" style="margin-bottom:12px">
           <div class="card-head"><h3>${S.esc(ex.exercise_name)} ${ex.muscle_group ? `<span class="chip">${S.esc(ex.muscle_group)}</span>` : ""}</h3>
-            <span class="x-close" data-rx-del="${i}">${S.ICON.x}</span></div>
+            <button type="button" class="x-close" data-rx-del="${i}" aria-label="Remove ${S.esc(ex.exercise_name)} from this routine">${S.ICON.x}</button></div>
           <div class="card-body">
             <div class="table-wrap" style="border:none">
               <table><thead><tr><th>Set</th><th>KG</th><th>Reps</th><th>Type</th><th></th></tr></thead>
@@ -526,7 +526,7 @@ window.pageInit = async (S) => {
                 <td><input style="width:70px" type="number" step="0.5" value="${s.kg || ""}" data-rx="${i}" data-si="${si}" data-rf="kg"></td>
                 <td><input style="width:64px" type="number" value="${s.reps || ""}" data-rx="${i}" data-si="${si}" data-rf="reps"></td>
                 <td><select data-rx="${i}" data-si="${si}" data-rf="type">${SET_TYPES.map((t) => `<option ${t === s.type ? "selected" : ""}>${t}</option>`).join("")}</select></td>
-                <td><span class="x-close" data-rs-del="${i}:${si}">${S.ICON.x}</span></td></tr>`).join("")}</tbody></table>
+                <td><button type="button" class="x-close" data-rs-del="${i}:${si}" aria-label="Remove set ${si + 1}">${S.ICON.x}</button></td></tr>`).join("")}</tbody></table>
             </div>
             <div class="row between" style="margin-top:8px">
               <button class="btn sm ghost" data-rs-add="${i}">${S.ICON.plus}Add set</button>
@@ -727,7 +727,7 @@ window.pageInit = async (S) => {
       const prev = (state.library.find((l) => l.name === ex.name) || {}).previous;
       return `<div class="card" style="margin-bottom:12px">
         <div class="card-head"><h3>${S.esc(ex.name)} ${ex.muscle ? `<span class="chip">${S.esc(ex.muscle)}</span>` : ""}</h3>
-          <span class="x-close" data-del-ex="${i}">${S.ICON.x}</span></div>
+          <button type="button" class="x-close" data-del-ex="${i}" aria-label="Remove ${S.esc(ex.name)} from this workout">${S.ICON.x}</button></div>
         <div class="card-body">
           <div class="table-wrap" style="border:none">
             <table><thead><tr><th>Set</th><th>Previous</th><th>KG</th><th>Reps</th><th>Type</th><th>✓</th><th></th></tr></thead>
@@ -738,7 +738,7 @@ window.pageInit = async (S) => {
               <td><input style="width:64px" type="number" value="${s.reps || ""}" data-ex="${i}" data-si="${si}" data-f="reps"></td>
               <td><select data-ex="${i}" data-si="${si}" data-f="type">${SET_TYPES.map((t) => `<option ${t === s.type ? "selected" : ""}>${t}</option>`).join("")}</select></td>
               <td><input type="checkbox" style="width:auto" ${s.done ? "checked" : ""} data-ex="${i}" data-si="${si}" data-f="done"></td>
-              <td><span class="x-close" data-del-set="${i}:${si}">${S.ICON.x}</span></td></tr>`).join("")}</tbody></table>
+              <td><button type="button" class="x-close" data-del-set="${i}:${si}" aria-label="Remove set ${si + 1}">${S.ICON.x}</button></td></tr>`).join("")}</tbody></table>
           </div>
           <div class="row between" style="margin-top:8px">
             <button class="btn sm ghost" data-add-set="${i}">${S.ICON.plus}Add set</button>
@@ -989,7 +989,7 @@ window.pageInit = async (S) => {
               <span class="sub" style="font-size:13px">${S.fmtDateFull(g.date + "T00:00:00+08:00")}</span></div>
             <div class="row" style="gap:14px;align-items:center">
               <span class="sub" style="font-size:12px">${g.duration_minutes}m · ${g.exercise_count} exercises</span>
-              <span class="x-close" data-del="${g.id}" title="Delete this workout">${S.ICON.x}</span></div>
+              <button type="button" class="x-close" data-del="${g.id}" title="Delete this workout" aria-label="Delete this workout">${S.ICON.x}</button></div>
           </div></div>`).join("")}`;
     }).join("");
     S.qsa(".hist-open").forEach((b) => b.onclick = () => openDay(b.dataset.date, "History"));

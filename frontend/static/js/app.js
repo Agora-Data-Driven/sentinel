@@ -200,9 +200,30 @@
   function toast(msg, kind, opts) {
     opts = opts || {};
     let box = qs("#toasts");
-    if (!box) { box = document.createElement("div"); box.id = "toasts"; document.body.appendChild(box); }
+    if (!box) {
+      box = document.createElement("div"); box.id = "toasts";
+      // 🔴 THE LIVE REGION IS NOT DECORATION (added 2026-08-17). `api()` flattens every failure into
+      // a toast, so this is the app's ONLY error channel — and until this line it was a plain div
+      // appended to the body, which assistive tech never announces. A screen-reader user pressed
+      // Approve, the request 403'd, and nothing whatsoever reported it.
+      //
+      // Two details that are easy to get wrong:
+      //  • The region has to exist in the DOM BEFORE the message is put into it, or the insertion is
+      //    not an update to a live region and may not be announced at all. That is why the attributes
+      //    go on this container rather than on each toast.
+      //  • `polite` here, and `role="alert"` per-toast for errors below (which is assertive). One
+      //    assertive region for everything would interrupt whatever the user was reading to say
+      //    "Photo updated".
+      box.setAttribute("role", "status");
+      box.setAttribute("aria-live", "polite");
+      box.setAttribute("aria-atomic", "false");
+      document.body.appendChild(box);
+    }
     const t = document.createElement("div");
     t.className = "toast" + (kind ? " " + kind : "");
+    // An error is the one kind worth interrupting for; it is also the kind that self-dismisses
+    // after 4.2s, so a polite queue could drop it entirely.
+    if (kind === "err") t.setAttribute("role", "alert");
     const icon = kind === "ok" ? ICON.check : kind === "err" ? ICON.x : ICON.bell;
     t.innerHTML = icon + '<span class="toast-msg">' + esc(msg) + "</span>";
     let done = false;
@@ -241,6 +262,41 @@
         `<div class="skeleton skel-line"${i % 3 === 2 ? ' style="width:60%"' : ""}></div>`).join("")}</div>`;
     }
     return `<div class="skeleton" style="height:${opts.height || 200}px"></div>`;
+  }
+
+  // 🔴 EVERY SKELETON NEEDS AN OWNER FOR THE FAILURE CASE (added 2026-08-17).
+  //
+  // `skeleton()` above has 13 call sites and only `manage.js` ever replaced one on error. Everywhere
+  // else a failed refetch left the skeleton on screen FOREVER: `people.js`'s `load()` had no
+  // try/catch at all and is called straight from `oninput`, so a 500 was an unhandled rejection and
+  // the page simply read as permanently loading. `boot()` catches the FIRST `pageInit` and toasts,
+  // but a toast is gone in 4.2s and the skeleton is not — so the honest signal (a stuck loader) and
+  // the informative one (the message) never coexisted, and neither offered a way out. A browser
+  // refresh was the only recovery, and it discarded the filters that provoked the error.
+  //
+  // `loadErr(host, err, retry)` replaces the skeleton with the reason plus a Retry, so the state is
+  // legible AND recoverable in the one place it is visible. Two rules:
+  //  • Pass `retry` whenever the load is a pure function of on-screen state (a filter, a date
+  //    range). Omit it when re-running would repeat a side effect — the button then just does not
+  //    render, rather than promising something it should not do (the "a control must never be able
+  //    to only fail" rule the task board's footer follows).
+  //  • It reads `err.detail` FIRST because `api()` has already flattened FastAPI's error shape into
+  //    it; `err.message` alone gives you "Failed to fetch" for a real 403 with a real explanation.
+  function loadErr(host, err, retry) {
+    const el = typeof host === "string" ? qs(host) : host;
+    if (!el) return;
+    const msg = (err && (err.detail || err.message)) || "Something went wrong";
+    el.innerHTML = `<div class="empty"><div>${esc(msg)}</div>${
+      retry ? `<button type="button" class="btn sm ghost empty-retry">Try again</button>` : ""}</div>`;
+    if (retry) {
+      const b = qs(".empty-retry", el);
+      // `() => retry()` and not `retry` — an onclick handler is called with the Event as arg 1, and
+      // a loader that takes a parameter would receive it (the app-wide rule in frontend/README.md).
+      // Note the consequence for callers: the retry runs with NO arguments, so a loader that needs
+      // one must be closed over at the call site — see manage.js's `() => render(key)`.
+      if (b) b.onclick = () => retry();
+    }
+    console.error(err);
   }
 
   const initials = (name) => (String(name || "?").split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("") || "?").toUpperCase();
@@ -354,7 +410,7 @@
     const ov = document.createElement("div");
     ov.className = "overlay" + (drawer ? " drawer-ov" : "");
     ov.innerHTML = `<div class="modal ${wide ? "wide" : ""}${drawer ? " as-drawer" : ""}">
-      <div class="modal-head"><h3>${esc(title)}</h3><span class="x-close" id="modal-x">${ICON.x}</span></div>
+      <div class="modal-head"><h3>${esc(title)}</h3><button type="button" class="x-close" id="modal-x" aria-label="Close">${ICON.x}</button></div>
       <div class="modal-body">${body}</div>
       ${footer ? `<div class="modal-foot">${footer}</div>` : ""}</div>`;
     document.body.appendChild(ov);
@@ -523,7 +579,10 @@
       #coach-head .t{display:flex;align-items:center;gap:9px;font:700 14px/1.2 Inter,sans-serif;color:var(--text)}
       #coach-head .t svg{width:18px;height:18px;stroke:var(--violet-d)}
       #coach-head .t small{display:block;font:500 11px/1.3 Inter,sans-serif;color:var(--sub);margin-top:2px}
-      #coach-head .x-close{cursor:pointer;color:var(--sub);display:flex}
+      /* A <button> since 2026-08-17 (see .x-close in styles.css) — the resets have to be repeated
+         here because this rule sets 'color' and would otherwise inherit the UA button chrome.
+         Single quotes, not backticks: this comment lives inside a template literal. */
+      #coach-head .x-close{cursor:pointer;color:var(--sub);display:flex;background:none;border:none;padding:0;width:auto}
       #coach-frame{flex:1;border:0;width:100%;background:var(--card)}
       @media (max-width:520px){#coach-panel{right:8px;left:8px;bottom:8px;width:auto;height:min(80vh,660px)}}`;
     document.head.appendChild(style);
@@ -540,7 +599,7 @@
     panel.innerHTML = `
       <div id="coach-head">
         <div class="t">${ICON.sparkle}<div>Your Coach<small>Knows your growth: learning, training, goals</small></div></div>
-        <span class="x-close" id="coach-x">${ICON.x}</span>
+        <button type="button" class="x-close" id="coach-x" aria-label="Close coach">${ICON.x}</button>
       </div>
       <div id="coach-frame-wrap" style="flex:1;display:flex"></div>`;
     document.body.appendChild(panel);
@@ -1127,7 +1186,7 @@
   }
 
   const Sentinel = {
-    api, toast, skeleton, modal, esc, qs, qsa, ICON, avatar, initials, uploadAvatar, removeAvatar,
+    api, toast, skeleton, loadErr, modal, esc, qs, qsa, ICON, avatar, initials, uploadAvatar, removeAvatar,
     engineUrl, theme: currentTheme,
     fmtTime, fmtDate, fmtDateFull, timeAgo, priorityDot, labelPills, statusPill,
     roleRank: ROLE_RANK,
