@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -11,6 +11,22 @@ from ..security import get_current_user
 from ..serializers import notification_dict
 
 router = APIRouter(prefix="/api/notifications", tags=["notifications"])
+
+
+def _unread(db: Session, user: User) -> int:
+    """The bell's number, as ONE aggregate — and the ONE derivation of it.
+
+    🔴 This used to `SELECT *` every unread row and take `len()` of the list, so drawing a badge that
+    says "12" hydrated twelve ORM objects and somebody who had ignored the bell for a month paid for
+    hundreds. COUNT(*) is the whole job.
+
+    Both GETs below answer with this. Two endpoints reporting one number have to agree, or the badge
+    changes the moment you open the panel.
+    """
+    return int(db.execute(
+        select(func.count()).select_from(Notification)
+        .where(Notification.user_id == user.id, Notification.is_read.is_(False))
+    ).scalar_one())
 
 
 @router.get("")
@@ -23,10 +39,21 @@ def list_notifications(
     if unread_only:
         q = q.where(Notification.is_read.is_(False))
     rows = db.execute(q.limit(50)).scalars().all()
-    unread = db.execute(
-        select(Notification).where(Notification.user_id == user.id, Notification.is_read.is_(False))
-    ).scalars().all()
-    return {"unread_count": len(unread), "items": [notification_dict(n) for n in rows]}
+    return {"unread_count": _unread(db, user), "items": [notification_dict(n) for n in rows]}
+
+
+# 🔴 Registered ABOVE the `/{notif_id}` routes on purpose — the convention the gym router's
+# `/routines` block documents (§5): FastAPI matches in registration order, so a literal path
+# declared after a parameterised one gets swallowed by it. Nothing shadows this today (the
+# `/{notif_id}` route is a PATCH), but the next GET added down there would.
+@router.get("/unread-count")
+def unread_count(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Just the bell's number — the app shell asks for this on EVERY navigation.
+
+    Deliberately split from `GET ""`: that endpoint serializes up to 50 notifications, which is
+    work nobody needs until the panel is actually opened. The shell only wants the badge.
+    """
+    return {"count": _unread(db, user)}
 
 
 @router.patch("/{notif_id}/read")
