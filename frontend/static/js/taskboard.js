@@ -352,7 +352,13 @@ window.TaskBoard = {
         font-size:11px;padding:0 6px;border-radius:7px;border:1px solid var(--line);
         background:var(--card);color:var(--muted);cursor:pointer;
         opacity:0;pointer-events:none}
-      .tcard .t-move:focus-visible{opacity:1;pointer-events:auto;color:var(--fg);border-color:var(--accent)}
+      /* 🔴 '--fg' and '--accent' were used here and DEFINED NOWHERE (fixed 2026-08-17), so both
+         declarations were invalid at computed-value time: the colour fell back to inherited and
+         the border to 'currentColor'. The one move affordance a keyboard user has ever had
+         revealed itself with no focus edge at all. Violet is the app's light-mode focus colour
+         (styles.css gives every input 'border-color: var(--violet)' on focus).
+         Single quotes throughout: a backtick in here would close this template literal. */
+      .tcard .t-move:focus-visible{opacity:1;pointer-events:auto;color:var(--ink);border-color:var(--violet)}
       @media (hover: none){
         .tcard .t-move{position:static;display:block;width:100%;margin-top:8px;opacity:1;
           pointer-events:auto;height:32px;font-size:12px}
@@ -364,7 +370,12 @@ window.TaskBoard = {
          board people mostly read, and it competes with drag for the same pointer. In flow at the
          head of the top row, for the same reason the ✕ is. */
       .tcard .t-pick{flex:none;width:14px;height:14px;margin:0;cursor:pointer}
-      .tcard.picked{outline:2px solid var(--accent);outline-offset:-2px}
+      /* Violet, matching '.col.drag-over' (the board's other interaction outline) and the 'is-me'
+         rings — never green, which is the LEAD ring on the same card. Was 'var(--accent)', an
+         undefined token that fell back to 'currentColor': a picked card got a grey outline barely
+         separable from its own 1px border, on the one feature whose whole job is to show you what
+         you have selected. */
+      .tcard.picked{outline:2px solid var(--violet);outline-offset:-2px}
       #tb-bulkbar{gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 12px;padding:10px 12px;
         border:1px solid var(--line);border-radius:10px;background:var(--card)}
       /* Load-bearing: the bar carries .row (display:flex), and an author display rule BEATS the UA
@@ -441,11 +452,17 @@ window.TaskBoard = {
         border-bottom:1px solid var(--line)}
       .tp-col{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;
         height:100%;gap:4px}
-      .tp-bar{width:100%;max-width:46px;border-radius:5px 5px 0 0;background:var(--accent);
+      /* 🔴 These three lines used 'var(--accent)', which this app has never defined (fixed
+         2026-08-17). An undefined custom property with no fallback makes the whole declaration
+         invalid at computed-value time, so 'background' fell back to its initial 'transparent':
+         the chart rendered eight correctly-sized INVISIBLE bars over their labels, with no error
+         anywhere. Green because charts.js already draws its primary series in #54B948 (= --green)
+         and throughput is the same kind of positive measure. */
+      .tp-bar{width:100%;max-width:46px;border-radius:5px 5px 0 0;background:var(--green);
         min-height:2px}
       /* The partial week reads as provisional rather than as a cliff. */
-      .tp-bar.tp-partial{background:repeating-linear-gradient(45deg,var(--accent),var(--accent) 4px,
-        transparent 4px,transparent 8px);border:1px dashed var(--accent);opacity:.75}
+      .tp-bar.tp-partial{background:repeating-linear-gradient(45deg,var(--green),var(--green) 4px,
+        transparent 4px,transparent 8px);border:1px dashed var(--green);opacity:.75}
       .tp-n{font-size:11px;color:var(--muted)}
       .tp-clients{list-style:none;margin:0;padding:0;max-width:420px}
       .tp-clients li{display:flex;justify-content:space-between;gap:12px;padding:7px 0;

@@ -271,8 +271,10 @@ window.pageInit = async (S) => {
     const body = S.qs("#mbody");
     body.innerHTML = '<div class="skeleton" style="height:180px"></div>';
     let rows;
+    // `() => render(key)` and not a bare `render` — `loadErr` invokes the retry with NO arguments,
+    // so the tab this failed on has to be closed over here or the retry re-renders `undefined`.
     try { rows = await S.api(cfg.listUrl || cfg.api); }
-    catch (e) { body.innerHTML = `<div class="empty">${S.esc(e.detail || "Failed to load")}</div>`; return; }
+    catch (e) { S.loadErr(body, e, () => render(key)); return; }
     // Sub-selector for a multi-kind tab (Task Fields → Statuses / Labels / Priorities).
     const subTabs = cfg.kinds
       ? `<div class="tabs sub" id="msub">${cfg.kinds.map((k) => `<button class="${k.kind === vocabKind ? "active" : ""}" data-sub="${k.kind}">${k.tab}</button>`).join("")}</div>`

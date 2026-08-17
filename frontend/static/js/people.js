@@ -34,7 +34,12 @@ window.pageInit = async (S) => {
     if (filters.role) q.set("role", filters.role);
     if (filters.status) q.set("status", filters.status);
     S.qs("#tbl").innerHTML = `<div class="card pad">${S.skeleton({ rows: 7 })}</div>`;
-    const rows = await S.api("/api/people?" + q);
+    // This function is called straight from `oninput`/`onchange`, so nothing awaits it and nothing
+    // caught it: a failed refetch left the skeleton above on screen permanently, with the rejection
+    // going nowhere. Retry is safe to offer because the load is a pure function of the filter bar.
+    let rows;
+    try { rows = await S.api("/api/people?" + q); }
+    catch (e) { S.loadErr("#tbl", e, load); return; }
     S.qs("#tbl").innerHTML = `<div class="table-wrap"><table>
       <thead><tr><th>Name</th><th>Email</th><th>Department</th><th>Role</th><th>Status</th><th></th></tr></thead>
       <tbody>${rows.length ? rows.map((u) => `<tr>
@@ -44,11 +49,16 @@ window.pageInit = async (S) => {
         <td>${S.esc(u.role_label)}</td>
         <td>${S.statusPill(u.status)}</td>
         <td><button class="btn sm ghost" data-view="${u.id}">View</button></td></tr>`).join("") : '<tr><td colspan="6"><div class="empty">No people match.</div></td></tr>'}</tbody></table></div>`;
-    S.qsa("[data-view]").forEach((b) => b.onclick = () => profile(b.dataset.view));
+    // Scoped to #tbl, not document-wide: a bare `[data-view]` also matches anything a modal or a
+    // future block on this page puts in the DOM (the same rule GrowthPanel/TeamGrowth follow).
+    S.qsa("#tbl [data-view]").forEach((b) => b.onclick = () => profile(b.dataset.view));
   }
 
   async function profile(id) {
-    const d = await S.api("/api/people/" + id);
+    // Uncaught, clicking View on a failing API did nothing at all — no modal, no message.
+    let d;
+    try { d = await S.api("/api/people/" + id); }
+    catch (e) { S.toast(e.detail || "Couldn't open that profile", "err"); return; }
     const p = d.profile;
     // Anyone may change their OWN photo; admins may change anyone's.
     const canPhoto = isAdmin || (S.user && S.user.id === p.id);

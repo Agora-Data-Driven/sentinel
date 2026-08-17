@@ -48,7 +48,7 @@ window.pageInit = async (S) => {
         <div class="table-wrap"><table><thead><tr>${d.columns.map((c) => `<th>${S.esc(c)}</th>`).join("")}</tr></thead>
         <tbody>${d.rows.length ? d.rows.map((r) => `<tr>${r.map((c) => `<td>${S.esc(c)}</td>`).join("")}</tr>`).join("") : `<tr><td colspan="${d.columns.length}"><div class="empty">No data for this range.</div></td></tr>`}</tbody></table></div>`;
     } catch (e) {
-      S.qs("#r-out").innerHTML = `<div class="empty">${S.esc(e.detail || "Unable to load report")}</div>`;
+      S.loadErr("#r-out", e, load);
     }
   }
   load();

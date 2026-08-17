@@ -10,7 +10,7 @@ kiosk. Operating rules (CSP, cache bumping, `api()`-only fetches) live in
 | Entry | What it is |
 |---|---|
 | `pages/*.html` | 19 shells (~0.7 kb each; JS renders everything): dashboard, attendance, approvals, gym, growth, reading, academy, philosophical, spiritual, people, leave, north-star, reports, settings, manage, payroll, login, kiosk, scanner. Routes registered in `backend/app/main.py` (`_PAGES`; `/login` is its own route). 🔴 **Served rewritten, not as files** — `main._page` appends `?v=<build id>` to every `/static/**.{js,css}` reference so those assets can be cached `immutable` (`backend/app/assets.py`, AGENTS.md §5). Write plain `/static/...` paths here; the rewrite is automatic and skips any URL that already has a query string |
-| `static/js/app.js` | The shell every page loads: `NAV` array `:78` (roles/`min`/`hideRoles` gate visibility), `api()` (CSRF echo + FastAPI error flattening), `toast`, `skeleton`, `modal`, `esc`/`qs`/`qsa`, `ICON`, `avatar`, command palette (`initCommandPalette`), Coach FAB (`mountAssistant` — an iframe of the Mastery Engine's own study assistant; **suppressed on `ENGINE_PAGES`**, which already show that panel inside their engine frame — see AGENTS.md §5), `setTheme`/`engineUrl`/`themeEmbeds` (hands our light/dark to every embedded Mastery Engine) |
+| `static/js/app.js` | The shell every page loads: `NAV` array `:78` (roles/`min`/`hideRoles` gate visibility), `api()` (CSRF echo + FastAPI error flattening), `toast`, `skeleton`, **`loadErr`**, `modal`, `esc`/`qs`/`qsa`, `ICON`, `avatar`, command palette (`initCommandPalette`), Coach FAB (`mountAssistant` — an iframe of the Mastery Engine's own study assistant; **suppressed on `ENGINE_PAGES`**, which already show that panel inside their engine frame — see AGENTS.md §5), `setTheme`/`engineUrl`/`themeEmbeds` (hands our light/dark to every embedded Mastery Engine). 🔴 **`toast` writes into an `aria-live` region and `.x-close` is a real `<button>`** — see the a11y gotchas below |
 | `static/js/taskboard.js` | Mountable Kanban (`TaskBoard.mount`). Optimistic DnD (native HTML5 — deliberate, see AGENTS.md §9), SSE reload, quick-add, Atrium-card editing, and the lifecycle controls: Park/Resume, Submit/Approve/Request changes, Past work. **"My work" is a client-side toggle over the card's `mine` flag, NOT the `?assignee_id=` filter** — see the gotcha below. **Support** (many people per card, since 2026-08-06): `supportOptions` builds the picker and mirrors the server's delegation rule (a non-delegator's list contains only THEM; a colleague already on the card renders `selected disabled` so the list round-trips instead of 403ing), `supportStack` draws the overlapped avatars from **`support`, now for BOTH kinds of card** — the server resolves a client card's Atrium roster emails to Sentinel users too (2026-08-06), so a supporter with a photo shows it instead of grey initials beside a lead who had one; `atrium_support_names` remains the fallback for a payload built without a resolver. **The card and the record were redesigned 2026-08-06** (`flagOf` + `card()` + `openDetail`) — see "The quiet card" below |
 | `static/js/tasks.js` | **The Task Board page** (`/tasks`) — its own page again since 2026-08-03 (decision D7); a thin shell that mounts `taskboard.js` full-width. It was embedded in the dashboard from 2026-07-26 until then, so `/dashboard?open=<id>` forwards here forever (the notifications minted in that window are permanent rows) |
 | `static/js/dashboard.js` | **The Overview** (`/dashboard`, labelled "Overview" since 2026-08-03): greeting + the day strip (attendance/gym as two buttons), then `GrowthPanel`'s rings, the **"my work"** strip (`renderMyWork` — three `.mw-tile` doors into `/tasks` + the "Up next" shortlist, **soonest deadline first**, undated last; fails silently; "mine" = the card's `mine` flag, see the gotcha below), `GrowthPanel`'s ledger, and — admins only, last — `TeamGrowth` + the org KPIs/chart/late list/handovers. **Owns the page-wide people scope** (`applyScope`): TeamGrowth sets it, this re-scopes the KPIs, chart and lists from data already in hand. The board is no longer one of its consumers (it left for `/tasks` with D7), and "my work" is deliberately never scoped — it answers "what is on ME" |
@@ -31,7 +31,7 @@ kiosk. Operating rules (CSP, cache bumping, `api()`-only fetches) live in
 | `static/css/styles.css` | The whole design system (token-driven, dark mode via overrides) |
 | `static/vendor/html5-qrcode.min.js` | The only vendored lib — CSP blocks CDNs |
 | `static/who-we-are.html` | North Star manifesto content (served statically, iframed) |
-| `sw.js` | Service worker: **`CACHE` key line 6** (currently `sentinel-v94`), `CORE` precache list, network-first assets; navigations NOT intercepted except **`/kiosk`**. **Not registered on localhost** (except `/kiosk`) since 2026-08-06 — live reload needs it out of the way. 🔴 The offline fallback is `caches.match(req, { ignoreSearch: true })` **because shells now request content-versioned URLs** (`app.js?v=<hash>`) while `CORE` precaches the bare paths — an exact match would miss and the kiosk would not boot offline (AGENTS.md §5) |
+| `sw.js` | Service worker: **`CACHE` key line 6** (the value lives in the file — this doc does not carry a third copy of it; see Status), `CORE` precache list, network-first assets; navigations NOT intercepted except **`/kiosk`**. **Not registered on localhost** (except `/kiosk`) since 2026-08-06 — live reload needs it out of the way. 🔴 The offline fallback is `caches.match(req, { ignoreSearch: true })` **because shells now request content-versioned URLs** (`app.js?v=<hash>`) while `CORE` precaches the bare paths — an exact match would miss and the kiosk would not boot offline (AGENTS.md §5) |
 | `manifest.json` · icons/favicons | PWA install metadata |
 | `modern_prototype.html` · `sidebar_prototype.html` | Design prototypes — not served, don't ship code in them |
 
@@ -71,7 +71,12 @@ kiosk. Operating rules (CSP, cache bumping, `api()`-only fetches) live in
    `/api/tasks` must never cost anyone the rest of the page. The **board itself is not here**: it
    lives at `/tasks` (`tasks.js`) since decision D7, and the strip only links into it.
 8. **Change styles** — `static/css/styles.css` only; keep it token-driven (`var(--*)`) so dark
-   mode holds; then bump the SW cache.
+   mode holds; then bump the SW cache. 🔴 **Check the token EXISTS** — see the undefined-token
+   gotcha below; `var(--nope)` fails silently and invisibly.
+9. **Render a load failure** — `S.loadErr(host, err, retry)`, never a hand-rolled `.empty`. It
+   replaces the skeleton with the reason plus a **Try again**; pass `retry` whenever re-running is
+   a pure function of on-screen state (a filter, a date range) and omit it when it would repeat a
+   side effect. See the gotcha below for why every skeleton needs one.
 
 Verify: `node --check` every edited JS file (CI does the same); full check = backend pytest suite.
 Deploy: `..\deploy\deploy.ps1` (Cloud Run `sentinel`, asia-southeast1).
@@ -85,6 +90,87 @@ board" toast and no clue). This cost a debugging round on 2026-08-04. **Quote CS
 inside any comment that lives in a template literal**, never with a backtick.
 
 ## Gotchas / DO NOT TOUCH
+
+- 🔴 **AN UNDEFINED CSS TOKEN FAILS SILENTLY AND INVISIBLY — `var(--accent)` cost this app five
+  defects (fixed 2026-08-17).** `--accent` and `--fg` were used in 7 places and **defined nowhere**.
+  A `var()` on an undefined property with no fallback makes the whole declaration *invalid at
+  computed-value time*, which is **not** "ignore this line" — the property falls back to its
+  **initial** value. So:
+  | Site | Fell back to | What you saw |
+  |---|---|---|
+  | `.tp-bar{background:var(--accent)}` (`taskboard.js`) | `transparent` | **the Monitor's throughput chart drew eight correctly-sized INVISIBLE bars** over their labels |
+  | `.tp-bar.tp-partial` gradient + dashed border | `transparent` / `currentColor` | the partial week was a thin grey outline |
+  | `.tcard.picked{outline:2px solid var(--accent)}` | `currentColor` | bulk multi-select outlined a picked card in its own **text colour**, barely separable from its 1px border |
+  | `.t-move:focus-visible{color:var(--fg);border-color:var(--accent)}` | inherited / `currentColor` | the only move affordance a **keyboard** user has ever had revealed itself with no focus edge |
+  | `.filters .btn.on{border-color:var(--accent)}` (`styles.css`) | `currentColor` | a pressed filter toggle lost the green edge that made it look pressed |
+  There is **no linter for this and no console warning** — the CSS parses, the element renders, the
+  colour is just gone. **No global `--accent` was introduced**, deliberately: the four sites meant
+  four different things (green for the green-on-green filter toggle, violet for interaction/focus
+  and selection, green for chart data), and this design system already documents green vs violet
+  roles. Inventing a fifth half-defined accent would have hidden the ambiguity instead of resolving
+  it. **Before shipping a new token, grep that it is defined:**
+  ```bash
+  cd frontend
+  cat static/js/*.js static/css/styles.css pages/*.html | grep -o "var(--[a-zA-Z0-9-]*" | sed 's/var(//' | sort -u > /tmp/u
+  cat static/css/styles.css static/js/*.js | grep -o "\--[a-zA-Z0-9-]*[[:space:]]*:" | sed 's/[[:space:]]*:$//' | sort -u > /tmp/d
+  comm -23 /tmp/u /tmp/d    # expect only: --dim- (built dynamically), --bg-subtle (has a fallback)
+  ```
+- 🔴 **EVERY `skeleton()` NEEDS AN OWNER FOR ITS FAILURE — use `S.loadErr` (2026-08-17).** There
+  are 13 skeleton call sites and until this date **only `manage.js` ever replaced one on error**.
+  Everywhere else a failed refetch left the skeleton on screen **forever**: `people.js`'s `load()`
+  had no `try/catch` at all and is called straight from `oninput`, so a 500 was an unhandled
+  rejection and the page simply read as *permanently loading*. `boot()` catches the **first**
+  `pageInit` and toasts, but a toast is gone in 4.2 s and a skeleton is not — the honest signal (a
+  stuck loader) and the informative one (the message) never coexisted, and **neither offered a way
+  out**: a browser refresh was the only recovery and it discarded the filters that provoked the
+  error. `S.loadErr(host, err, retry)` is the one definition. It reads `err.detail` **first**
+  (`api()` has already flattened FastAPI's shape into it; `err.message` alone gives you "Failed to
+  fetch" for a real 403 with a real explanation).
+- 🔴 **DEGRADING A READ TO `[]` IS ONLY SAFE WHERE ABSENCE AND FAILURE MEAN THE SAME THING — and on
+  an ACTION QUEUE they are opposites (2026-08-17).** `approvals.js` fetched its two halves with
+  `.catch(() => [])` each, so a 500 on either endpoint rendered a **shorter pending list with no
+  warning**: an approver read "Nothing to approve", believed they were caught up, and left real
+  requests sitting. Same failure the Watcher bridge's empty state hid twice (AGENTS.md §5). It is
+  still fail-soft — one broken endpoint must not cost you the other's requests — but the failure is
+  now **reported** (`failed[]` → a `.notice warn` inside the card, above the count it qualifies) and
+  the empty state says **"Nothing loaded."**, not "Nothing to approve", because that is a claim the
+  page cannot make while a source is down.
+- **`.notice` is the shared inline-explanation shape** (`styles.css`) — for text that *qualifies*
+  the content beside it. 🔴 **Do not use `.pill` for a sentence**: it is 11 px, uppercase, with
+  letter-spacing, so prose in it comes out as a wall of tiny capitals (which is what the approvals
+  warning did on its first pass). `.notice` deliberately mirrors the task board's `.tb-note`
+  drawing — but `.tb-note` lives inside `taskboard.js`'s own injected `<style>`, so no other page
+  can reach it. **Shared shapes belong in `styles.css`.**
+- 🔴 **`--muted` IS TEXT and must clear 4.5:1.** It was `#8A939F` = **3.1:1** on `--card` (dark:
+  `#6D7A73` = 3.96:1) — both failing WCAG AA — while being used ~54 times, almost always at 10–12 px
+  (`.navlabel`, `.empty`, the Monitor legend, `.tp-n`, `.tb-shown`). Now `#6B7480` (4.73:1) and
+  `#859189` (5.4:1). This **narrows the gap to `--sub`** on purpose: three text tiers on a white
+  card cannot all be both distinct and legible, and legible wins. If you want a lighter grey for
+  something **decorative** (an icon, a gridline), add a token for it — don't lighten this one back.
+- 🔴 **Keyboard focus: `:focus-visible`, and it lives in `styles.css` for everything non-input.**
+  Inputs got a violet ring in 2026-07; **nothing else in the app had a `:focus` style at all** until
+  2026-08-17 — no `.btn`, no `.iconbtn`, no `.tabs button`, no `.nav a`, across ~220 buttons. They
+  fell through to the UA outline, which is invisible on a green-filled primary button and on every
+  dark surface. Three properties of the rule: **`:focus-visible` not `:focus`** (a mouse click would
+  otherwise leave a ring parked on the button, which is why authors delete these rules again); an
+  **`outline` + `offset`, never a box-shadow** (several of these elements own their box-shadow and a
+  focus style must not erase their depth); and **no `!important`**, so the growth table's own
+  `.dc-main` / `.dc-more` / `.pace-row` focus rings — single-class selectors that come later in the
+  file — still win.
+- 🔴 **`toast()` writes into an `aria-live` region, and that is not decoration.** `api()` flattens
+  every failure into a toast, so it is the app's **only** error channel — and until 2026-08-17 it
+  was a plain div appended to `<body>`, which assistive tech never announces: a screen-reader user
+  pressed Approve, the request 403'd, and **nothing whatsoever reported it**. Two details that are
+  easy to undo: the region must **exist in the DOM before** the message goes into it (which is why
+  the attributes are on the `#toasts` container, not on each toast), and it is **`polite` with
+  `role="alert"` only on error toasts** — one assertive region for everything would interrupt
+  whatever the user was reading to say "Photo updated".
+- **`.x-close` is a real `<button type="button">` with an `aria-label`**, in both `modal()` and the
+  Coach panel. It was a `<span>`, so the ✕ that closes every dialog in the app could not be reached
+  by keyboard at all — Esc working (see `modal()` below) is the only reason that was survivable.
+  Its CSS carries four resets (`background`/`border`/`padding`/`width`) to strip the UA chrome, and
+  the Coach panel's own `#coach-head .x-close` rule **repeats them** because it sets `color` and
+  would otherwise re-inherit them.
 
 - 🔴 **"Is this work mine?" is `t.mine`, never `t.assigned_to_id === S.user.id`** (fixed
   2026-08-05). Naming somebody on a phase/sub-task is delegation and puts the card on their board
@@ -381,6 +467,9 @@ inside any comment that lives in a template literal**, never with a backtick.
 ## Status (volatile)
 
 - Live: `https://sentinel-585951669065.asia-southeast1.run.app` — serving revision
-  **`sentinel-00112-mpl`** (verified 2026-07-29).
-- `sw.js` `CACHE` currently **`sentinel-v74`**.
-- 22 JS files under `static/js/`; 19 page shells.
+  **`sentinel-00112-mpl`** (verified 2026-07-29; **not re-verified since — check before trusting**).
+- `sw.js` `CACHE` currently **`sentinel-v100`**. 🔴 This line and the `sw.js` entry in the file map
+  above had drifted to **v74** and **v94** while the file said `v99` (caught 2026-08-17). Two stale
+  copies of one number in one document: **the file is the source of truth** — `frontend/sw.js:6`.
+- 26 JS files under `static/js/`; 20 page shells (the header above said "19 thin HTML shells" and the
+  file map "19 shells" — both were stale too).

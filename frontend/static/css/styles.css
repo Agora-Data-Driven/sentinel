@@ -35,7 +35,14 @@
 
   /* Neutrals — cooler, calmer scale (from the modern prototype) */
   --ink: #0D1117; --charcoal: #353535; --text: #2B333C;
-  --sub: #5B6673; --muted: #8A939F; --white: #fff;
+  /* 🔴 `--muted` IS TEXT, so it has to clear 4.5:1 — it was #8A939F, which is 3.1:1 on --card and
+     fails WCAG AA (2026-08-17). It is used ~54 times in this file and almost always at 10-12px:
+     .navlabel, .empty, the Monitor legend, .tp-n, .tb-shown. #6B7480 is 4.73:1, chosen over the
+     bare-pass #6E7783 (4.53:1) for headroom. This deliberately narrows the gap to --sub (5.8:1) —
+     three text tiers on a white card cannot all be both distinct AND legible, and legible wins.
+     If you need a lighter grey for something DECORATIVE (an icon, a gridline), add a token for it
+     rather than lightening this one back. */
+  --sub: #5B6673; --muted: #6B7480; --white: #fff;
   --line: #E7EAEE; --line-soft: #EEF0F3; --line-strong: #D8DDE3;
   --canvas: #F6F7F9; --card: #FFFFFF; --raised: #FFFFFF; --sunken: #F1F3F5;
   --input: #F1F3F5; --row-alt: #F9FAFB; --hover: #F1F3F5;
@@ -73,7 +80,9 @@
 
 /* ============ DARK MODE (Agora dark green-black + glow) ============ */
 :root[data-theme="dark"] {
-  --ink: #F1F5F2; --text: #DCE3DD; --charcoal: #D5DAD7; --sub: #9AA6A0; --muted: #6D7A73;
+  /* Same fix as the light `--muted` above: #6D7A73 was 3.96:1 on --card and also failed AA.
+     #859189 is 5.4:1 and stays a tier below --sub (#9AA6A0). */
+  --ink: #F1F5F2; --text: #DCE3DD; --charcoal: #D5DAD7; --sub: #9AA6A0; --muted: #859189;
   --white: #16211B;                 /* surface used by buttons/iconbtns/panels */
   --canvas: #0B0F0D; --card: #121A16; --raised: #16211B; --sunken: #0F1613;
   --input: #17231B; --row-alt: rgba(255,255,255,.025); --hover: rgba(255,255,255,.05);
@@ -462,6 +471,40 @@ input, select, textarea {
 }
 input:focus, select:focus, textarea:focus { outline: none; border-color: var(--violet); background: #fff; box-shadow: 0 0 0 3px var(--violet-bg); }
 textarea { resize: vertical; min-height: 78px; }
+
+/* 🔴 KEYBOARD FOCUS ON EVERYTHING THAT IS NOT AN INPUT (added 2026-08-17).
+   The rule above gave inputs a violet ring, and nothing else in this file had a :focus style at
+   all — no .btn, no .iconbtn, no .tabs button, no .nav a, across ~220 buttons. They fell through to
+   the UA outline, which is a thin dark ring: invisible on a green-filled primary button and on
+   every dark-mode surface. Tabbing the board's toolbar was guesswork.
+
+   Three things this has to get right:
+   • `:focus-visible`, not `:focus` — a MOUSE click on a button would otherwise leave a ring
+     sitting there, which is why authors delete these rules again.
+   • An `outline` with an `offset`, not a box-shadow: several of these elements already own their
+     box-shadow (.btn.primary, .iconbtn, .theme-toggle button.on) and a focus style must not be
+     the thing that erases their depth.
+   • It must never override a component that has its OWN focus ring — the growth table's
+     `.dc-main` / `.dc-more` / `.pace-row` rules are all single-class selectors like these, and
+     they come later in the file, so they still win. Don't add `!important` here. */
+.btn:focus-visible, .iconbtn:focus-visible, .tabs button:focus-visible, .tabs.sub button:focus-visible,
+.nav a:focus-visible, .nav-group-head:focus-visible, .pill:focus-visible, .chip:focus-visible,
+.linky:focus-visible, .x-close:focus-visible, .theme-toggle button:focus-visible,
+.cmdk-trigger:focus-visible, .col-add:focus-visible, .user-card:focus-visible {
+  outline: 2px solid var(--violet); outline-offset: 2px; border-radius: var(--r-ctl);
+}
+/* Violet on a light card reads as focus; in dark mode it muddies against the green-black, and the
+   app's documented dark accent is green (AGENTS.md — "violet in light, green in dark"). */
+:root[data-theme="dark"] .btn:focus-visible, :root[data-theme="dark"] .iconbtn:focus-visible,
+:root[data-theme="dark"] .tabs button:focus-visible, :root[data-theme="dark"] .tabs.sub button:focus-visible,
+:root[data-theme="dark"] .nav a:focus-visible, :root[data-theme="dark"] .nav-group-head:focus-visible,
+:root[data-theme="dark"] .pill:focus-visible, :root[data-theme="dark"] .chip:focus-visible,
+:root[data-theme="dark"] .linky:focus-visible, :root[data-theme="dark"] .x-close:focus-visible,
+:root[data-theme="dark"] .theme-toggle button:focus-visible,
+:root[data-theme="dark"] .cmdk-trigger:focus-visible, :root[data-theme="dark"] .col-add:focus-visible,
+:root[data-theme="dark"] .user-card:focus-visible {
+  outline-color: var(--green-strong);
+}
 .filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 16px; }
 /* Checkboxes/radios are excluded: min-width would stretch the box itself, centring the glyph in a
    150px field and shoving its label to the far right (the "Overdue" toggle). Only text-ish inputs
@@ -471,7 +514,12 @@ textarea { resize: vertical; min-height: 78px; }
 /* A filter button that is a TOGGLE has to look pressed while it is on ("My work", taskboard.js).
    Without this the board silently showed a subset with every control reading "no filter", which is
    the same class of bug as a restored saved view whose filter bar doesn't reflect it. */
-.filters .btn.on { background: var(--green-bg); border-color: var(--accent); color: var(--green-d); }
+/* 🔴 `--accent` was never a token in this file (fixed 2026-08-17). It resolved to nothing, so the
+   declaration was invalid at computed-value time and `border-color` fell back to its initial
+   `currentColor` — a pressed toggle got a border in its own text colour instead of a green edge,
+   which is most of what "looks pressed" was supposed to be. Green here, not violet, because the
+   background and label either side of it are already green. */
+.filters .btn.on { background: var(--green-bg); border-color: var(--green-d); color: var(--green-d); }
 :root[data-theme="dark"] .filters .btn.on { background: rgba(255,255,255,.08); }
 
 /* ---------- Toolbar / page head ---------- */
@@ -531,7 +579,17 @@ textarea { resize: vertical; min-height: 78px; }
 .modal-head h3 { font-size: 16px; }
 .modal-body { padding: 20px; overflow-y: auto; }
 .modal-foot { display: flex; justify-content: flex-end; gap: 10px; padding: 14px 20px; border-top: 1px solid var(--line); }
-.x-close { cursor: pointer; color: var(--muted); }
+/* A real <button> since 2026-08-17 — it was a <span>, so the ✕ that closes every modal in the app,
+   the Coach panel, and gym.js's five delete controls could not be reached by keyboard at all (Esc
+   works on modals, which is the only reason this was survivable; the gym deletes had nothing).
+   The resets strip the UA button chrome.
+   🔴 `inline-flex`, NOT `flex`. The original rule set no `display` at all, so every one of these was
+   inline — and four of gym.js's five sit inside a `<td>` or a `.card-head`, where blockifying them
+   moves the glyph. `inline-flex` keeps the old flow AND centres the SVG. */
+.x-close {
+  cursor: pointer; color: var(--muted); background: none; border: none; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center; width: auto; font: inherit;
+}
 .x-close:hover { color: var(--ink); }
 
 /* ---------- Command palette (Ctrl/Cmd + K) ---------- */
@@ -866,8 +924,26 @@ textarea { resize: vertical; min-height: 78px; }
 @keyframes slideup { from { transform: translateY(12px); opacity: 0; } to { transform: none; opacity: 1; } }
 
 /* ---------- Misc ---------- */
+/* ---------- Notice ----------
+   An inline explanation that QUALIFIES the content next to it — "this list is incomplete", "one
+   source is down". Added 2026-08-17 for the approvals inbox, which had been rendering a warning
+   into a `.pill`: that class is 11px uppercase with letter-spacing, so a sentence in it came out as
+   a wall of tiny capitals. Deliberately the same left-border shape as the task board's `.tb-note`,
+   which is the app's established notice drawing — but that one lives inside taskboard.js's own
+   injected <style>, so no other page could reach it. Put shared shapes here. */
+.notice {
+  border-left: 2px solid var(--line-strong); padding: 4px 0 4px 13px; margin: 0 0 14px;
+  font-size: 13px; color: var(--sub); line-height: 1.5;
+}
+.notice.warn { border-left-color: var(--warn); }
+.notice.bad { border-left-color: var(--danger); }
+.notice b { color: var(--ink); font-weight: 700; }
+
 .empty { text-align: center; color: var(--muted); padding: 40px 20px; }
 .empty .svg-ic { width: 40px; height: 40px; margin: 0 auto 10px; opacity: .5; }
+/* The Retry that `S.loadErr` draws (app.js). `.empty` is centred text, so the button needs to stop
+   being a block in the text flow and get some air above it. */
+.empty .empty-retry { display: inline-flex; margin-top: 12px; }
 .muted { color: var(--muted); } .sub { color: var(--sub); }
 .row { display: flex; align-items: center; gap: 10px; } .row.wrap { flex-wrap: wrap; } .between { justify-content: space-between; }
 .stack { display: flex; flex-direction: column; gap: 10px; }

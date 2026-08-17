@@ -40,7 +40,14 @@ window.pageInit = async (S) => {
     const load = async () => {
       const q = new URLSearchParams({ from: S.qs("#f-from").value, to: S.qs("#f-to").value });
       if (S.qs("#f-team").value) q.set("team_id", S.qs("#f-team").value);
-      const rows = await S.api("/api/attendance/summary?" + q);
+      // `render(tab)` puts a skeleton in #tabc, but renderSummary has already replaced that with the
+      // filter bar plus an EMPTY #sum-table by the time this runs — so without these two lines a
+      // filter change showed no loading state at all, and a failure showed nothing whatsoever: just
+      // a filter bar over blank space, indistinguishable from a range with no records.
+      S.qs("#sum-table").innerHTML = S.skeleton({ rows: 6 });
+      let rows;
+      try { rows = await S.api("/api/attendance/summary?" + q); }
+      catch (e) { S.loadErr("#sum-table", e, load); return; }
       S.qs("#sum-table").innerHTML = `<div class="table-wrap"><table>
         <thead><tr><th>Employee</th><th>Date</th><th>In</th><th>Out</th><th>Hours</th><th>Status</th><th>Handover</th>${isSA ? "<th></th>" : ""}</tr></thead>
         <tbody>${rows.length ? rows.map((s, i) => `<tr>
@@ -51,7 +58,7 @@ window.pageInit = async (S) => {
           <td>${S.statusPill(s.status)}</td>
           <td class="sub" style="max-width:220px">${S.esc(s.handover_note || "—")}</td>
           ${isSA ? `<td style="text-align:right"><button class="btn sm ghost" data-edit="${i}">Edit</button></td>` : ""}</tr>`).join("") : `<tr><td colspan="${cols}"><div class="empty">No records for this range.</div></td></tr>`}</tbody></table></div>`;
-      if (isSA) S.qsa("[data-edit]").forEach((b) => b.onclick = () => openEdit(rows[+b.dataset.edit], load));
+      if (isSA) S.qsa("#sum-table [data-edit]").forEach((b) => b.onclick = () => openEdit(rows[+b.dataset.edit], load));
     };
     ["f-from", "f-to", "f-team"].forEach((id) => S.qs("#" + id).onchange = load);
     load();
