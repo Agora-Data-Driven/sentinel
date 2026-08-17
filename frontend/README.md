@@ -10,7 +10,7 @@ kiosk. Operating rules (CSP, cache bumping, `api()`-only fetches) live in
 | Entry | What it is |
 |---|---|
 | `pages/*.html` | 19 shells (~0.7 kb each; JS renders everything): dashboard, attendance, approvals, gym, growth, reading, academy, philosophical, spiritual, people, leave, north-star, reports, settings, manage, payroll, login, kiosk, scanner. Routes registered in `backend/app/main.py` (`_PAGES`; `/login` is its own route). 🔴 **Served rewritten, not as files** — `main._page` appends `?v=<build id>` to every `/static/**.{js,css}` reference so those assets can be cached `immutable` (`backend/app/assets.py`, AGENTS.md §5). Write plain `/static/...` paths here; the rewrite is automatic and skips any URL that already has a query string |
-| `static/js/app.js` | The shell every page loads: `NAV` array `:78` (roles/`min`/`hideRoles` gate visibility), `api()` (CSRF echo + FastAPI error flattening), `toast`, `skeleton`, **`loadErr`**, `modal`, `esc`/`qs`/`qsa`, `ICON`, `avatar`, command palette (`initCommandPalette`), Coach FAB (`mountAssistant` — an iframe of the Mastery Engine's own study assistant; **suppressed on `ENGINE_PAGES`**, which already show that panel inside their engine frame — see AGENTS.md §5), `setTheme`/`engineUrl`/`themeEmbeds` (hands our light/dark to every embedded Mastery Engine). 🔴 **`toast` writes into an `aria-live` region and `.x-close` is a real `<button>`** — see the a11y gotchas below |
+| `static/js/app.js` | The shell every page loads: `NAV` array `:78` (roles/`min`/`hideRoles` gate visibility), `api()` (CSRF echo + FastAPI error flattening), `toast`, `skeleton`, **`loadErr`**, **`sortTable`**, `modal`, `esc`/`qs`/`qsa`, `ICON`, `avatar`, command palette (`initCommandPalette`), Coach FAB (`mountAssistant` — an iframe of the Mastery Engine's own study assistant; **suppressed on `ENGINE_PAGES`**, which already show that panel inside their engine frame — see AGENTS.md §5), `setTheme`/`engineUrl`/`themeEmbeds` (hands our light/dark to every embedded Mastery Engine). 🔴 **`toast` writes into an `aria-live` region and `.x-close` is a real `<button>`** — see the a11y gotchas below |
 | `static/js/taskboard.js` | Mountable Kanban (`TaskBoard.mount`). Optimistic DnD (native HTML5 — deliberate, see AGENTS.md §9), SSE reload, quick-add, Atrium-card editing, and the lifecycle controls: Park/Resume, Submit/Approve/Request changes, Past work. **"My work" is a client-side toggle over the card's `mine` flag, NOT the `?assignee_id=` filter** — see the gotcha below. **Support** (many people per card, since 2026-08-06): `supportOptions` builds the picker and mirrors the server's delegation rule (a non-delegator's list contains only THEM; a colleague already on the card renders `selected disabled` so the list round-trips instead of 403ing), `supportStack` draws the overlapped avatars from **`support`, now for BOTH kinds of card** — the server resolves a client card's Atrium roster emails to Sentinel users too (2026-08-06), so a supporter with a photo shows it instead of grey initials beside a lead who had one; `atrium_support_names` remains the fallback for a payload built without a resolver. **The card and the record were redesigned 2026-08-06** (`flagOf` + `card()` + `openDetail`) — see "The quiet card" below |
 | `static/js/tasks.js` | **The Task Board page** (`/tasks`) — its own page again since 2026-08-03 (decision D7); a thin shell that mounts `taskboard.js` full-width. It was embedded in the dashboard from 2026-07-26 until then, so `/dashboard?open=<id>` forwards here forever (the notifications minted in that window are permanent rows) |
 | `static/js/dashboard.js` | **The Overview** (`/dashboard`, labelled "Overview" since 2026-08-03): greeting + the day strip (attendance/gym as two buttons), then `GrowthPanel`'s rings, the **"my work"** strip (`renderMyWork` — three `.mw-tile` doors into `/tasks` + the "Up next" shortlist, **soonest deadline first**, undated last; fails silently; "mine" = the card's `mine` flag, see the gotcha below), `GrowthPanel`'s ledger, and — admins only, last — `TeamGrowth` + the org KPIs/chart/late list/handovers. **Owns the page-wide people scope** (`applyScope`): TeamGrowth sets it, this re-scopes the KPIs, chart and lists from data already in hand. The board is no longer one of its consumers (it left for `/tasks` with D7), and "my work" is deliberately never scoped — it answers "what is on ME" |
@@ -33,6 +33,7 @@ kiosk. Operating rules (CSP, cache bumping, `api()`-only fetches) live in
 | `static/who-we-are.html` | North Star manifesto content (served statically, iframed) |
 | `sw.js` | Service worker: **`CACHE` key line 6** (the value lives in the file — this doc does not carry a third copy of it; see Status), `CORE` precache list, network-first assets; navigations NOT intercepted except **`/kiosk`**. **Not registered on localhost** (except `/kiosk`) since 2026-08-06 — live reload needs it out of the way. 🔴 The offline fallback is `caches.match(req, { ignoreSearch: true })` **because shells now request content-versioned URLs** (`app.js?v=<hash>`) while `CORE` precaches the bare paths — an exact match would miss and the kiosk would not boot offline (AGENTS.md §5) |
 | `manifest.json` · icons/favicons | PWA install metadata |
+| `ui.test.js` | **The only real-DOM test in this repo.** Drives `app.js`'s shared helpers under jsdom — `modal()`'s dialog a11y contract (role/labelling, initial focus, the focus TRAP, stack-aware RESTORE, and the command palette outranking the modal stack) and `sortTable()`'s rules (**"—" is unknown and sinks in BOTH directions**, numeric-vs-text, the `data-sort` override) — **57 assertions**, exits non-zero on failure. `node --check` cannot see any of it: every bug it catches parses fine, and writing it found three (see the gotchas). Run instructions are in its header (jsdom is installed ad hoc; this repo has no `package.json` by design). **Run it after touching `modal()`, the focus helpers, `.x-close`, or `sortTable()`** |
 | `modern_prototype.html` · `sidebar_prototype.html` | Design prototypes — not served, don't ship code in them |
 
 ## Data contract (page → API → serializer)
@@ -79,6 +80,8 @@ kiosk. Operating rules (CSP, cache bumping, `api()`-only fetches) live in
    side effect. See the gotcha below for why every skeleton needs one.
 
 Verify: `node --check` every edited JS file (CI does the same); full check = backend pytest suite.
+🔴 **Touched `modal()`, the focus helpers, `.x-close`, or `sortTable()`? Run `node ui.test.js`** (file map
+above) — `node --check` passes on every bug it catches.
 Deploy: `..\deploy\deploy.ps1` (Cloud Run `sentinel`, asia-southeast1).
 
 🔴 **`node --check` does NOT catch a backtick inside a comment inside a template literal.** The
@@ -90,6 +93,77 @@ board" toast and no clue). This cost a debugging round on 2026-08-04. **Quote CS
 inside any comment that lives in a template literal**, never with a backtick.
 
 ## Gotchas / DO NOT TOUCH
+
+- 🔴 **SORTING IS `S.sortTable`, AND `thead th.sortable` WAS DEAD CSS FOR A YEAR (2026-08-17).** That
+  class has been styled in `styles.css` since the first version of this app — cursor, hover colour —
+  and **nothing ever emitted it**: no table sorted except the growth table, which rolls its own via
+  `?sort=`. The affordance was built, styled, and never connected. Now: mark a `<th class="sortable">`
+  and call `S.sortTable(tableEl)` after each render. Five rules, each a bug already paid for:
+  - 🔴 **"—" MEANS UNKNOWN AND SINKS IN BOTH DIRECTIONS** — never multiplied by the sort direction.
+    This is the growth tables' rule (see further down) generalised: rendering an outage as a zero reads
+    as "nobody is doing anything", and *reversing* the sort must not float the unknowns to the top.
+    Empty cells count as unknown too — an absent handover note is not the earliest one.
+  - 🔴 **The numeric test is ANCHORED (`$`), and an ISO DATE is why.** A permissive `parseFloat` returns
+    **2026** for `"2026-08-02"`, so every date in a month compared EQUAL, ties held their original
+    order, and sorting a date column did nothing while looking like it worked — on exactly the
+    `data-sort` values Attendance and Leave pass. Anchored, it falls through to the text branch, which
+    is *correct* for ISO because `YYYY-MM-DD` sorts chronologically as text. Caught by `ui.test.js`.
+  - **`data-sort` carries the raw value wherever the display form does not sort** — Attendance prints
+    "Aug 17" (alphabetical by month name) and "9:05 AM" (which puts 10:00 before 9:05); Leave prints a
+    date *range*. Set it, or the column sorts by prose.
+  - **The control is a real `<button>`** injected into the th, not a clickable th with `tabindex` —
+    keyboard-operable and announced for free. `aria-sort` goes on the th and is **removed from the
+    other columns**, because two columns claiming to be sorted is worse than none.
+  - **Sorting reorders the DOM, so never key a row action to its POSITION.** Attendance's Edit button
+    carries an index into the `rows` array and Payroll's carries `user_id`; both survive a sort. A row
+    index would silently open the wrong person's record.
+- 🔴 **`.table-wrap.tall` IS WHAT MAKES THE STICKY HEADER WORK, AND IT IS OPT-IN.** `position: sticky`
+  resolves against the nearest scrollport. `.table-wrap`'s `overflow-x: auto` already makes it one on
+  **both** axes (per spec, `visible` on one axis with a non-`visible` other computes to `auto`), but
+  with an unconstrained height the header has nowhere to travel — so `thead { position: sticky }` is a
+  harmless no-op until a height caps it. `.tall` (70vh) is a separate class **because several
+  `.table-wrap`s live inside a modal**, whose `.modal-body` already scrolls, and capping them globally
+  would put a second scrollbar inside the first. 🔴 And `border-collapse: collapse` **drops a sticky
+  cell's borders** (they belong to the collapsed grid, which does not travel), so the hairline under the
+  header is a `box-shadow` — don't "simplify" it back to `border-bottom`.
+- **`.table-sticky-1` freezes the first column, for the two WIDE rollups only** (`.mon-tbl`,
+  `.tg-tbl`). Both already scrolled horizontally, which meant scrolling the person's NAME out of view —
+  so the numbers you were reading belonged to nobody, on the table a manager staffs from. Opt-in
+  because each frozen cell costs a stacking context and a table that already fits gains nothing.
+- 🔴 **REPORTS CAPS THE RENDER AT 500 ROWS — AND NEVER THE DATA.** This built *every* returned row into
+  one string for `innerHTML`; an Attendance report is one row per person per day, so a six-month range
+  is tens of thousands of `<tr>`s parsed and laid out synchronously, which visibly hangs the tab. Two
+  properties are load-bearing: the count above the table stays the **server's** `d.count`, so the
+  number is always true; and **the CSV export is untouched** (it goes straight to the API), so "I can
+  only see 500 rows" and "I can only export 500 rows" are never the same sentence. The notice says so,
+  because a capped table with a silent export is how somebody concludes the data is missing.
+- **`dvh` with a `vh` fallback, in that order** (`.app`, `.side`, `.modal`, `.modal.as-drawer`, `.col`).
+  On iOS/Android `100vh` is the viewport with the URL bar **retracted** — taller than what you can see —
+  so a `height: 100vh` sidebar parked its own footer (user card, theme toggle, **Log out**) under the
+  browser chrome, unreachable. 🔴 **Never delete the plain `vh` line** "because the `dvh` one supersedes
+  it": a browser that does not know `dvh` discards that declaration and keeps the first, which is the
+  entire mechanism.
+- **`.col`'s height comes from `--board-top`, not a hardcoded 230px.** That constant encoded "topbar +
+  page head + the toolbar's two rows" — and the toolbar *deliberately wraps* at narrow widths, so the
+  moment it did, columns ran past the fold with their internal scroll misaligned. The token is
+  overridden per breakpoint instead of guessed once.
+- 🔴 **EVERY ICON IS `aria-hidden="true"`, SET ONCE IN `P()` (app.js).** All ~60 `ICON` entries are
+  built there, which is the only reason it is worth doing centrally. Consequence to respect: **an icon
+  can no longer be a control's accessible name**, so any control whose entire content is an icon MUST
+  carry its own `aria-label` — the ✕, hamburger, bell, Coach FAB, Log out and both theme buttons all
+  do. Adding an icon-only control? Label it, and check with the sweep in `ui.test.js`'s sibling audit.
+  `focusable="false"` rides along because an inline `<svg>` is focusable by default in some engines,
+  which would insert an unnamed Tab stop per icon — and a stop the modal focus trap would have to
+  reason about.
+- 🔴 **DEGRADING A READ TO AN EMPTY SHAPE IS ONLY SAFE WHERE ABSENCE AND FAILURE MEAN THE SAME THING.**
+  Beyond `approvals.js` (below), four more sites did it and now name the failure instead:
+  `manage.js` shift-templates (an empty Shift picker reads as "no templates exist", and the operator's
+  next move is to duplicate one — while `Team.shift_template_id` decides whether a punch is late),
+  `attendance.js` teams (a filter that cannot filter), `reading.js` (a canon somebody filled rendering
+  as an empty state inviting their first book), and `dashboard.js`'s "my work" strip (a blank region
+  where your work should be — better than the July 2026 false "nothing on you", still unreadable).
+  🔴 **In every one, a 401/403 is EXEMPT**: it is the normal answer for a role that does not hold that
+  data, and a warning that cries wolf on every load is one nobody reads on the day it is true.
 
 - 🔴 **AN UNDEFINED CSS TOKEN FAILS SILENTLY AND INVISIBLY — `var(--accent)` cost this app five
   defects (fixed 2026-08-17).** `--accent` and `--fg` were used in 7 places and **defined nowhere**.
@@ -411,9 +485,36 @@ inside any comment that lives in a template literal**, never with a backtick.
   - **Esc closes the TOP modal**, via one document listener held while the stack is non-empty. The
     old code added one per modal and removed it only if Escape was actually pressed, so every dialog
     closed by a button leaked a listener for the page's lifetime.
-  - **`id="modal-x"` is no longer unique while a stack is open.** Scope lookups to the `root` the
-    call returns; a bare `qs("#modal-x")` finds the BOTTOM one. Same for `.modal-body` — take it from
-    `m.root`, not from a document-wide query (which is what `showPastWork` used to guess at).
+  - 🔴 **NOTHING INSIDE A STACKED DIALOG MAY BE FOUND BY `id`.** Ids are not unique while a stack is
+    open, so scope every lookup to the `root` the call returns — `.modal-body` from `m.root`, never a
+    document-wide query (which is what `showPastWork` used to guess at). **Scoping is necessary but
+    not sufficient for an id:** the close button used to be `qs("#modal-x", ov)`, and a scoped
+    `querySelector("#dup")` is entitled to consult the document's id map and answer **null** because
+    the first match lives in another subtree. jsdom does exactly that, so opening a SECOND dialog
+    threw `Cannot set properties of null` and left the ✕ wired to nothing (found 2026-08-17 by the
+    harness below). **`id="modal-x"` is therefore gone**: the head's ✕ is located once via
+    `.modal-head .x-close` — scoped that way because a caller may render its own `.x-close` controls
+    in the body, as `gym.js`'s routine editor does — and held by reference. Prefer a class + a held
+    reference over an id for anything a stack can duplicate. The one id that remains is the title's,
+    and it carries a **per-overlay counter** (`modal-title-N`) precisely because `aria-labelledby`
+    pointing at a duplicated id resolves to the BOTTOM dialog's title.
+  - 🔴 **THE DIALOG A11Y CONTRACT (2026-08-17), and every clause is load-bearing.** `modal()` had
+    none of this while `initCommandPalette` — 600 lines further down the same file — had all of it, so
+    a keyboard user could open a task, press Tab, and walk out of the dialog into the page behind
+    while the overlay still covered the screen, operating controls they could not see. Esc closing the
+    top modal was the only reason it was survivable.
+    | Clause | Why it is the way it is |
+    |---|---|
+    | `role="dialog"` + `aria-modal="true"` + `aria-labelledby` | announces itself as a dialog, and as **which** dialog |
+    | `tabindex="-1"` on `.modal` | a focus target for a body with no control of its own (a plain message). Tab can never reach it, so `.modal:focus{outline:none}` in styles.css stops a UA ring round the whole dialog |
+    | initial focus is **synchronous** | callers focus their OWN field right after `modal()` returns (`#t-name`, `#a-title`, manage.js's generated password, growth.js's entry box). Running first lets their explicit choice win; a `requestAnimationFrame` here would fire AFTER them and **steal focus back** |
+    | initial focus **skips the ✕** by reference | it is first in DOM order (head precedes body), and opening a dialog with the keyboard on "discard this" is the one default worth avoiding. By reference, not by class — a caller's `.x-close` buttons in the body are ordinary controls |
+    | the ✕ **stays in the Tab cycle** | `trapTab` reads `focusablesIn` unfiltered. Removing it from the cycle would make it keyboard-unreachable, which is the bug this change exists to fix |
+    | `focusablesIn` filters on `offsetParent` | drops controls inside a `[hidden]` row or a shut `<details>` — the task form has both. A trap that counts invisible controls silently eats Tab presses |
+    | `:not([disabled])` in `FOCUSABLE` | this board renders genuinely disabled controls (a non-delegator's support picker). A trap whose boundary is a dead control cannot be escaped forwards |
+    | Tab handled in the **one shared** listener | same reason as Esc — a listener per layer is how the pre-2026-08-06 code leaked one per dialog |
+    | focus restore is **per-entry**, not one shared slot | that is what makes it stack-aware: closing a nested confirm returns you to the control inside the task card underneath, not to whatever opened the bottom of the stack |
+    | restore is **guarded three ways** | the element may have been REMOVED by the very save the dialog performed (a re-rendered board row); then it falls back to the dialog now on top, so focus never lands on `<body>` |
   Rendering an editor inline instead of in a dialog (`gym.js`'s routine editor in `#tabc`) is still
   fine — it just is no longer forced.
 - 🔴 **`hidden` is honoured by ONE rule, `[hidden]{display:none !important}` at the top of
@@ -468,7 +569,7 @@ inside any comment that lives in a template literal**, never with a backtick.
 
 - Live: `https://sentinel-585951669065.asia-southeast1.run.app` — serving revision
   **`sentinel-00112-mpl`** (verified 2026-07-29; **not re-verified since — check before trusting**).
-- `sw.js` `CACHE` currently **`sentinel-v100`**. 🔴 This line and the `sw.js` entry in the file map
+- `sw.js` `CACHE` currently **`sentinel-v102`**. 🔴 This line and the `sw.js` entry in the file map
   above had drifted to **v74** and **v94** while the file said `v99` (caught 2026-08-17). Two stale
   copies of one number in one document: **the file is the source of truth** — `frontend/sw.js:6`.
 - 26 JS files under `static/js/`; 20 page shells (the header above said "19 thin HTML shells" and the

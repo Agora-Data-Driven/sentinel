@@ -19,7 +19,17 @@
   let COLORS = { statuses: {}, priorities: {}, labels: {} };
 
   // ---- Inline icon set (Atrium stroked style: 24x24, stroke-width 1.8) ----
-  const P = (d) => `<svg class="svg-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+  // 🔴 EVERY ICON IN THE APP IS DECORATIVE, AND SAYS SO (2026-08-17). Every one of the ~60 entries in
+  // `ICON` is built here, so these two attributes cover the whole product from one line — which is the
+  // only reason it is worth doing at all.
+  //   • `aria-hidden="true"` — an icon is never the label. Where an icon is the ONLY content of a
+  //     control, that control carries its own `aria-label` (the ✕, the hamburger, the bell, the Coach
+  //     FAB); everywhere else the icon sits beside real text it would otherwise duplicate.
+  //   • `focusable="false"` — IE/older-Edge legacy that still bites: an inline <svg> is focusable by
+  //     default in some engines, which silently inserts a Tab stop with no name for every icon on the
+  //     page. That is also a stop the modal focus trap would have to reason about, so removing them at
+  //     the source keeps `focusablesIn` honest.
+  const P = (d) => `<svg class="svg-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${d}</svg>`;
   const ICON = {
     grid: P('<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>'),
     clock: P('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'),
@@ -299,6 +309,105 @@
     console.error(err);
   }
 
+  // 🔴 SORTING, FOR EVERY TABLE IN THE APP — and it is the CSS that has been waiting, not the JS.
+  //
+  // `thead th.sortable` has been styled in styles.css since the first version of this app (cursor,
+  // hover colour) and NOTHING ever emitted the class: no table here sorted except the growth table,
+  // which rolls its own via `?sort=`. So the affordance was built, styled, and never connected.
+  //
+  // Mark a `<th class="sortable">` and call `S.sortTable(tableEl)`. Three rules are baked in because
+  // each one is a bug this codebase has already paid for:
+  //
+  //  • 🔴 "—" MEANS UNKNOWN AND SORTS LAST IN BOTH DIRECTIONS. The growth tables learned this the
+  //    hard way (frontend/README.md): a person the Mastery Engine could not answer for shows a dash,
+  //    and sorting that as a zero renders an outage as "nobody is doing anything". Empty cells get the
+  //    same treatment — an absent handover note is not the earliest one.
+  //  • **Numbers sort as numbers.** `"9h"` vs `"10h"` as text puts 9 after 10, and every numeric
+  //    column here carries a unit or a `%`. The parse is "does the cell start like a number", so
+  //    "9h", "10.5", "-2", "83%" and "PHP 1,200" all compare numerically.
+  //  • **The control is a real `<button>`**, injected into the th rather than making the th clickable
+  //    with `tabindex`. Keyboard-operable and announced for free; `aria-sort` on the th is what a
+  //    screen reader reads, so it is set on every change and REMOVED from the other columns.
+  //
+  // It sorts the DOM rows in place and does not re-fetch, so it composes with whatever filters the
+  // page already applied — and a re-render simply calls it again.
+  const SORT_UNKNOWN = /^(—|-|–|n\/a|)$/i;
+  function sortTable(table, opts) {
+    if (!table) return;
+    const o = opts || {};
+    const heads = qsa("thead th.sortable", table);
+    if (!heads.length) return;
+
+    heads.forEach((th, col) => {
+      // Idempotent: a page that re-renders its table calls this again on fresh nodes, but a page that
+      // calls it twice on the SAME node must not end up with two buttons or two handlers.
+      if (th.querySelector(".th-sort")) return;
+      const label = th.innerHTML;
+      th.innerHTML = `<button type="button" class="th-sort"><span>${label}</span><span class="th-arrow" aria-hidden="true"></span></button>`;
+      th.querySelector(".th-sort").onclick = () => {
+        // Third click does NOT return to "unsorted": there is no stored original order once rows have
+        // been moved, so pretending to restore it would be a lie. asc <-> desc only.
+        const dir = th.getAttribute("aria-sort") === "ascending" ? "descending" : "ascending";
+        heads.forEach((h) => {
+          if (h !== th) { h.removeAttribute("aria-sort"); const a = h.querySelector(".th-arrow"); if (a) a.textContent = ""; }
+        });
+        th.setAttribute("aria-sort", dir);
+        th.querySelector(".th-arrow").textContent = dir === "ascending" ? "▲" : "▼";
+        applySort(table, col, dir, o);
+      };
+    });
+  }
+
+  function cellKey(row, col, o) {
+    const cells = row.children;
+    const cell = cells[col];
+    if (!cell) return { unknown: true };
+    // An explicit `data-sort` wins, so a caller can sort a formatted cell by its real value — a date
+    // rendered "Aug 17" sorts correctly only if the ISO string comes along.
+    const raw = (cell.getAttribute("data-sort") || cell.textContent || "").trim();
+    if (SORT_UNKNOWN.test(raw)) return { unknown: true };
+    if (!o.text) {
+      // Strip thousands separators and a leading currency/label prefix, then require what is LEFT to be
+      // a complete number with at most a short trailing unit.
+      //
+      // 🔴 THE `$` ANCHOR IS THE WHOLE POINT, and an ISO DATE is why. A permissive
+      // `parseFloat(raw)` "succeeds" on "2026-08-02" and returns 2026 — so every date in a month
+      // compared EQUAL, ties kept their original order, and sorting a date column did nothing at all
+      // while looking like it worked. That is precisely the `data-sort` value Attendance and Leave
+      // pass (found 2026-08-17 by ui.test.js). Anchored, "2026-08-02" has digits after an internal
+      // "-" and fails to match, so it falls through to the text branch below — which is CORRECT for
+      // ISO, because `YYYY-MM-DD` sorts chronologically as text. A negative like "-2h" still matches,
+      // because its "-" is leading.
+      const cleaned = raw.replace(/[, ]/g, "").replace(/^[^\d.+-]+/, "");
+      if (/^[+-]?\d*\.?\d+[a-z%°]{0,3}$/i.test(cleaned)) {
+        const n = parseFloat(cleaned);
+        if (!Number.isNaN(n)) return { num: n };
+      }
+    }
+    return { str: raw.toLowerCase() };
+  }
+
+  function applySort(table, col, dir, o) {
+    const body = table.tBodies[0];
+    if (!body) return;
+    const rows = Array.from(body.rows).filter((r) => r.children.length > col);
+    const mul = dir === "ascending" ? 1 : -1;
+    rows.sort((ra, rb) => {
+      const a = cellKey(ra, col, o), b = cellKey(rb, col, o);
+      // 🔴 Unknown always sinks, regardless of direction — NOT multiplied by `mul`. That is the whole
+      // point: reversing the sort must not float an outage to the top.
+      if (a.unknown && b.unknown) return 0;
+      if (a.unknown) return 1;
+      if (b.unknown) return -1;
+      if ("num" in a && "num" in b) return (a.num - b.num) * mul;
+      return String(a.str ?? a.num).localeCompare(String(b.str ?? b.num)) * mul;
+    });
+    // One reflow, not one per row.
+    const frag = document.createDocumentFragment();
+    rows.forEach((r) => frag.appendChild(r));
+    body.appendChild(frag);
+  }
+
   const initials = (name) => (String(name || "?").split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("") || "?").toUpperCase();
   // A photo when the user has one (all serialized users carry profile_pic_url), else the initials
   // chip. This single helper feeds every avatar on every page, so a photo shows everywhere at once.
@@ -395,22 +504,103 @@
   //   • Esc closes the TOP modal only, via ONE document listener held for as long as the stack is
   //     non-empty. The old code added a listener per modal that removed itself only if Escape was
   //     actually pressed, so every dialog closed by a button leaked one for the page's lifetime.
-  //   • `id="modal-x"` is per-overlay and therefore NO LONGER UNIQUE while a stack is open.
-  //     Scope any lookup of it to the `root` this returns; a bare `qs("#modal-x")` finds the
-  //     BOTTOM one.
+  //   • NOTHING inside a stacked dialog may be found by `id` — ids are not unique while a stack is
+  //     open, so a document-wide lookup finds the BOTTOM one. Scope every query to the `root` this
+  //     returns (`.modal-body` from `m.root`, never `document`). And scoping alone is not enough for
+  //     an ID: this is why the ✕'s own `id="modal-x"` was REMOVED in 2026-08-17 — see the note on
+  //     `titleId` below for what a scoped `querySelector("#dup")` is entitled to do instead.
   const modalStack = [];
   let modalKeyHandler = null;
+  let modalSeq = 0;
+
+  // 🔴 EVERYTHING BELOW THIS LINE IS THE DIALOG A11Y CONTRACT (added 2026-08-17).
+  //
+  // `initCommandPalette` further down this file has always done this correctly — `role="dialog"`,
+  // `aria-modal`, initial focus, focus restore. `modal()` had NONE of it, which is the app's shared
+  // dialog used by every page and nested FIVE DEEP by the task board. So a keyboard user could open
+  // a task, press Tab, and walk straight out of the dialog into the page behind it while the overlay
+  // still covered the screen — reading and operating controls they could not see. Esc closing the
+  // top modal was the only thing that made this survivable.
+  //
+  // This lifts the palette's pattern into the shared helper. It is deliberately NOT a new mechanism.
+
+  // Everything a keyboard can land on. `:not([disabled])` is load-bearing: this board renders
+  // genuinely `disabled` controls (a non-delegator's support picker renders colleagues
+  // `selected disabled`), and a trap whose boundary is a dead control cannot be escaped forwards.
+  const FOCUSABLE = [
+    "a[href]", "button:not([disabled])", "input:not([disabled]):not([type=hidden])",
+    "select:not([disabled])", "textarea:not([disabled])", "summary",
+    '[tabindex]:not([tabindex="-1"])',
+  ].join(",");
+
+  // `offsetParent === null` drops anything inside a `[hidden]` row or a shut `<details>` — the form
+  // has both (`.tf-row[hidden]`, the rare-fields block), and a trap that counts invisible controls
+  // silently eats Tab presses on the way past them.
+  function focusablesIn(root) {
+    return qsa(FOCUSABLE, root).filter((el) => el.offsetParent !== null);
+  }
+
+  // 🔴 THE COMMAND PALETTE CAN OPEN OVER A MODAL, and when it does it is the top layer — not us.
+  // `Ctrl`/`Cmd`+K is bound on `document` and is deliberately NOT gated on the modal stack, so the
+  // palette can appear above an open task card. Both this file's modal keydown handler and the
+  // palette's own are on `document`, so without this test they BOTH act on one keypress:
+  //   • Tab would be trapped into the dialog UNDERNEATH, yanking the caret out of the palette input;
+  //   • Escape would close the palette AND the modal beneath it, in one press.
+  // The second half was a pre-existing bug; the first would have been introduced by the focus trap.
+  // `#cmdk` carries `.open` only while it is showing, which is the cheapest honest test available.
+  function paletteOpen() {
+    const p = qs("#cmdk");
+    return !!p && p.classList.contains("open");
+  }
 
   function closeTopModal() {
+    if (paletteOpen()) return;
     const top = modalStack[modalStack.length - 1];
     if (top) top.close();
+  }
+
+  // Tab / Shift+Tab cycle within the TOP dialog only. Driven from the one shared keydown listener
+  // (see `modalKeyHandler`) rather than one per modal, for the same reason Escape is: a listener per
+  // layer is how the pre-2026-08-06 code leaked one per dialog for the page's lifetime.
+  function trapTab(e) {
+    // The palette owns the top layer when it is up — see `paletteOpen`. It has its own always-present
+    // input and needs no trap from us.
+    if (paletteOpen()) return;
+    const top = modalStack[modalStack.length - 1];
+    if (!top || !top.dialog) return;
+    const items = focusablesIn(top.dialog);
+    if (!items.length) { e.preventDefault(); top.dialog.focus(); return; }
+    const first = items[0], last = items[items.length - 1];
+    // If focus has escaped the dialog entirely — a stray programmatic focus, or the browser starting
+    // a Tab cycle from <body> — pull it back to the appropriate end rather than letting it out.
+    if (!top.dialog.contains(document.activeElement)) {
+      e.preventDefault(); (e.shiftKey ? last : first).focus(); return;
+    }
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
   }
 
   function modal({ title, body, footer, wide, drawer, onClose }) {
     const ov = document.createElement("div");
     ov.className = "overlay" + (drawer ? " drawer-ov" : "");
-    ov.innerHTML = `<div class="modal ${wide ? "wide" : ""}${drawer ? " as-drawer" : ""}">
-      <div class="modal-head"><h3>${esc(title)}</h3><button type="button" class="x-close" id="modal-x" aria-label="Close">${ICON.x}</button></div>
+    // 🔴 A per-overlay id — and the close button lost its id entirely (2026-08-17).
+    //
+    // `aria-labelledby` CANNOT point at a duplicated id: with a stack open it resolves to the BOTTOM
+    // dialog's title, so every dialog would announce itself as the first one. Hence the counter.
+    //
+    // That investigation turned up a live fragility in the ✕ binding, which was `qs("#modal-x", ov)`.
+    // Scoping to `ov` was the right instinct (it is what README §Gotchas tells you to do) but it was
+    // resting on DUPLICATE ids existing in the document at all — invalid HTML, and a scoped
+    // `querySelector("#dup")` is free to consult the document's id map and answer NULL because the
+    // first match lives in another subtree. jsdom does exactly that, so opening a SECOND dialog threw
+    // `Cannot set properties of null` and the ✕ was wired to nothing. Rather than scope harder, the
+    // duplicate is gone: the head's close button is found by position and held by reference.
+    const titleId = "modal-title-" + (++modalSeq);
+    // `tabindex="-1"` makes the dialog itself focusable as a fallback target (a body with no
+    // controls, e.g. a plain message), without putting it in the Tab order.
+    ov.innerHTML = `<div class="modal ${wide ? "wide" : ""}${drawer ? " as-drawer" : ""}"
+        role="dialog" aria-modal="true" aria-labelledby="${titleId}" tabindex="-1">
+      <div class="modal-head"><h3 id="${titleId}">${esc(title)}</h3><button type="button" class="x-close" aria-label="Close">${ICON.x}</button></div>
       <div class="modal-body">${body}</div>
       ${footer ? `<div class="modal-foot">${footer}</div>` : ""}</div>`;
     document.body.appendChild(ov);
@@ -420,8 +610,18 @@
     // Tuck the coach FAB away while anything is open so it can't sit over the footer buttons.
     const coachFab = qs("#coach-fab"); if (coachFab) coachFab.classList.add("hidden");
 
+    const dialog = qs(".modal", ov);
+    // Scoped to `.modal-head` on purpose: a CALLER may render its own `.x-close` controls inside the
+    // body (gym.js's routine editor draws one per exercise and per set), and "the dialog's close
+    // button" must never resolve to one of those. Held by reference from here on.
+    const closeBtn = qs(".modal-head .x-close", ov);
+    // Captured BEFORE anything is focused, and held per-entry rather than in one shared slot — that
+    // is what makes restore stack-aware: closing a nested confirm returns you to the control inside
+    // the task card underneath, not to whatever opened the bottom of the stack.
+    const lastFocus = document.activeElement;
+
     let closed = false;
-    const entry = { close: () => close() };
+    const entry = { close: () => close(), dialog };
     function close() {
       // Double-close is ordinary here: a caller's own button handler runs alongside the ✕ and the
       // backdrop, and `act()` on the board closes a modal that a failed request may already have.
@@ -436,16 +636,43 @@
         const f = qs("#coach-fab"); if (f) f.classList.remove("hidden");
         if (modalKeyHandler) { document.removeEventListener("keydown", modalKeyHandler); modalKeyHandler = null; }
       }
+      // Put focus back where it came from. Guarded three ways: the element may have been REMOVED by
+      // the very save this dialog performed (a re-rendered board row), in which case focusing it does
+      // nothing and would leave focus on <body> — so fall back to the dialog now under us, if any.
+      if (lastFocus && lastFocus.focus && document.contains(lastFocus)) lastFocus.focus();
+      else {
+        const under = modalStack[modalStack.length - 1];
+        if (under && under.dialog) under.dialog.focus();
+      }
       if (onClose) onClose();
     }
 
-    qs("#modal-x", ov).onclick = close;
+    closeBtn.onclick = close;
     ov.onclick = (e) => { if (e.target === ov) close(); };
     modalStack.push(entry);
     if (!modalKeyHandler) {
-      modalKeyHandler = (e) => { if (e.key === "Escape") closeTopModal(); };
+      modalKeyHandler = (e) => {
+        if (e.key === "Escape") closeTopModal();
+        else if (e.key === "Tab") trapTab(e);
+      };
       document.addEventListener("keydown", modalKeyHandler);
     }
+
+    // 🔴 SYNCHRONOUS, and that is the whole reason it works. Several callers focus their own field
+    // right after `modal()` returns (`#t-name` on the task form, `#a-title`, manage.js's generated
+    // password, growth.js's entry box). Because this runs first, their explicit choice overrides this
+    // default — a `requestAnimationFrame` here (which is what the command palette does, correctly,
+    // for its own always-present input) would fire AFTER them and STEAL focus back.
+    // Never LAND on the ✕: it is first in DOM order (the head precedes the body), and opening a
+    // dialog with the keyboard already on "discard this" is the one default worth avoiding. Compared
+    // by reference, not by class — a caller's own `.x-close` buttons in the body are ordinary
+    // controls and may legitimately be the first thing to focus.
+    // 🔴 It is only skipped for the INITIAL landing. The ✕ stays in the Tab cycle (`trapTab` reads
+    // `focusablesIn` unfiltered), because making it keyboard-unreachable is the exact bug this whole
+    // change exists to fix.
+    const initial = focusablesIn(dialog).filter((el) => el !== closeBtn);
+    (initial[0] || dialog).focus();
+
     return { close, root: ov };
   }
 
@@ -489,15 +716,22 @@
         <header class="top">
           <button class="iconbtn hamburger" id="ham" aria-label="Menu">${ICON.menu}</button>
           <button class="cmdk-trigger" id="cmdk-trigger" title="Search (Ctrl K)" aria-label="Open command palette">${ICON.search}<span>Search anything</span><kbd>Ctrl K</kbd></button>
-          <div class="theme-toggle" id="theme-toggle">
-            <button data-set-theme="light" title="Light mode">${ICON.sun}</button>
-            <button data-set-theme="dark" title="Dark mode">${ICON.moon}</button>
+          ${/* `role="group"` + a label, because these two buttons only mean something as a PAIR — read
+                one at a time they are "Light mode" / "Dark mode" with no hint that they are one
+                control. `aria-pressed` is set alongside the `.on` class by `setTheme`, so the current
+                theme is announced rather than only coloured in. */""}
+          <div class="theme-toggle" id="theme-toggle" role="group" aria-label="Colour theme">
+            <button type="button" data-set-theme="light" title="Light mode" aria-label="Light mode">${ICON.sun}</button>
+            <button type="button" data-set-theme="dark" title="Dark mode" aria-label="Dark mode">${ICON.moon}</button>
           </div>
           <div style="position:relative">
             <button class="iconbtn" id="bell" aria-label="Notifications">${ICON.bell}<span class="bdot" id="bell-count" style="display:none"></span></button>
             <div class="notif-panel" id="notif-panel"></div>
           </div>
-          <button class="iconbtn" id="logout" title="Log out">${ICON.logout}</button>
+          ${/* `title` alone WAS the accessible name here, which works but is the weakest source and is
+                now empty of content entirely: the icon inside carries `aria-hidden` (see `P`), so
+                without an explicit label this button would announce as nothing at all. */""}
+          <button class="iconbtn" id="logout" title="Log out" aria-label="Log out">${ICON.logout}</button>
           <div class="sub" id="top-sub" hidden></div>
         </header>
         <div class="ctxbar" id="ctxbar" hidden></div>
@@ -902,7 +1136,13 @@
   function setTheme(t) {
     document.documentElement.setAttribute("data-theme", t);
     try { localStorage.setItem(THEME_KEY, t); } catch (e) { /* private mode */ }
-    qsa("#theme-toggle button").forEach((b) => b.classList.toggle("on", b.dataset.setTheme === t));
+    // `.on` is the colour; `aria-pressed` is the same fact for anyone who cannot see it. Set together
+    // here so they can never disagree — the toggle's whole state lived in a class until 2026-08-17.
+    qsa("#theme-toggle button").forEach((b) => {
+      const on = b.dataset.setTheme === t;
+      b.classList.toggle("on", on);
+      b.setAttribute("aria-pressed", on ? "true" : "false");
+    });
     applyBrandLogo();
     themeEmbeds(t);
   }
@@ -1186,7 +1426,7 @@
   }
 
   const Sentinel = {
-    api, toast, skeleton, loadErr, modal, esc, qs, qsa, ICON, avatar, initials, uploadAvatar, removeAvatar,
+    api, toast, skeleton, loadErr, sortTable, modal, esc, qs, qsa, ICON, avatar, initials, uploadAvatar, removeAvatar,
     engineUrl, theme: currentTheme,
     fmtTime, fmtDate, fmtDateFull, timeAgo, priorityDot, labelPills, statusPill,
     roleRank: ROLE_RANK,

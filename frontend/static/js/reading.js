@@ -12,6 +12,7 @@ window.pageInit = async (S) => {
 
   let items = [];   // reading canon
   let ac = {};      // /api/academy/courses (programs + engine urls)
+  const failed = []; // which of the two reads faulted this load — see load() and render()
 
   const growthPrograms = () => (ac.programs || []).filter((p) => (p.category || "career") === "growth");
   const ringColor = (p) => (p >= 80 ? "#2E7D32" : p >= 50 ? "#C9A227" : "#B3261E");
@@ -22,9 +23,22 @@ window.pageInit = async (S) => {
 
   async function load() {
     view.innerHTML = S.skeleton ? S.skeleton({ rows: 5 }) : "Loading…";
+    // 🔴 "No books" and "couldn't load your books" are different sentences (2026-08-17). Both reads used
+    // to degrade to an empty shape, so an outage rendered a canon somebody had actually filled as an
+    // empty-state inviting them to add their first book. The two halves stay INDEPENDENT — the Academy
+    // programs strip is a bridge to the Mastery Engine and must not be able to blank the reading list —
+    // but each failure is now named. `failed` is read by render(); see the notice there.
+    failed.length = 0;
+    const pull = async (url, label, fallback) => {
+      try { return await api(url); }
+      catch (e) {
+        if (e.status !== 401 && e.status !== 403) failed.push(label);
+        return fallback;
+      }
+    };
     const [reading, courses] = await Promise.all([
-      api("/api/development/reading").catch(() => ({ items: [] })),
-      api("/api/academy/courses").catch(() => ({ programs: [], engineUrl: "" })),
+      pull("/api/development/reading", "Your reading list", { items: [] }),
+      pull("/api/academy/courses", "Study programs", { programs: [], engineUrl: "" }),
     ]);
     items = reading.items || [];
     ac = courses || {};
@@ -59,7 +73,13 @@ window.pageInit = async (S) => {
 
   function render() {
     const progs = growthPrograms();
-    view.innerHTML = `<div class="dev">
+    // Named at the top of the page, above the empty state it would otherwise be mistaken for.
+    const warn = failed.length
+      ? `<div class="notice warn"><b>Some of this page didn't load.</b>
+           ${esc(failed.join(" and "))} ${failed.length > 1 ? "are" : "is"} missing — what you see below is
+           incomplete, not empty. Refresh to try again.</div>`
+      : "";
+    view.innerHTML = `<div class="dev">${warn}
       <style>
         .rp-h { font-family:var(--mono); font-size:11px; text-transform:uppercase; letter-spacing:.15em; color:var(--green-d); font-weight:700; margin:0 0 12px; }
         .rp-progs { display:grid; gap:12px; margin-bottom:26px; max-width:900px; }

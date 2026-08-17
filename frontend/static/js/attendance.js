@@ -20,8 +20,14 @@ window.pageInit = async (S) => {
     S.qsa("#tabs button").forEach((x) => x.classList.remove("active")); b.classList.add("active"); render(b.dataset.tab);
   });
 
+  // The department filter's option source. A bare `catch {}` left the picker with only "All teams", so
+  // a manager saw a filter that could not filter and no reason why. Non-fatal — the summary table is
+  // the point of the page — but say so. A 403 is the normal answer for a role without team scope.
   let teams = [];
-  if (isMgr) { try { teams = await S.api("/api/teams"); } catch (e) {} }
+  if (isMgr) {
+    try { teams = await S.api("/api/teams"); }
+    catch (e) { if (e.status !== 401 && e.status !== 403) S.toast("Departments couldn't be loaded — the team filter is empty", "err"); }
+  }
 
   async function render(tab) {
     tabc.innerHTML = '<div class="skeleton" style="height:200px"></div>';
@@ -38,7 +44,17 @@ window.pageInit = async (S) => {
     </div><div id="sum-table"></div>`;
     const cols = 7 + (isSA ? 1 : 0);
     const load = async () => {
-      const q = new URLSearchParams({ from: S.qs("#f-from").value, to: S.qs("#f-to").value });
+      // Same guard as reports.js: From > To makes the server answer zero rows, which rendered "No
+      // records for this range." — a sentence about the DATA when the fault is in the question, and on
+      // an ATTENDANCE page that reads as "nobody clocked in", which is alarming and false. ISO
+      // `YYYY-MM-DD` from <input type="date"> sorts chronologically as text, so this needs no parsing.
+      const f = S.qs("#f-from").value, t = S.qs("#f-to").value;
+      if (f && t && f > t) {
+        S.qs("#sum-table").innerHTML = `<div class="notice warn"><b>That date range is backwards.</b>
+          “From” (${S.esc(f)}) is after “To” (${S.esc(t)}), so there is nothing to show. Swap them.</div>`;
+        return;
+      }
+      const q = new URLSearchParams({ from: f, to: t });
       if (S.qs("#f-team").value) q.set("team_id", S.qs("#f-team").value);
       // `render(tab)` puts a skeleton in #tabc, but renderSummary has already replaced that with the
       // filter bar plus an EMPTY #sum-table by the time this runs — so without these two lines a
@@ -48,17 +64,26 @@ window.pageInit = async (S) => {
       let rows;
       try { rows = await S.api("/api/attendance/summary?" + q); }
       catch (e) { S.loadErr("#sum-table", e, load); return; }
-      S.qs("#sum-table").innerHTML = `<div class="table-wrap"><table>
-        <thead><tr><th>Employee</th><th>Date</th><th>In</th><th>Out</th><th>Hours</th><th>Status</th><th>Handover</th>${isSA ? "<th></th>" : ""}</tr></thead>
+      S.qs("#sum-table").innerHTML = `<div class="table-wrap tall"><table>
+        <thead><tr><th class="sortable">Employee</th><th class="sortable">Date</th><th class="sortable">In</th><th class="sortable">Out</th><th class="sortable">Hours</th><th class="sortable">Status</th><th class="sortable">Handover</th>${isSA ? "<th></th>" : ""}</tr></thead>
         <tbody>${rows.length ? rows.map((s, i) => `<tr>
           <td class="t-name">${S.avatar(s.user, "sm")}${S.esc(s.user ? s.user.name : "?")}</td>
-          <td>${S.fmtDate(s.date + "T00:00:00+08:00")}</td>
-          <td>${S.fmtTime(s.clock_in)}</td><td>${S.fmtTime(s.clock_out)}</td>
+          ${/* 🔴 `data-sort` carries the RAW value for every cell whose display form does not sort:
+                the date prints "Aug 17" (alphabetical by month name), and the times print "9:05 AM",
+                which as text puts 10:00 before 9:05. An empty punch stays empty so `sortTable` treats
+                it as UNKNOWN and sinks it in both directions — a missing clock-out is not midnight. */""}
+          <td data-sort="${s.date}">${S.fmtDate(s.date + "T00:00:00+08:00")}</td>
+          <td data-sort="${s.clock_in || ""}">${S.fmtTime(s.clock_in)}</td>
+          <td data-sort="${s.clock_out || ""}">${S.fmtTime(s.clock_out)}</td>
           <td>${s.total_work_hours}h</td>
           <td>${S.statusPill(s.status)}</td>
           <td class="sub" style="max-width:220px">${S.esc(s.handover_note || "—")}</td>
           ${isSA ? `<td style="text-align:right"><button class="btn sm ghost" data-edit="${i}">Edit</button></td>` : ""}</tr>`).join("") : `<tr><td colspan="${cols}"><div class="empty">No records for this range.</div></td></tr>`}</tbody></table></div>`;
       if (isSA) S.qsa("#sum-table [data-edit]").forEach((b) => b.onclick = () => openEdit(rows[+b.dataset.edit], load));
+      // 🔴 Sorting REORDERS the DOM rows, but `data-edit` is an INDEX into `rows` — which does not move.
+      // That is why the handler above reads `rows[+b.dataset.edit]` rather than the row's position, and
+      // why sorting cannot desync Edit from the record it opens. Don't switch it to a row index.
+      if (rows.length) S.sortTable(S.qs("#sum-table table"));
     };
     ["f-from", "f-to", "f-team"].forEach((id) => S.qs("#" + id).onchange = load);
     load();

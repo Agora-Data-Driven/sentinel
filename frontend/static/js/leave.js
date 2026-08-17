@@ -17,11 +17,14 @@ window.pageInit = async (S) => {
           <div class="k-val">${b.unlimited ? "∞" : b.remaining}</div>
           <div class="k-sub">${b.unlimited ? "unlimited · " + b.used + " used" : b.used + " used"}</div></div>`).join("")}</div>
       <div class="card"><div class="card-head"><h3>My requests</h3></div><div class="card-body">
-        ${mine.length ? `<div class="table-wrap" style="border:none"><table><thead><tr><th>Type</th><th>Dates</th><th>Days</th><th>Reason</th><th>Status</th></tr></thead>
+        ${mine.length ? `<div class="table-wrap" style="border:none"><table id="lv-mine"><thead><tr><th class="sortable">Type</th><th class="sortable">Dates</th><th class="sortable">Days</th><th class="sortable">Reason</th><th class="sortable">Status</th></tr></thead>
+          ${/* `data-sort` on Dates: the cell prints a "Aug 12 – Aug 17" RANGE, which as text sorts by
+                month name. The start date is what "sort by date" means here. */""}
           <tbody>${mine.map((r) => `<tr><td>${S.esc(r.leave_type)}</td>
-            <td>${S.fmtDate(r.start_date + "T00:00:00+08:00")} – ${S.fmtDate(r.end_date + "T00:00:00+08:00")}</td>
+            <td data-sort="${r.start_date}">${S.fmtDate(r.start_date + "T00:00:00+08:00")} – ${S.fmtDate(r.end_date + "T00:00:00+08:00")}</td>
             <td>${r.total_days}</td><td class="sub">${S.esc(r.reason)}</td><td>${S.statusPill(r.status)}</td></tr>`).join("")}</tbody></table></div>`
           : '<div class="empty">No leave requests yet.</div>'}</div></div>`;
+    S.sortTable(S.qs("#lv-mine"));
   }
 
   function requestForm() {

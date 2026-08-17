@@ -121,7 +121,9 @@ body {
   -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; text-rendering: optimizeLegibility;
   font-size: 14px; line-height: 1.5; color: var(--text);
   background: var(--canvas);
+  /* dvh + vh fallback — see the note on .app below. */
   min-height: 100vh;
+  min-height: 100dvh;
 }
 a { color: inherit; text-decoration: none; }
 h1,h2,h3,h4 { margin: 0; color: var(--ink); letter-spacing: -0.3px; }
@@ -129,12 +131,21 @@ h2 { letter-spacing: -0.6px; } h1 { letter-spacing: -0.5px; }
 .svg-ic { width: 20px; height: 20px; display: block; flex: none; }
 
 /* ---------- App shell ---------- */
-.app { display: grid; grid-template-columns: var(--sidebar-w) 1fr; min-height: 100vh; }
+/* 🔴 `dvh` WITH A `vh` FALLBACK, IN THAT ORDER (2026-08-17). On iOS/Android `100vh` is the viewport
+   with the URL bar RETRACTED — i.e. taller than what you can actually see — so a `height: 100vh`
+   sidebar had its own footer (user card, theme toggle, **Log out**) parked under the browser chrome,
+   unreachable on a phone. `dvh` is the *dynamic* viewport and resizes with the chrome.
+   The plain `vh` line stays first as the fallback: a browser that does not know `dvh` DISCARDS that
+   declaration and keeps this one, which is the whole point of writing both. Never delete the first
+   line "because the second one supersedes it" — that is what makes it a fallback. */
+.app { display: grid; grid-template-columns: var(--sidebar-w) 1fr; min-height: 100vh; min-height: 100dvh; }
 .side {
   background: var(--card);
   border-right: 1px solid var(--line);
   display: flex; flex-direction: column; gap: 6px; padding: 18px 14px;
-  position: sticky; top: 0; height: 100vh; z-index: 40;
+  position: sticky; top: 0; z-index: 40;
+  height: 100vh;
+  height: 100dvh;
 }
 /* Grouped flat-rail section labels (Workspace / Admin) */
 .navlabel { font-size: 10px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); padding: 14px 12px 6px; }
@@ -365,7 +376,14 @@ h2 { letter-spacing: -0.6px; } h1 { letter-spacing: -0.5px; }
 }
 .btn:hover { border-color: var(--line-strong); }
 .btn:active { transform: translateY(1px); }
-.btn:disabled { opacity: .5; cursor: not-allowed; }
+/* `:disabled` is a pseudo-class only <button>/<input> can match — an <a class="btn"> (the CSV exports
+   on Reports and Payroll) can never satisfy it, so it needs the class form to express the same state.
+   Both here so the two never drift.
+   🔴 The class only GREYS the control — what actually disables an anchor is REMOVING its href (which
+   also drops it out of the Tab order). Deliberately no `pointer-events: none` here: it would suppress
+   the hover that shows the `title`, and the reason living in that title is the whole of this repo's
+   "a control must never be able to only fail" pattern. */
+.btn:disabled, .btn.disabled { opacity: .5; cursor: not-allowed; }
 .btn .svg-ic { width: 16px; height: 16px; }
 /* Primary = the signature green pill with a soft glow */
 .btn.primary, .btn.success { background: var(--grad-green); border-color: transparent; color: #fff; box-shadow: var(--glow-green); }
@@ -452,10 +470,59 @@ h2 { letter-spacing: -0.6px; } h1 { letter-spacing: -0.5px; }
 
 /* ---------- Tables ---------- */
 .table-wrap { overflow-x: auto; border-radius: var(--radius); border: 1px solid var(--line); background: var(--card); }
+/* 🔴 `.tall` IS WHAT MAKES THE STICKY HEADER BELOW DO ANYTHING — and it is OPT-IN on purpose.
+   `position: sticky` resolves against the nearest scrollport. `overflow-x: auto` above already makes
+   this element one on BOTH axes (per spec, `visible` on one axis with a non-`visible` other computes
+   to `auto`), but with an unconstrained height the header has no room to travel — so sticky is a
+   harmless no-op until a height caps it. That is exactly why this is a separate class rather than a
+   `max-height` on `.table-wrap` itself: several `.table-wrap`s live INSIDE a modal, whose `.modal-body`
+   already scrolls, and capping them globally would put a second scrollbar inside the first.
+   70vh keeps a long table (People, Payroll, a 6-month Attendance range) reading as one object instead
+   of pushing the rest of the page off the bottom. `max-height`, so a three-row table still shrinks. */
+.table-wrap.tall { max-height: 70vh; }
 table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
-thead th { background: var(--input); color: var(--sub); font-weight: 700; text-align: left; padding: 11px 14px; white-space: nowrap; font-size: 12px; text-transform: uppercase; letter-spacing: .03em; border-bottom: 1px solid var(--line); }
-thead th.sortable { cursor: pointer; user-select: none; }
+thead th {
+  background: var(--input); color: var(--sub); font-weight: 700; text-align: left; padding: 11px 14px;
+  white-space: nowrap; font-size: 12px; text-transform: uppercase; letter-spacing: .03em;
+  border-bottom: 1px solid var(--line);
+  /* Scroll 200 rows of People and the column names used to be gone, so every cell became a guess.
+     🔴 `border-collapse: collapse` DROPS the borders of a sticky cell (the border belongs to the
+     collapsed grid, which does not travel with it), so the hairline under the header is redrawn as a
+     box-shadow — that DOES travel. Don't "simplify" it back to border-bottom. */
+  position: sticky; top: 0; z-index: 2;
+  box-shadow: inset 0 -1px 0 var(--line);
+}
+/* The sort control is a real <button> injected by `S.sortTable` (app.js), not a clickable <th>: it is
+   keyboard-operable and announced for free, where a th + tabindex is neither. It inherits everything
+   from the th so the header looks untouched until you hover it. */
+thead th.sortable { cursor: pointer; user-select: none; padding: 0; }
 thead th.sortable:hover { color: var(--ink); }
+thead th.sortable .th-sort {
+  display: flex; align-items: center; gap: 5px; width: 100%; padding: 11px 14px;
+  font: inherit; color: inherit; letter-spacing: inherit; text-transform: inherit;
+  background: none; border: none; cursor: pointer; text-align: left;
+}
+/* Reserve the arrow's width always, so sorting a column cannot shift every other header sideways. */
+thead th.sortable .th-arrow { flex: none; width: 8px; opacity: 0; font-size: 9px; line-height: 1; }
+/* Hover hints that the column CAN sort; the sorted column shows its arrow outright. Hover first so
+   the active state below wins when both apply. */
+thead th.sortable:hover .th-arrow { opacity: .45; }
+thead th[aria-sort] { color: var(--ink); }
+thead th[aria-sort] .th-arrow { opacity: 1; }
+
+/* 🔴 A sticky FIRST COLUMN for the wide rollups. `.monitor` (12+ columns) and `.tg-wrap` already
+   scrolled horizontally, which meant scrolling the person's NAME out of view — so the numbers you
+   were reading belonged to nobody. Only opt-in tables get it (`.table-sticky-1`): it costs a stacking
+   context per cell, and on a table that already fits it buys nothing. */
+.table-sticky-1 tbody th:first-child,
+.table-sticky-1 tbody td:first-child { position: sticky; left: 0; z-index: 1; background: var(--card); }
+.table-sticky-1 tbody tr:nth-child(even) td:first-child { background: var(--row-alt); }
+.table-sticky-1 tbody tr:hover td:first-child { background: var(--hover); }
+/* The corner cell overlaps both, so it needs to outrank the row cells AND the header row. */
+.table-sticky-1 thead th:first-child { left: 0; z-index: 3; }
+/* A hairline on the right edge marks where the frozen column ends once content slides under it. */
+.table-sticky-1 tbody td:first-child,
+.table-sticky-1 thead th:first-child { box-shadow: inset -1px 0 0 var(--line), inset 0 -1px 0 var(--line); }
 tbody td { padding: 11px 14px; border-bottom: 1px solid var(--line); vertical-align: middle; }
 tbody tr:nth-child(even) { background: var(--row-alt); }
 tbody tr:hover { background: var(--hover); }
@@ -536,9 +603,17 @@ textarea { resize: vertical; min-height: 78px; }
 .modal {
   background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow-lg);
   width: 100%; max-width: 520px;
-  max-height: calc(100vh - 80px); display: flex; flex-direction: column;
+  /* dvh so a phone's URL bar cannot push the dialog's own footer buttons off-screen. */
+  max-height: calc(100vh - 80px);
+  max-height: calc(100dvh - 80px);
+  display: flex; flex-direction: column;
 }
 .modal.wide { max-width: 920px; }
+/* The dialog carries `tabindex="-1"` so `modal()` can focus it when the body holds no control of its
+   own (a plain message). Tab can never reach it, so the only way it takes focus is programmatically —
+   which does not match `:focus-visible` — but state it explicitly rather than relying on that, so no
+   UA ring is ever drawn around the whole dialog. */
+.modal:focus { outline: none; }
 .modal-head, .modal-foot { flex: none; }
 /* A long list INSIDE a modal body scrolls on its own, so anything above it (a search box) stays
    pinned while the list moves under it. */
@@ -564,9 +639,12 @@ textarea { resize: vertical; min-height: 78px; }
 /* Right-side slide-in drawer (task detail). Anchored right, full height, scrolls internally. */
 .overlay.drawer-ov { justify-content: flex-end; align-items: stretch; padding: 0; overflow: hidden; }
 .modal.as-drawer {
-  max-width: min(560px, 96vw); width: min(560px, 96vw); height: 100vh; border-radius: 0;
+  max-width: min(560px, 96vw); width: min(560px, 96vw); border-radius: 0;
+  height: 100vh;
+  height: 100dvh;
   /* Overrides the base cap above — a drawer is deliberately full-height, edge to edge. */
   max-height: 100vh;
+  max-height: 100dvh;
   display: flex; flex-direction: column; box-shadow: -8px 0 40px rgba(16,24,40,.18);
   animation: drawer-in .2s ease-out;
 }
@@ -689,7 +767,25 @@ textarea { resize: vertical; min-height: 78px; }
    box, so a column free to widen never truncates anything and never reveals why it grew.
    `max-width` is the belt to that braces — redundant while grow is 0, kept because this bug class
    has already shipped once and the pair states the intent that neither line states alone. */
-.col { flex: 0 0 var(--col-w); min-width: 0; max-width: var(--col-w); background: var(--canvas); border: 1px solid var(--line); border-radius: var(--radius); display: flex; flex-direction: column; max-height: calc(100vh - 230px); }
+/* 🔴 `--board-top` REPLACES A HARDCODED 230px (2026-08-17). That number encoded "topbar + page head +
+   the toolbar's two rows" as a constant — and the toolbar is *deliberately* two rows that WRAP at
+   narrow widths (see taskboard.js), so the moment it wrapped the constant was wrong and the columns
+   ran past the fold with their internal scroll misaligned. The token is overridden per breakpoint
+   below instead of guessed once. `dvh` for the same reason as .app: on a phone `vh` is the URL-bar
+   -retracted height, so the last card in a column sat under the browser chrome.
+   `min-height` keeps a column usable on a short window rather than collapsing to a sliver. */
+.col {
+  flex: 0 0 var(--col-w); min-width: 0; max-width: var(--col-w);
+  background: var(--canvas); border: 1px solid var(--line); border-radius: var(--radius);
+  display: flex; flex-direction: column;
+  --board-top: 230px;
+  max-height: calc(100vh - var(--board-top));
+  max-height: calc(100dvh - var(--board-top));
+  min-height: 180px;
+}
+/* The toolbar wraps below these widths, so the board starts further down. */
+@media (max-width: 900px) { .col { --board-top: 300px; } }
+@media (max-width: 640px) { .col { --board-top: 360px; } }
 .col-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; position: sticky; top: 0; }
 .col-head .t { font-weight: 800; font-size: 13px; color: var(--ink); }
 .col-head .c { font-size: 11px; font-weight: 800; color: var(--sub); background: #fff; border: 1px solid var(--line); border-radius: var(--pill); padding: 1px 8px; }

@@ -300,7 +300,11 @@ async function mountTeam(S, root, opts) {
       ${payload.generated_at ? `Measured ${S.timeAgo(payload.generated_at)}.` : ""}</div>`);
 
     return `${notes.join("")}
-      <div class="tg-wrap"><table class="tg-tbl"><thead>${head}</thead>
+      ${/* `table-sticky-1` freezes the NAME column (styles.css). This table is 11+ columns wide and
+            `.tg-wrap` scrolls horizontally, so on any normal window scrolling right took the person's
+            name off screen — leaving four dimension scores, a pace band and a velocity belonging to
+            nobody. Opt-in per table because each frozen cell costs a stacking context. */""}
+      <div class="tg-wrap"><table class="tg-tbl table-sticky-1"><thead>${head}</thead>
         <tbody>${rows.length ? rows.map(rowHtml).join("")
           : `<tr><td colspan="${G.DIMS.length + 7}"><div class="empty">Nobody matches that filter.</div></td></tr>`}</tbody>
       </table></div>`;
