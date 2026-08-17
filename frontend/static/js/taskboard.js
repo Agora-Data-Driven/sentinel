@@ -1677,7 +1677,11 @@ window.TaskBoard = {
         ? `<span class="pill grey" title="Approved leave in the next fortnight">${r.leave_days_ahead}d off soon</span>`
         : "");
 
-    board.innerHTML = `<table class="mon-tbl">
+    // `table-sticky-1` freezes the PERSON column (styles.css). The Monitor gained four columns in
+    // 2026-08-06 and `.monitor` scrolls horizontally, so reading Cycle or On-time meant scrolling the
+    // name away — and this is the table a manager STAFFS from, where "whose row is this?" is the one
+    // question that must never need a scroll back.
+    board.innerHTML = `<table class="mon-tbl table-sticky-1">
       ${/* 🔴 PLAIN HEADERS (2026-08-14). These read "Load / Workload / Sitting / Cycle / On time /
             Done · 7d" — six pieces of analytics jargon, three of which ("Load" vs "Workload" vs
             "Open") sound like the same thing and are not: one is a RELATIVE BAND, one is a BAR of

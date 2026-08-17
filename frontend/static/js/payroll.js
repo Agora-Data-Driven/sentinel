@@ -68,22 +68,26 @@ window.pageInit = async (S) => {
     if (!rows.length) { body.innerHTML = `<div class="empty">No active employees to pay.</div>`; return; }
     body.innerHTML = `
       <div class="lead" style="margin-bottom:8px">${workingDays} working days this month · unpaid leave and absences are deducted at the daily rate.</div>
-      <div class="table-wrap"><table>
+      <div class="table-wrap tall"><table>
         <thead><tr>
-          <th>Employee</th>
-          <th class="num">Monthly salary</th>
-          <th class="num">Present</th>
-          <th class="num">Absent</th>
-          <th class="num">Unpaid</th>
-          <th class="num">Bonus</th>
-          <th class="num">Deductions</th>
-          <th class="num">Net pay</th>
+          <th class="sortable">Employee</th>
+          <th class="sortable num">Monthly salary</th>
+          <th class="sortable num">Present</th>
+          <th class="sortable num">Absent</th>
+          <th class="sortable num">Unpaid</th>
+          <th class="sortable num">Bonus</th>
+          <th class="sortable num">Deductions</th>
+          <th class="sortable num">Net pay</th>
+          ${/* Actions is not sortable — there is nothing to order by. */""}
           <th style="text-align:right">Actions</th>
         </tr></thead>
         <tbody>${rows.map((r) => {
           const ded = (r.deduction || 0) + (r.absence_deduction || 0);
           return `<tr class="${r.finalized ? "lock" : ""}">
-            <td>${S.avatar(r)}<div style="display:inline-block;vertical-align:middle;margin-left:8px">
+            ${/* `data-sort` on the name cell: its text is "Name Final email" concatenated, so sorting
+                  on textContent would order by name then silently by the "Final" pill. A salary of
+                  "—" is genuinely unknown and sinks in both directions on its own. */""}
+            <td data-sort="${S.esc(r.name || "")}">${S.avatar(r)}<div style="display:inline-block;vertical-align:middle;margin-left:8px">
               <div style="font-weight:600">${S.esc(r.name)}${r.finalized ? ' <span class="pill green" title="Finalized, locked">Final</span>' : ""}</div>
               <div class="sub" style="font-size:12px;color:var(--muted)">${S.esc(r.email || "")}</div></div></td>
             <td class="num">${r.monthly_salary ? peso(r.monthly_salary) : '<span style="color:var(--muted)">—</span>'}</td>
@@ -97,7 +101,10 @@ window.pageInit = async (S) => {
               <button class="btn sm ghost" data-edit="${r.user_id}">Edit</button>
             </td></tr>`;
         }).join("")}</tbody></table></div>`;
-    S.qsa("[data-edit]").forEach((b) => b.onclick = () => openEdit(rows.find((r) => r.user_id == b.dataset.edit)));
+    // Scoped, and keyed by `user_id` rather than row position — so sorting cannot point Edit at the
+    // wrong person.
+    S.qsa("#pr-body [data-edit]").forEach((b) => b.onclick = () => openEdit(rows.find((r) => r.user_id == b.dataset.edit)));
+    S.sortTable(S.qs("#pr-body table"));
   }
 
   function openEdit(r) {

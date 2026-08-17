@@ -9,14 +9,33 @@ window.pageInit = async (S) => {
   }
 
   // Dynamic option sources for select fields.
-  const [teams, vocab, shiftTemplates] = await Promise.all([
-    S.api("/api/teams"), S.api("/api/vocab"), S.api("/api/manage/shift-templates").catch(() => []),
-  ]);
+  // 🔴 A FAILED OPTION SOURCE IS NOT AN EMPTY ONE (2026-08-17). This used to end in
+  // `.catch(() => [])`, so a 500 on shift-templates rendered the Shift picker with NO OPTIONS — which
+  // reads as "this company has no shift templates", and the operator's next move is to create a
+  // duplicate of one that already exists. Whether a shift is late is decided by
+  // `Team.shift_template_id`, so a wrong pick here has consequences well beyond this form.
+  // Still non-fatal — the rest of Manage must open — but the failure is now reported once, loudly,
+  // instead of being disguised as an empty list.
+  let shiftTemplates = [];
+  let shiftTemplatesFailed = false;
+  const [teams, vocab] = await Promise.all([S.api("/api/teams"), S.api("/api/vocab")]);
+  try { shiftTemplates = await S.api("/api/manage/shift-templates"); }
+  catch (e) {
+    // A 403 is this endpoint's normal answer for a role that cannot manage shifts — not a fault.
+    if (e.status !== 401 && e.status !== 403) {
+      shiftTemplatesFailed = true;
+      S.toast("Shift templates couldn't be loaded — the Shift picker will be empty", "err");
+    }
+  }
   const OPTS = {
     roles: vocab.roles,
     teams: teams.map((t) => ({ value: t.id, label: t.name })),
     teamNames: teams.map((t) => ({ value: t.name, label: t.name })),  // service dept is stored by name
-    shiftTemplates: shiftTemplates.map((t) => ({ value: t.id, label: `${t.name} (${t.start}–${t.end})${t.is_default ? " · company default" : ""}` })),
+    // The toast above is transient; this puts the reason IN the control, where somebody who opens the
+    // form five minutes later still sees it instead of an empty picker they'd read as "none exist".
+    shiftTemplates: shiftTemplatesFailed
+      ? [{ value: "", label: "— couldn't load shift templates · reopen Manage to retry —" }]
+      : shiftTemplates.map((t) => ({ value: t.id, label: `${t.name} (${t.start}–${t.end})${t.is_default ? " · company default" : ""}` })),
   };
 
   const ENTITIES = {

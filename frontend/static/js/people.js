@@ -40,8 +40,8 @@ window.pageInit = async (S) => {
     let rows;
     try { rows = await S.api("/api/people?" + q); }
     catch (e) { S.loadErr("#tbl", e, load); return; }
-    S.qs("#tbl").innerHTML = `<div class="table-wrap"><table>
-      <thead><tr><th>Name</th><th>Email</th><th>Department</th><th>Role</th><th>Status</th><th></th></tr></thead>
+    S.qs("#tbl").innerHTML = `<div class="table-wrap tall"><table>
+      <thead><tr><th class="sortable">Name</th><th class="sortable">Email</th><th class="sortable">Department</th><th class="sortable">Role</th><th class="sortable">Status</th><th></th></tr></thead>
       <tbody>${rows.length ? rows.map((u) => `<tr>
         <td class="t-name">${S.avatar(u, "sm")}<strong>${S.esc(u.name)}</strong></td>
         <td class="sub">${S.esc(u.email)}</td>
@@ -52,6 +52,9 @@ window.pageInit = async (S) => {
     // Scoped to #tbl, not document-wide: a bare `[data-view]` also matches anything a modal or a
     // future block on this page puts in the DOM (the same rule GrowthPanel/TeamGrowth follow).
     S.qsa("#tbl [data-view]").forEach((b) => b.onclick = () => profile(b.dataset.view));
+    // Sorts the rows already on screen, so it composes with the filter bar above rather than
+    // re-querying. Called after every render because the <table> is a fresh node each time.
+    S.sortTable(S.qs("#tbl table"));
   }
 
   async function profile(id) {

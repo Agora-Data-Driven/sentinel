@@ -171,10 +171,22 @@ window.pageInit = async (S) => {
     // The vocabulary is what colours each row's stage rail. It is a SECOND, optional fetch: a
     // colourless rail is a cosmetic loss, a missing strip is not, so it degrades on its own.
     const [tasks, vocab] = await Promise.all([
-      S.api("/api/tasks").catch(() => null),
+      S.api("/api/tasks").catch((e) => ({ __err: e })),
       S.api("/api/vocab").catch(() => null),
     ]);
-    if (!tasks) return;
+    // 🔴 This used to be `if (!tasks) return`, which left the strip's region BLANK (2026-08-17). That
+    // is better than the July 2026 bug — it never falsely claimed "nothing on you right now" — but a
+    // silent gap where your work should be is still unreadable: you cannot tell an empty plate from a
+    // failed fetch, and there was nothing to click. Still fail-soft (a bad /api/tasks must never cost
+    // anyone the rest of the Overview), and the strip is a DOOR into /tasks, so the recovery it offers
+    // is that door — the board is the surface that reports its own errors properly.
+    if (!tasks || tasks.__err) {
+      const e = tasks && tasks.__err;
+      box.innerHTML = `<div class="notice warn"><b>Couldn't load your work.</b>
+        ${S.esc((e && (e.detail || e.message)) || "The task service didn't answer.")}
+        <a class="btn sm ghost" href="/tasks" style="margin-left:6px">Open the task board</a></div>`;
+      return;
+    }
     // 🔴 Stage, never the status LABEL. Statuses are renameable in Manage and a rename now ships in
     // the deploy (task_config.RENAMED_STATUSES), so any literal like "Blocked" silently stops
     // matching — that is exactly how the Monitor's workload bar lost ten parked cards on
