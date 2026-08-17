@@ -126,16 +126,28 @@ def _rows(db: Session, kind: str) -> list[TaskVocabItem]:
     ).scalars().all()
 
 
-def names(db: Session, kind: str) -> list[str]:
-    rows = _rows(db, kind)
+# 🔴 THE `_from` HELPERS EXIST SO THERE IS STILL ONE DERIVATION (2026-08-17).
+#
+# `vocab_bundle` below needs the same names/colours/meta as the public functions, but computed from
+# rows it has ALREADY loaded. Copying the transforms into it would be a second definition of "what a
+# vocabulary row means" — the duplication this repo keeps paying for. So the transforms live here,
+# taking rows rather than a Session, and both callers go through them.
+def _names_from(rows: list[TaskVocabItem], kind: str) -> list[str]:
     return [r.name for r in rows] if rows else list(_FALLBACK_NAMES[kind])
 
 
-def colors(db: Session, kind: str) -> dict[str, str]:
-    rows = _rows(db, kind)
+def _colors_from(rows: list[TaskVocabItem], kind: str) -> dict[str, str]:
     if rows:
         return {r.name: r.color for r in rows if r.color}
     return dict(_DEFAULT_COLORS[kind])
+
+
+def names(db: Session, kind: str) -> list[str]:
+    return _names_from(_rows(db, kind), kind)
+
+
+def colors(db: Session, kind: str) -> dict[str, str]:
+    return _colors_from(_rows(db, kind), kind)
 
 
 def statuses(db: Session) -> list[str]:
@@ -221,15 +233,68 @@ def is_completed(db: Session, status_name: str) -> bool:
     return stage_for(db, status_name) == "completed"
 
 
-def status_meta(db: Session) -> list[dict]:
-    """name / key / stage / colour per status — what /api/vocab hands the frontend."""
-    rows = [r for r in _status_rows(db) if r.is_active]
+def _meta_from(status_rows: list[TaskVocabItem]) -> list[dict]:
+    """name / key / stage / colour per status, from rows already loaded.
+
+    🔴 THIS USED TO BE AN N+1, AND THE FIX IS THAT THE FALLBACK NEEDS NO QUERY (2026-08-17).
+    The stage was resolved as `r.stage or stage_for(db, r.name)` — and `stage_for` re-runs
+    `_status_rows(db)` on every call, so a board whose statuses lacked `stage` did ONE SELECT PER
+    STATUS on top of the first. (`backfill_status_meta` fills those on boot, so in a healthy prod DB
+    it mostly did not fire — which is exactly why it could sit here unnoticed.)
+
+    It is also unnecessary: `stage_for` scans for the row by name, and every row here CAME from that
+    same scan, so the scan can only find itself. Its whole remaining contribution for a row with no
+    stage is the legacy literal map — which is a dict lookup. Equivalent, minus the queries.
+    """
+    rows = [r for r in status_rows if r.is_active]
     rows.sort(key=lambda r: (r.sort_order, r.id))
     if not rows:
         return [{"name": n, "key": k, "stage": st, "color": DEFAULT_STATUS_COLORS.get(n)}
                 for n, k, st in STATUS_SEED]
+    from .atrium_tasks import STAGE_BY_STATUS      # legacy fallback only, same as stage_for uses
+
     return [{"name": r.name, "key": r.key or slugify(r.name),
-             "stage": r.stage or stage_for(db, r.name), "color": r.color} for r in rows]
+             "stage": r.stage or STAGE_BY_STATUS.get(r.name, ""), "color": r.color} for r in rows]
+
+
+def status_meta(db: Session) -> list[dict]:
+    """name / key / stage / colour per status — what /api/vocab hands the frontend."""
+    return _meta_from(_status_rows(db))
+
+
+def vocab_bundle(db: Session) -> dict:
+    """Everything `/api/vocab` needs, in FOUR queries instead of seven-plus.
+
+    🔴 WHY THIS FUNCTION EXISTS. `routers/meta.vocab()` called `statuses` + `status_meta` +
+    `priorities` + `labels` + `colors` x3 — seven entry points, each running its own SELECT, because
+    nothing in this module memoizes anything. `/api/vocab` is hit on EVERY page load (it is how the
+    frontend learns the renameable status/priority/label vocabulary), and until 2026-08-17 several
+    pages fetched it a second time on top — so a single navigation could run fourteen SELECTs for
+    configuration that changes about once a month, against a shared-core db-f1-micro.
+
+    🔴 DELIBERATELY NOT A CACHE. A process-level TTL cache would be wrong here twice over: statuses
+    are renamed in Manage and the rename must be visible immediately (AGENTS.md D13), and Cloud Run
+    runs up to `maxScale` instances, so one process's cache says nothing about another's. This just
+    stops asking the same question four extra times inside ONE request — no lifetime, nothing to
+    invalidate, no way for it to go stale.
+    """
+    status_active = _rows(db, "status")
+    priority_rows = _rows(db, "priority")
+    label_rows = _rows(db, "label")
+    # A separate read because it deliberately includes INACTIVE rows (retired statuses still need a
+    # stage so the board can file cards sitting on them) — see `_status_rows`.
+    status_all = _status_rows(db)
+    return {
+        "task_statuses": _names_from(status_active, "status"),
+        "task_status_meta": _meta_from(status_all),
+        "priorities": _names_from(priority_rows, "priority"),
+        "task_labels": _names_from(label_rows, "label"),
+        "colors": {
+            "statuses": _colors_from(status_active, "status"),
+            "priorities": _colors_from(priority_rows, "priority"),
+            "labels": _colors_from(label_rows, "label"),
+        },
+    }
 
 
 def backfill_status_meta(db: Session) -> int:

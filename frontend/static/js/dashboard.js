@@ -170,10 +170,11 @@ window.pageInit = async (S) => {
     if (!box) return;
     // The vocabulary is what colours each row's stage rail. It is a SECOND, optional fetch: a
     // colourless rail is a cosmetic loss, a missing strip is not, so it degrades on its own.
-    const [tasks, vocab] = await Promise.all([
-      S.api("/api/tasks").catch((e) => ({ __err: e })),
-      S.api("/api/vocab").catch(() => null),
-    ]);
+    // `S.vocab` is boot()'s snapshot, so this is now ONE request instead of two. The comment above
+    // still holds — the vocabulary is optional here (a colourless rail is cosmetic) — and a snapshot
+    // that failed to load is `null`, which `STAGE_OF` below already tolerates.
+    const vocab = S.vocab;
+    const tasks = await S.api("/api/tasks").catch((e) => ({ __err: e }));
     // 🔴 This used to be `if (!tasks) return`, which left the strip's region BLANK (2026-08-17). That
     // is better than the July 2026 bug — it never falsely claimed "nothing on you right now" — but a
     // silent gap where your work should be is still unreadable: you cannot tell an empty plate from a

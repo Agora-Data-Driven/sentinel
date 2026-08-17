@@ -107,21 +107,20 @@ def vocab(user: User = Depends(get_current_user), db: Session = Depends(get_db))
     """All enum vocabularies in one shot. Task statuses/priorities/labels are DB-backed (editable in
     Manage) — returned as name lists (unchanged shape) plus a `colors` map for inline rendering."""
     from ..services import task_config
+
+    # 🔴 ONE CALL, FOUR QUERIES — it was seven entry points and seven-plus SELECTs (2026-08-17).
+    # This endpoint is hit on EVERY page load, so its query count is multiplied by every navigation
+    # every member of staff makes. `vocab_bundle` loads each row-set once and derives the names,
+    # colours and status meta from it; the shape below is unchanged, which is why the frontend and
+    # `test_task_status_stages.py` needed no edits. See the note on `vocab_bundle` for why it is a
+    # single-pass read and deliberately NOT a cache.
+    #
+    # `task_statuses` stays a plain name list because that is the shape the board's column loop
+    # consumes; `task_status_meta` is the addition that lets the UI name a column's client stage
+    # without keying anything off the label (decision D13).
     return {
         "roles": [{"value": r, "label": ROLE_LABELS[r]} for r in ALL_ROLES],
-        "task_statuses": task_config.statuses(db),
-        # The same statuses with their stable key + Atrium stage. `task_statuses` stays a plain
-        # name list because that is the shape the board's column loop already consumes; this is
-        # the addition, so the UI can say which client stage a column maps to without keying
-        # anything off the label (decision D13).
-        "task_status_meta": task_config.status_meta(db),
-        "priorities": task_config.priorities(db),
-        "task_labels": task_config.labels(db),
-        "colors": {
-            "statuses": task_config.colors(db, "status"),
-            "priorities": task_config.colors(db, "priority"),
-            "labels": task_config.colors(db, "label"),
-        },
+        **task_config.vocab_bundle(db),
         "gym_day_types": GYM_DAY_TYPES,
         "set_types": SET_TYPES,
     }

@@ -94,6 +94,45 @@ inside any comment that lives in a template literal**, never with a backtick.
 
 ## Gotchas / DO NOT TOUCH
 
+- 🔴 **`/api/vocab` IS FETCHED ONCE PER PAGE LOAD — READ `S.vocab`, DO NOT REFETCH IT (2026-08-17).**
+  It looks like a cheap GET and is not: `routers/meta.vocab()` is **4 SELECTs** (it was 7, and up to
+  12 when statuses lacked a `stage` — see `task_config.vocab_bundle`). It is hit on **every**
+  navigation, and `dashboard.js`, `manage.js`, `people.js` and `taskboard.js` each used to fetch it a
+  **second** time on top of `boot()`'s copy — so one page load could run 14–24 queries for
+  configuration that changes about once a month, on a shared-core `db-f1-micro`.
+  - `boot()` now fetches it **in parallel with `/api/auth/me`** (they were two sequential `await`s,
+    which cost two full round trips — measured 250–440ms each to `asia-southeast1` — before the shell
+    was even built). vocab carries its own `.catch` so it can never reject the `Promise.all`; only
+    `auth/me` decides whether you are signed in.
+  - 🔴 **`S.vocab` is a SNAPSHOT, and Manage EDITS the vocabulary.** Statuses, priorities and labels
+    are all renameable, so any surface that *writes* vocabulary must call **`S.refreshVocab()`** —
+    `manage.js` does, from its generic save and delete paths, and it re-points its own local copy at
+    the same time (or the app sees the new list while that page keeps rendering the old one). Reading
+    `S.vocab` is only safe for a surface that does not change it.
+  - **`taskboard.js` is the one consumer that falls back to a real fetch** (`S.vocab ? … : S.api(…)`),
+    because `task_statuses` *are* its columns — a missing snapshot must not be the reason a board has
+    no columns. The others tolerate `null` because a missing colour is cosmetic.
+  - Pinned by `ui.test.js` §16–17 (one fetch, issued in parallel, and `refreshVocab` re-publishes).
+    Without those the duplicate creeps back the next time a page wants `roles` or `priorities`.
+- 🔴 **THE FONT LINKS ARE ON THE CRITICAL PATH, AND THE `preconnect` PAIR IS LOAD-BEARING.**
+  `fonts.googleapis.com` serves the **render-blocking** stylesheet; the font FILES live on
+  `fonts.gstatic.com` and their URLs are only discovered by parsing that stylesheet — a serialised
+  second hop, measured at ~247ms. Both origins are now preconnected, and 🔴 **the gstatic one needs
+  `crossorigin`**: fonts are fetched in CORS mode, so a non-CORS preconnect opens a connection the
+  font request cannot reuse and the hint does nothing at all.
+  - `Inter:wght@400..800` is the **variable-font range**, which cut that blocking stylesheet from
+    **12,355 to 2,499 bytes** (35 `@font-face` rules to 7). ⚠️ It does *not* reduce the number of font
+    files — Google already served Inter's variable file for the enumerated weights, so both spellings
+    resolve to the same 7 subset files and a browser downloads only the subset it needs. The win is
+    the blocking CSS, not the fonts.
+  - All five weights (400/500/600/700/800) are genuinely used in `styles.css`, so trimming the list
+    was never an option — collapsing it was. Space Mono stays enumerated (it is not variable) and is
+    correctly requested by **only the four `.dev` shells** that use it.
+  - 🔴 **The "make it non-blocking" trick does not work here.** `media="print" onload="this.media='all'"`
+    needs an inline event handler, and CSP is `script-src 'self'` with no inline script anywhere — it
+    would be silently blocked. The only way to remove that blocking request is to **self-host** the
+    woff2 files (same-origin, immutable-cached, no third-party DNS/TLS); that is the remaining step.
+
 - 🔴 **SORTING IS `S.sortTable`, AND `thead th.sortable` WAS DEAD CSS FOR A YEAR (2026-08-17).** That
   class has been styled in `styles.css` since the first version of this app — cursor, hover colour —
   and **nothing ever emitted it**: no table sorted except the growth table, which rolls its own via
@@ -569,7 +608,7 @@ inside any comment that lives in a template literal**, never with a backtick.
 
 - Live: `https://sentinel-585951669065.asia-southeast1.run.app` — serving revision
   **`sentinel-00112-mpl`** (verified 2026-07-29; **not re-verified since — check before trusting**).
-- `sw.js` `CACHE` currently **`sentinel-v102`**. 🔴 This line and the `sw.js` entry in the file map
+- `sw.js` `CACHE` currently **`sentinel-v103`**. 🔴 This line and the `sw.js` entry in the file map
   above had drifted to **v74** and **v94** while the file said `v99` (caught 2026-08-17). Two stale
   copies of one number in one document: **the file is the source of truth** — `frontend/sw.js:6`.
 - 26 JS files under `static/js/`; 20 page shells (the header above said "19 thin HTML shells" and the

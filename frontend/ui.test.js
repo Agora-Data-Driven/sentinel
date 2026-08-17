@@ -22,6 +22,12 @@
    HOW IT WORKS. app.js is an IIFE that boots on DOMContentLoaded and calls /api/auth/me, so fetch is
    stubbed and the shell is allowed to build; we then drive the REAL modal() through window.Sentinel.
    ===================================================================================== */
+// An async test body turns any throw into an unhandled rejection rather than a crash, so surface it
+// as a real failure — otherwise a broken assertion section would exit 0 and look like a pass.
+process.on("unhandledRejection", (e) => {
+  console.log("UNHANDLED: " + (e && (e.stack || e)));
+  process.exit(1);
+});
 const fs = require("fs");
 const path = require("path");
 const { JSDOM } = require("jsdom");
@@ -52,8 +58,11 @@ const dom = new JSDOM(
 );
 const { window } = dom;
 
+// Every request boot() and the pages make, so the vocab contract below can be asserted on counts.
+const calls = [];
 window.fetch = async (url) => {
   const p = String(url).split("?")[0];
+  calls.push(p);
   const body = Object.prototype.hasOwnProperty.call(routes, p) ? routes[p] : [];
   return {
     ok: true, status: 200,
@@ -100,7 +109,9 @@ const tab = (shift) => {
 const esc = () => window.document.dispatchEvent(
   new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
 
-setTimeout(() => {
+// `async` because section 17 awaits S.refreshVocab(). Any throw inside becomes an unhandled
+// rejection rather than a crash, so it is reported explicitly below.
+setTimeout(async () => {
   const S = window.Sentinel;
   if (!S || !S.modal) { console.log("FATAL: window.Sentinel.modal missing"); process.exit(1); }
   const D = window.document;
@@ -334,6 +345,36 @@ setTimeout(() => {
   const noHeads = mkTable([{ label: "A", sortable: false }], [["1"]]);
   ok((() => { try { S.sortTable(noHeads); return true; } catch (e) { return false; } })(),
      "a table with no sortable headers is a no-op");
+
+  // ==================================================================================
+  //                    the /api/vocab contract  (perf pass, 2026-08-17)
+  // ==================================================================================
+  // `/api/vocab` is SEVEN-plus SELECTs server-side and is hit on every page load. It used to be
+  // fetched twice per navigation (boot(), then again by dashboard/manage/people/taskboard) and
+  // serially after /api/auth/me. These assertions pin the fix; without them the duplicate creeps
+  // back the next time a page needs `roles` or `priorities`, and nothing would notice.
+  console.log("\n=== 16. /api/vocab is fetched ONCE, in parallel with auth/me ===");
+  const vocabCalls = calls.filter((c) => c === "/api/vocab").length;
+  ok(vocabCalls === 1, "boot() fetched /api/vocab exactly once", "saw " + vocabCalls);
+  ok(!!S.vocab, "the snapshot is published as S.vocab");
+  ok(S.vocab && Array.isArray(S.vocab.roles), "…and carries the shape pages read (roles)");
+  ok(typeof S.refreshVocab === "function", "S.refreshVocab exists for surfaces that EDIT vocabulary");
+  // Parallel, not serial: auth/me must not have resolved before vocab was even requested. Both are
+  // issued in the same tick, so their positions in `calls` are adjacent.
+  const iMe = calls.indexOf("/api/auth/me"), iV = calls.indexOf("/api/vocab");
+  ok(iMe >= 0 && iV >= 0 && Math.abs(iMe - iV) === 1,
+     "auth/me and vocab were issued together (parallel, not a waterfall)",
+     "positions " + iMe + " and " + iV);
+
+  console.log("\n=== 17. refreshVocab re-reads and re-publishes ===");
+  const vocabCallsBefore = calls.filter((c) => c === "/api/vocab").length;
+  routes["/api/vocab"] = { colors: {}, roles: [{ value: "x", label: "X" }], task_status_meta: [] };
+  const refreshed = await S.refreshVocab();
+  ok(calls.filter((c) => c === "/api/vocab").length === vocabCallsBefore + 1,
+     "it makes exactly one new request");
+  ok(refreshed && refreshed.roles.length === 1 && refreshed.roles[0].value === "x",
+     "it returns the FRESH payload");
+  ok(S.vocab.roles[0].value === "x", "…and S.vocab now reflects it (so Manage's edits reach the app)");
 
   console.log("\n" + (fails ? fails + " FAILED, " : "") + passes + " passed");
   process.exit(fails ? 1 : 0);

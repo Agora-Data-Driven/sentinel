@@ -18,7 +18,15 @@ window.pageInit = async (S) => {
   // instead of being disguised as an empty list.
   let shiftTemplates = [];
   let shiftTemplatesFailed = false;
-  const [teams, vocab] = await Promise.all([S.api("/api/teams"), S.api("/api/vocab")]);
+  // 🔴 `let`, not `const`, and re-read after every write — THIS is the page that edits the
+  // vocabulary. `S.vocab` is boot()'s snapshot (saving a round trip and seven SELECTs), but statuses,
+  // priorities and labels are all editable HERE, so a snapshot held across a save is stale. Every
+  // save/delete path calls `syncVocab()` below.
+  const teams = await S.api("/api/teams");
+  let vocab = S.vocab || { roles: [], priorities: [] };
+  // Re-publishes the app-wide snapshot AND re-points this module's local copy at it. Both, or the
+  // rest of the app sees the new list while this page keeps rendering the old one.
+  async function syncVocab() { vocab = (await S.refreshVocab()) || vocab; }
   try { shiftTemplates = await S.api("/api/manage/shift-templates"); }
   catch (e) {
     // A 403 is this endpoint's normal answer for a role that cannot manage shifts — not a fault.
@@ -498,6 +506,11 @@ window.pageInit = async (S) => {
         if (editing) await S.api(`${cfg.api}/${item.id}`, { method: "PATCH", body: payload });
         else await S.api(cfg.api, { method: "POST", body: payload });
         S.toast(`${cfg.singular[0].toUpperCase() + cfg.singular.slice(1)} ${editing ? "updated" : "added"}`, "ok");
+        // This is the generic save for EVERY entity on this page, including Task Fields — so a status
+        // rename lands in the app-wide snapshot here rather than staying stale until the next
+        // navigation. Unconditional on purpose: gating it on `key === "Task Fields"` would be a second
+        // place that has to know which entities are vocabulary, and one refresh is cheap.
+        await syncVocab();
         m.close(); render(key);
       } catch (e) { S.toast(e.detail, "err"); }
     };
@@ -509,8 +522,12 @@ window.pageInit = async (S) => {
       : key === "Departments" ? " Employees/tasks in it will just be unassigned."
       : key === "Clients" ? " Tasks for this client will be unassigned." : "";
     if (!confirm(`Delete "${item.name || item.label}"?${extra}`)) return;
-    try { await S.api(`${ENTITIES[key].api}/${item.id}`, { method: "DELETE" }); S.toast("Deleted", "ok"); render(key); }
-    catch (e) { S.toast(e.detail, "err"); }
+    try {
+      await S.api(`${ENTITIES[key].api}/${item.id}`, { method: "DELETE" });
+      S.toast("Deleted", "ok");
+      await syncVocab();   // same reason as the save path above
+      render(key);
+    } catch (e) { S.toast(e.detail, "err"); }
   }
 
   // Service recipe editor — a main-task title + one-sub-task-per-line textarea per group. Low-code:
