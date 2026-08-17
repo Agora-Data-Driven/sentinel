@@ -9,6 +9,8 @@ back a query per card and nothing fails. So the properties are pinned here as be
 3. `maintasks.normalized` memoizes per row, and stops memoizing the moment the row changes.
 4. The Atrium board-list cache reuses a SUCCESS, refuses to cache a FAILURE, and is dropped by
    any write.
+5. `GET /api/notifications/unread-count` costs a fixed number of queries however big the backlog,
+   and agrees with the number the list endpoint reports (2026-08-17).
 
 Why each number matters is in `serializers.CardPrefetch`, `maintasks.normalized` and the block
 comment above `atrium_tasks.fetch_tasks`. Measured before this work: 801 cards → 2,946 queries.
@@ -22,7 +24,7 @@ from sqlalchemy import event
 
 from app import constants as C
 from app.database import engine
-from app.models import Client, Task, TaskComment, TaskSupporter
+from app.models import Client, Notification, Task, TaskComment, TaskSupporter
 from app.serializers import CardPrefetch, task_card
 from app.services import atrium_tasks
 from app.services import maintasks as MT
@@ -267,3 +269,73 @@ def test_zero_seconds_disables_the_cache(bridge_on, monkeypatch):
         atrium_tasks.fetch_tasks()
         atrium_tasks.fetch_tasks()
     assert called.call_count == 2
+
+
+# --- 5. the bell badge costs a COUNT, not the feed -----------------------------------------------
+#
+# The app shell draws this badge on EVERY navigation, so its cost is multiplied by every page every
+# member of staff opens. It used to call `GET /api/notifications`, which serializes up to 50 rows —
+# and the count itself was `len(SELECT * WHERE NOT is_read)`, so an ignored bell got more expensive
+# the longer it was ignored.
+
+def _notify(db, user, n, *, read=False):
+    for i in range(n):
+        db.add(Notification(user_id=user.id, type="task", title=f"N{i}", is_read=read))
+    db.commit()
+
+
+def test_the_unread_count_does_not_grow_with_the_backlog(client, auth, make_user, db):
+    """🔴 THE regression guard for this endpoint. Ten unread and a hundred unread must cost the same
+    query count — a `len()` over hydrated rows is O(backlog) and reads as a fast endpoint until
+    somebody has ignored the bell for a month."""
+    user = auth(make_user(C.ROLE_EMPLOYEE))
+
+    _notify(db, user, 10)
+    with _Counter() as small:
+        assert client.get("/api/notifications/unread-count").json()["count"] == 10
+
+    _notify(db, user, 90)
+    with _Counter() as big:
+        assert client.get("/api/notifications/unread-count").json()["count"] == 100
+
+    assert big.n == small.n, (
+        f"{small.n} queries for 10 unread but {big.n} for 100 — the count is reading rows again.")
+
+
+def test_the_count_is_scoped_to_the_caller(client, auth, make_user, db):
+    """A count is still a permission surface: it must never total up somebody else's bell."""
+    mine = auth(make_user(C.ROLE_EMPLOYEE))
+    theirs = make_user(C.ROLE_EMPLOYEE)
+    _notify(db, mine, 3)
+    _notify(db, theirs, 7)
+    assert client.get("/api/notifications/unread-count").json()["count"] == 3
+
+
+def test_read_notifications_are_not_counted(client, auth, make_user, db):
+    user = auth(make_user(C.ROLE_EMPLOYEE))
+    _notify(db, user, 4, read=True)
+    _notify(db, user, 2)
+    assert client.get("/api/notifications/unread-count").json()["count"] == 2
+
+
+def test_the_list_reports_the_same_number_as_the_count(client, auth, make_user, db):
+    """Two endpoints answering one question have to agree, or the badge changes when you open the
+    panel. Both go through `_unread`, and this is what stops a second derivation appearing."""
+    user = auth(make_user(C.ROLE_EMPLOYEE))
+    _notify(db, user, 60)          # deliberately past the list's 50-row limit
+    listed = client.get("/api/notifications").json()
+    counted = client.get("/api/notifications/unread-count").json()
+    assert listed["unread_count"] == counted["count"] == 60
+    assert len(listed["items"]) == 50, "the LIST is still capped — only the count sees everything"
+
+
+def test_unread_count_is_not_swallowed_by_a_parameterised_route(client, auth, make_user):
+    """The literal path must not be parsed as a `{notif_id}`. Registration order is what protects
+    this (§5, the gym `/routines` block), and a 422 is what the failure looks like."""
+    auth(make_user(C.ROLE_EMPLOYEE))
+    r = client.get("/api/notifications/unread-count")
+    assert r.status_code == 200, r.text
+
+
+def test_the_count_requires_a_session(client):
+    assert client.get("/api/notifications/unread-count").status_code == 401

@@ -57,6 +57,7 @@ unit map + cookbook.
 | Leave | `routers/leave.py` | `leave_type_dict`, `leave_balance_dict`, `leave_request_dict` | `leave.js`, `approvals.js` |
 | Development | `routers/development.py` | `development_profile_dict`, `goal_dict`, `physical_goal_dict`, `development_area_dict`, `growth_item_dict`, `skill_dict`, `reading_item_dict`, `mentor_transcript_dict` | `growth.js`, `reading.js` |
 | Team growth | `routers/development.py` → `GET /api/development/team` (admin+) | `services/team_growth.py` (assembled, not serialized) | `teamgrowth.js` |
+| Notifications | `routers/notifications.py` — **two GETs, and the split is the point** (2026-08-17): `GET ""` is the panel's feed (50 rows) and `GET /unread-count` is just the badge | `notification_dict`; both counts go through `_unread` (ONE `COUNT(*)`) | `app.js` — the shell calls **`/unread-count`** on every navigation; the feed is fetched only when the bell is opened |
 
 ## Cookbook
 
@@ -103,13 +104,22 @@ Verify commands (from `backend/`): `.\.venv\Scripts\Activate.ps1; pytest` — or
   batch mode on a fresh SQLite DB is a known, accepted limitation (fine on Postgres).
 - **No `requests`** — it is not in the production image (imported it once → boot crash). Use
   stdlib `urllib` like `routers/auth.py` does.
+- 🔴 **Anything the app SHELL calls is multiplied by every navigation by every member of staff** —
+  `/api/auth/me`, `/api/vocab` and `/api/notifications/unread-count`. Two of the three have already
+  been fixed for exactly this reason (2026-08-17): `/api/vocab` was 7–12 SELECTs (see
+  `task_config.vocab_bundle`), and the bell badge fetched the whole 50-row feed and counted unread
+  rows with `len(SELECT *)` — so an ignored bell got *more* expensive the longer it was ignored.
+  Before adding a shell request, or a field to one, ask what it costs × every page view.
+  `tests/test_performance_guards.py` §5 pins the count as O(1) in the backlog.
 - `utcnow()` from `utils/time.py`, never `datetime.now()`.
 - The rate limiter in `middleware.py` is hand-rolled deliberately (AGENTS.md §9).
 
 ## Status (volatile)
 
 - Live: `https://sentinel-585951669065.asia-southeast1.run.app` — serving revision
-  **`sentinel-00112-mpl`** (verified 2026-07-29).
-- Test suite: **213 passed** (2026-07-29, shared workspace venv).
-- Migrations: 17 revisions, head `a9c4e7f2d5b8` (2026-07-29).
+  **`sentinel-00166-f8d`** (verified 2026-08-17: full `status.traffic` array read, 100% to latest).
+- Test suite: **848 passed, 0 failed** across 54 files (2026-08-17, shared workspace venv, run
+  **per file** — see AGENTS.md §5/§6: one long process stalls, and `pytest.ini` already sets `-q`, so
+  passing `-q` again suppresses the per-file summary line).
+- Migrations: 31 revisions, head `a3f7c2e9d4b6_task_origin`.
 - Prod DB: Cloud SQL `agora-data-driven:asia-southeast1:sentinel-db` (Postgres 16).

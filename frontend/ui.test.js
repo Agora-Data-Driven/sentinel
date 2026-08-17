@@ -44,8 +44,9 @@ const USER = {
 const routes = {
   "/api/auth/me": USER,
   "/api/vocab": { colors: {}, roles: [], task_status_meta: [] },
-  "/api/notifications": { items: [], unread: 0 },   // the bell reads d.items, not a bare array
-  "/api/notifications/unread-count": { count: 0 },
+  // The bell reads d.items (not a bare array) and d.unread_count — `unread` was never a real key.
+  "/api/notifications": { items: [], unread_count: 0 },
+  "/api/notifications/unread-count": { count: 0 },   // what the SHELL asks for on every navigation
   "/api/dashboard": { me: {}, kpis: {}, late_today_list: [], handovers: [] },
   "/api/teams": [],
   "/api/people": [],
@@ -375,6 +376,33 @@ setTimeout(async () => {
   ok(refreshed && refreshed.roles.length === 1 && refreshed.roles[0].value === "x",
      "it returns the FRESH payload");
   ok(S.vocab.roles[0].value === "x", "…and S.vocab now reflects it (so Manage's edits reach the app)");
+
+  console.log("\n=== 18. the bell badge costs a COUNT, not the notification list ===");
+  // The shell draws this badge on every navigation. Fetching the list for it serialized up to 50
+  // notifications and re-rendered a panel nobody had opened.
+  const countCalls = calls.filter((c) => c === "/api/notifications/unread-count").length;
+  const listCalls = calls.filter((c) => c === "/api/notifications").length;
+  ok(countCalls === 1, "boot() asked for the unread COUNT exactly once", "saw " + countCalls);
+  ok(listCalls === 0, "boot() did NOT fetch the notification list", "saw " + listCalls + " list calls");
+
+  // The badge is a shared renderer: the shell, the panel's Mark-all-read and the command palette all
+  // move it, and they used to poke style.display independently.
+  const badge = D.querySelector("#bell-count");
+  ok(!!badge, "the badge element exists in the shell");
+  ok(badge && badge.style.display === "none", "a zero count hides it rather than printing '0'");
+
+  // Opening the panel is what pays for the list — and it must not need a second count request.
+  const bell = D.querySelector("#bell");
+  routes["/api/notifications"] = { unread_count: 3, items: [] };
+  bell.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 20));
+  ok(calls.filter((c) => c === "/api/notifications").length === 1,
+     "opening the bell fetches the list once");
+  ok(calls.filter((c) => c === "/api/notifications/unread-count").length === 1,
+     "…and reuses the count the list already carries (no second count request)");
+  ok(badge.style.display === "" && badge.textContent === "3",
+     "the list's unread_count re-renders the badge through the same setter",
+     "display=" + JSON.stringify(badge.style.display) + " text=" + JSON.stringify(badge.textContent));
 
   console.log("\n" + (fails ? fails + " FAILED, " : "") + passes + " passed");
   process.exit(fails ? 1 : 0);

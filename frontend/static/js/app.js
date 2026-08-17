@@ -1004,6 +1004,23 @@
     return "Earlier";
   }
 
+  // The bell's badge — ONE definition of how it renders, because THREE things move it: the shell on
+  // every navigation, the panel after "Mark all read", and the command palette's own action. Two of
+  // those used to poke `style.display` themselves.
+  function setBadge(n) {
+    const badge = qs("#bell-count");
+    if (!badge) return;
+    if (n > 0) { badge.textContent = n; badge.style.display = ""; } else { badge.style.display = "none"; }
+  }
+
+  // 🔴 The shell asks for the COUNT, not the list. This runs on every single navigation, and it used
+  // to call `GET /api/notifications` — serializing up to 50 notifications to draw a one-character
+  // badge, and re-rendering the whole (closed) panel with them. The panel is built when it opens.
+  async function refreshBadge() {
+    try { setBadge((await api("/api/notifications/unread-count")).count); }
+    catch (e) { /* the badge is decoration — a failed count must never cost anybody the shell */ }
+  }
+
   async function wireBell() {
     const bell = qs("#bell"), panel = qs("#notif-panel");
     let unreadOnly = false;
@@ -1024,8 +1041,8 @@
 
     async function load() {
       const d = await api("/api/notifications");
-      const badge = qs("#bell-count");
-      if (d.unread_count > 0) { badge.textContent = d.unread_count; badge.style.display = ""; } else { badge.style.display = "none"; }
+      // The list response carries the count already, so the open panel never needs a second request.
+      setBadge(d.unread_count);
 
       const items = unreadOnly ? d.items.filter((n) => !n.is_read) : d.items;
       // Grouped by day, in the order the server already sorted them (newest first) — the buckets are
@@ -1072,7 +1089,7 @@
     }
     bell.onclick = (e) => { e.stopPropagation(); panel.classList.toggle("open"); if (panel.classList.contains("open")) load(); };
     document.addEventListener("click", (e) => { if (!panel.contains(e.target) && e.target !== bell) panel.classList.remove("open"); });
-    load();
+    refreshBadge();
   }
 
   // ---------------- Custom logo ----------------
@@ -1313,7 +1330,7 @@
     function actions() {
       const a = [
         { group: "Actions", icon: currentTheme() === "dark" ? "sun" : "moon", label: `Switch to ${currentTheme() === "dark" ? "light" : "dark"} mode`, hint: "Theme", run: () => { setTheme(currentTheme() === "dark" ? "light" : "dark"); return true; } },
-        { group: "Actions", icon: "bell", label: "Mark all notifications read", hint: "", run: async () => { try { await api("/api/notifications/read-all", { method: "PATCH" }); toast("All caught up", "ok"); const b = qs("#bell-count"); if (b) b.style.display = "none"; } catch (e) {} } },
+        { group: "Actions", icon: "bell", label: "Mark all notifications read", hint: "", run: async () => { try { await api("/api/notifications/read-all", { method: "PATCH" }); toast("All caught up", "ok"); setBadge(0); } catch (e) {} } },
         { group: "Actions", icon: "gear", label: "Change password", hint: "Account", run: () => { openChangePassword(); } },
         { group: "Actions", icon: "logout", label: "Log out", hint: "Account", run: doLogout },
       ];

@@ -114,6 +114,23 @@ inside any comment that lives in a template literal**, never with a backtick.
     no columns. The others tolerate `null` because a missing colour is cosmetic.
   - Pinned by `ui.test.js` §16–17 (one fetch, issued in parallel, and `refreshVocab` re-publishes).
     Without those the duplicate creeps back the next time a page wants `roles` or `priorities`.
+- 🔴 **THE BELL BADGE COSTS A COUNT, NOT THE FEED (2026-08-17).** `wireBell()` ends with
+  **`refreshBadge()`**, which calls `GET /api/notifications/unread-count` — a one-key response. It
+  used to call `GET /api/notifications`: on **every navigation** that serialized up to 50
+  notifications, and re-rendered the whole closed panel with them, to draw a one-character badge. The
+  backend half was worse — the count was `len()` over every unread row hydrated as an ORM object, so
+  a bell ignored for a month cost more than one read this morning. Measured on a 120-item backlog:
+  **2 queries and 170 hydrated rows → 1 query and 0**.
+  - **The feed is fetched when the panel OPENS**, and its response carries `unread_count`, so opening
+    the bell never needs a second count request.
+  - 🔴 **`setBadge(n)` is the ONE renderer.** Three things move that badge — the shell, the panel's
+    "Mark all read", and the command palette's own action — and the last two used to poke
+    `style.display` themselves. A second copy is how two of them end up disagreeing about whether a
+    zero prints as `0` or hides.
+  - `refreshBadge` swallows its error on purpose: the badge is decoration, and a failed count must
+    never cost anybody the shell. (This is *not* the silent-degradation trap below — nothing here
+    claims "you have no notifications"; the badge simply keeps its previous state.)
+  - Pinned by `ui.test.js` §18, including the assertion that boot fetches **no** list at all.
 - 🔴 **THE FONT LINKS ARE ON THE CRITICAL PATH, AND THE `preconnect` PAIR IS LOAD-BEARING.**
   `fonts.googleapis.com` serves the **render-blocking** stylesheet; the font FILES live on
   `fonts.gstatic.com` and their URLs are only discovered by parsing that stylesheet — a serialised
@@ -607,8 +624,11 @@ inside any comment that lives in a template literal**, never with a backtick.
 ## Status (volatile)
 
 - Live: `https://sentinel-585951669065.asia-southeast1.run.app` — serving revision
-  **`sentinel-00112-mpl`** (verified 2026-07-29; **not re-verified since — check before trusting**).
-- `sw.js` `CACHE` currently **`sentinel-v103`**. 🔴 This line and the `sw.js` entry in the file map
+  **`sentinel-00166-f8d`** (verified 2026-08-17: full `status.traffic` array read, 100% to latest).
+- `ui.test.js`: **72 assertions** (2026-08-17). It needs `jsdom`, which this repo deliberately does not
+  vendor (no `package.json` — AGENTS.md §8), so point `NODE_PATH` at any install that has it:
+  `$env:NODE_PATH = "<dir>\node_modules"; node frontend\ui.test.js`.
+- `sw.js` `CACHE` currently **`sentinel-v104`**. 🔴 This line and the `sw.js` entry in the file map
   above had drifted to **v74** and **v94** while the file said `v99` (caught 2026-08-17). Two stale
   copies of one number in one document: **the file is the source of truth** — `frontend/sw.js:6`.
 - 26 JS files under `static/js/`; 20 page shells (the header above said "19 thin HTML shells" and the
