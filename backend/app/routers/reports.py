@@ -8,9 +8,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..constants import (
-    ADMIN_ROLES,
     LEAVE_PENDING,
-    ROLE_ACCOUNT_MANAGER,
+    # ROLE_TEAM_LEAD is still used below: the overdue report filters its ROWS to the lead's own
+    # departments. Who may open the report at all is `capabilities.REPORT_CAPS` now.
     ROLE_TEAM_LEAD,
     TASK_COMPLETED,
 )
@@ -27,6 +27,8 @@ from ..models import (
     User,
 )
 from ..security import get_current_user
+from ..capabilities import REPORT_CAPS
+from ..services import permissions as perms_svc
 from ..services import teams as teams_svc
 from ..utils.csv_export import csv_response
 from ..utils.time import to_ph, today_ph
@@ -44,14 +46,22 @@ def _team_name(db: Session, team_id):
 
 
 def _require_access(user: User, report: str):
-    admin = user.role in ADMIN_ROLES
-    if report in {"attendance", "gym", "leave"} and not admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
-    if report == "team" and not (admin or user.role == ROLE_ACCOUNT_MANAGER):
-        raise HTTPException(status_code=403, detail="Admin/AM access required")
-    if report == "overdue" and not (admin or user.role == ROLE_TEAM_LEAD):
-        raise HTTPException(status_code=403, detail="Admin/Team Lead access required")
-    # "tasks" is open to all (naturally filtered by visibility below).
+    """One capability per report (`capabilities.REPORT_CAPS`), replacing the inline role ladder.
+
+    🔴 An UNKNOWN report name is refused. It used to fall through this function silently and be
+    handled by `_build` returning nothing, so a typo produced an empty report rather than an error —
+    and, more to the point, any report added later without a rule here would have been world-readable
+    by default. The default is now closed.
+
+    The per-ROW scoping stays below in `_build` (a team lead's overdue list is still filtered to
+    their own departments by `teams_svc.in_team`): this decides who may open the report at all, the
+    row filter decides what they see in it.
+    """
+    cap = REPORT_CAPS.get(report)
+    if cap is None:
+        raise HTTPException(status_code=404, detail="Unknown report")
+    if not perms_svc.has_cap(user, cap):
+        raise HTTPException(status_code=403, detail="You don't have access to this report")
 
 
 def _build(db: Session, report: str, user: User, from_: date | None, to: date | None, team_id: int | None):

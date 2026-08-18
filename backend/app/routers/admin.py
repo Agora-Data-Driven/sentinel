@@ -29,6 +29,7 @@ from ..security import get_current_user, require_cap
 from ..serializers import summary_dict, user_public
 from ..services import attendance as att
 from ..services import audit
+from ..services import permissions as perms_svc
 from ..services import settings as settings_svc
 from ..services import notifications as notif
 from ..utils.time import today_ph, to_ph
@@ -160,7 +161,12 @@ def insights(admin: User = Depends(require_cap(CAP_INSIGHTS_VIEW)), db: Session 
 def dashboard(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Role-aware home. Admins see org KPIs; everyone gets their personal snapshot."""
     today = today_ph()
-    is_admin = user.role in ADMIN_ROLES
+    # 🔴 `is_admin` now means "may see the Overview's Across-Agora block", and it is a CAPABILITY
+    # question, not a role one. It used to be `role in ADMIN_ROLES`, so granting `insights.view` to a
+    # team lead opened `GET /api/insights` while the block that renders it stayed hidden — an API that
+    # says yes behind a UI that says no is the dead-button failure of AGENTS.md §5 in reverse.
+    # The key name is unchanged because `dashboard.js` and the mobile shell both read it.
+    is_admin = perms_svc.has_cap(user, CAP_INSIGHTS_VIEW)
 
     payload: dict = {"is_admin": is_admin, "user": user_public(user), "date": today.isoformat()}
 

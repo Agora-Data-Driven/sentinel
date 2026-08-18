@@ -50,6 +50,7 @@ from ..serializers import (CardPrefetch, gym_log_dict, leave_balance_dict, summa
                            user_full)
 from ..services import audit
 from ..services import leave as leave_svc
+from ..services import permissions as perms_svc
 from ..services import teams as teams_svc
 from ..utils.time import today_ph, utcnow
 from ..utils.qr import make_qr_png, new_token
@@ -234,11 +235,9 @@ def _guard_role_write(db: Session, actor: User, target: User, data: dict) -> Non
       but "log in as nobody until someone redeploys" is not a recovery story — and on
       `--min-instances 1` that next boot may be days away.
     """
-    from ..services import permissions as perms_svc
-
     changing_role = "role" in data and data["role"] != target.role
     deactivating = data.get("is_active") is False and target.is_active
-    if changing_role and not perms_svc.has_cap(db, actor, CAP_PEOPLE_SET_ROLE):
+    if changing_role and not perms_svc.has_cap(actor, CAP_PEOPLE_SET_ROLE):
         raise HTTPException(
             status_code=403,
             detail="Only a Super Admin can change somebody's role.",
@@ -442,6 +441,10 @@ def delete_person(user_id: int, actor: User = Depends(get_current_user), db: Ses
     # delete, but this route clears dependants with bulk statements — which bypass the ORM entirely
     # — so it has to be named here like every other owned record above.
     db.query(UserTeam).filter(UserTeam.user_id == u.id).delete(synchronize_session=False)
+    # Per-person capability exceptions (models.UserCapability). Named here for the same reason as
+    # UserTeam above, and for one more: that table has no FK and is keyed by user id, so a row left
+    # behind would silently hand a FUTURE person with a recycled id somebody else's permissions.
+    perms_svc.prune_orphans(db, u.id)
     # References from other people's records -> null out (keep those records intact).
     db.query(AttendanceRequest).filter(AttendanceRequest.reviewed_by_id == u.id).update({AttendanceRequest.reviewed_by_id: None}, synchronize_session=False)
     db.query(LeaveRequest).filter(LeaveRequest.reviewed_by_id == u.id).update({LeaveRequest.reviewed_by_id: None}, synchronize_session=False)

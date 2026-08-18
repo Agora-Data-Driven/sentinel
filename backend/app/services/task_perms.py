@@ -60,8 +60,19 @@ from ..constants import (
     ROLE_VIEWER,
     VIEW_ALL_ROLES,
 )
+from ..capabilities import (
+    CAP_ATRIUM_EDIT,
+    CAP_ATRIUM_MANAGE,
+    CAP_ATRIUM_VIEW,
+    CAP_ATRIUM_BRIDGE,
+    CAP_TASKS_DELETE,
+    CAP_TASKS_PRIORITIZE,
+    CAP_TASKS_REASSIGN,
+    CAP_TASKS_REVIEW,
+)
 from ..models import Task, User
 from . import maintasks as MT
+from . import permissions as PERMS
 from . import teams as TEAMS
 
 # Full-authority roles: see/do everything, anywhere.
@@ -333,12 +344,36 @@ def _lead_may_act(user: User, task: Task) -> bool:
     return user.role == ROLE_TEAM_LEAD and can_view(user, task)
 
 
-def can_reassign(user: User, task: Task) -> bool:
-    """Change the assignee/team to SOMEONE ELSE (delegation) — a team lead on any card they can see,
-    and up. See `_lead_may_act`."""
+def _may_act_on_visible(user: User, task: Task, cap_key: str) -> bool:
+    """The shape shared by reassign / prioritize / review: hold the capability AND see the card.
+
+    🔴 **THIS IS EXACTLY WHAT `_is_full(user) or _lead_may_act(user, task)` MEANT** — it is a
+    rewrite, not a widening, and the equivalence is worth spelling out because it looks like one:
+
+        _is_full(u) or _lead_may_act(u, t)
+      = (role in FULL) or (role == team_lead and can_view(u, t))
+      = (role in FULL and can_view(u, t)) or (role == team_lead and can_view(u, t))   [1]
+      = role in (FULL | {team_lead}) and can_view(u, t)
+      = holds the capability (default MANAGER_ROLES) and can_view(u, t)
+
+    Step [1] is only legal because **FULL ⊆ VIEW_ALL_ROLES**, so `can_view` is unconditionally True
+    for an AM/admin/super_admin (`can_view`'s first branch). If anybody ever removes a FULL role from
+    `VIEW_ALL_ROLES`, this collapse stops holding and these three predicates silently narrow —
+    `tests/test_task_capabilities.py` pins the equivalence for every role so that fails loudly.
+
+    What the rewrite BUYS: the authority is now a checkbox. Granting `tasks.review` to an employee
+    gives them approval on the cards they can already see (their own work, their team's queue) and
+    nothing else — the scope rides along for free, because it was always the scope.
+    """
     if _is_viewer(user):
         return False
-    return _is_full(user) or _lead_may_act(user, task)
+    return PERMS.has_cap(user, cap_key) and can_view(user, task)
+
+
+def can_reassign(user: User, task: Task) -> bool:
+    """Change the assignee/team to SOMEONE ELSE (delegation) — anyone holding `tasks.reassign`, on a
+    card they can see. By default a team lead and up; see `_may_act_on_visible` and `_lead_may_act`."""
+    return _may_act_on_visible(user, task, CAP_TASKS_REASSIGN)
 
 
 def can_tick_step(user: User, task: Task, step_owner_id: int | None) -> bool:
@@ -371,9 +406,7 @@ def can_tick_step(user: User, task: Task, step_owner_id: int | None) -> bool:
 def can_prioritize(user: User, task: Task) -> bool:
     """Set priority — a management call. A team lead on any card they can see (`_lead_may_act`),
     AM/admin/super anywhere."""
-    if _is_viewer(user):
-        return False
-    return _is_full(user) or _lead_may_act(user, task)
+    return _may_act_on_visible(user, task, CAP_TASKS_PRIORITIZE)
 
 
 def can_review(user: User, task: Task) -> bool:
@@ -392,7 +425,7 @@ def can_review(user: User, task: Task) -> bool:
     the Completed column unreachable for exactly the cards a lead is most likely to be asked about:
     anything with no department set, and every adopted client card.
     """
-    return _is_full(user) or _lead_may_act(user, task)
+    return _may_act_on_visible(user, task, CAP_TASKS_REVIEW)
 
 
 def can_delete(user: User, task: Task) -> bool:
@@ -410,17 +443,36 @@ def can_delete(user: User, task: Task) -> bool:
     one irreversible act on this board, and `can_view` reaches a lead through branches as thin as
     "somebody named you on one step of this card". Losing another department's work to a misclick
     from a lead who holds one step of it is a worse failure than the friction of asking an AM. The
-    creator branch below already covers the ordinary "clean up my own mistake" case."""
+    creator branch below already covers the ordinary "clean up my own mistake" case.
+
+    🔴 THE CAPABILITY IS CHECKED AFTER THE CREATOR BRANCH, and that order is the point. Cleaning up
+    a card you raised yourself is not a managerial power and must never need one — anyone may
+    quick-add a card, so anyone must be able to undo that. Gating it behind `tasks.delete` would
+    strand every employee's own mistakes on the board with no way to remove them.
+
+    🔴 AND THE SCOPE RIDES WITH THE CAPABILITY, unlike reassign/prioritize/review. Those three
+    collapse to "can_view" (see `_may_act_on_visible`); this one deliberately does not, because
+    `can_view` reaches a lead through branches as thin as "somebody named you on one step". So a
+    holder may delete only what they can see AND that is theirs to manage: everything, for a role
+    that sees everything (`_is_full`), or their own DEPARTMENT otherwise (`_dept`). Granting
+    `tasks.delete` to an employee therefore means "may tidy up your department's board", never "may
+    delete anything you can see" — which is the same equivalence the old `_leads_team` expressed for
+    a team lead, now available to any role a Super Admin chooses.
+    """
     if _is_viewer(user):
         return False
-    return _is_full(user) or _leads_team(user, task) or (_created(user, task) and can_view(user, task))
+    if _created(user, task) and can_view(user, task):
+        return True
+    if not PERMS.has_cap(user, CAP_TASKS_DELETE):
+        return False
+    return can_view(user, task) and (_is_full(user) or _dept(user, task))
 
 
 def can_bridge(user: User) -> bool:
     """Share a task's client-safe fields to Atrium."""
     if _is_viewer(user):
         return False
-    return user.role in BRIDGE
+    return PERMS.has_cap(user, CAP_ATRIUM_BRIDGE)
 
 
 # --- Atrium-owned cards ----------------------------------------------------
@@ -454,8 +506,12 @@ def can_view_atrium(user: User) -> bool:
 
     Managers work across clients, so the cross-client client-facing board is theirs. An
     employee's/intern's board is the work assigned to *them*, and an Atrium card is assigned to
-    nobody here (its owners are Atrium roster emails, not Sentinel users)."""
-    return user.role in MANAGER_ROLES or _is_viewer(user)
+    nobody here (its owners are Atrium roster emails, not Sentinel users).
+
+    🔴 The read-only seat is named EXPLICITLY, as every read surface must be (D8) — it is at the
+    floor of the rank and holds `atrium.view` by default precisely because this is a read.
+    """
+    return PERMS.has_cap(user, CAP_ATRIUM_VIEW)
 
 
 def can_edit_atrium(user: User) -> bool:
@@ -466,14 +522,18 @@ def can_edit_atrium(user: User) -> bool:
     write — with `_require_atrium` (i.e. `can_view_atrium`), so the moment a viewer could SEE client
     cards it could also edit, move, comment on and resolve them. The write branches call
     `_require_atrium_write` now; this predicate is what it asks.
+
+    🔴 It is a SEPARATE capability from `atrium.view`, not "view minus viewer". That is the same
+    seam D8 cut: the two must stay independently grantable, or the next role added gets the write
+    for free the moment somebody gives it the read.
     """
     if _is_viewer(user):
         return False
-    return can_view_atrium(user)
+    return PERMS.has_cap(user, CAP_ATRIUM_EDIT)
 
 
 def can_manage_atrium(user: User) -> bool:
     """Priority, client visibility and deletion on an Atrium card — AM / admin / super_admin."""
     if _is_viewer(user):
         return False
-    return user.role in FULL
+    return PERMS.has_cap(user, CAP_ATRIUM_MANAGE)

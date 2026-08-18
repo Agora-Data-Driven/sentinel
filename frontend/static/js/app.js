@@ -172,17 +172,24 @@
       { href: "/leave", label: "Leave", icon: "calendar", hideRoles: ["super_admin"] },
       // One inbox for attendance-correction + leave approvals (managers+). Replaces the separate
       // "Approvals" tabs that used to live on the Time and Leave pages.
-      { href: "/approvals", label: "Approvals", icon: "inbox", min: "team_lead" },
+      // Follows the two approval CAPABILITIES, not the rank: grant `leave.approvals` to somebody
+      // and the inbox has to appear, or the API says yes behind a nav that says no.
+      { href: "/approvals", label: "Approvals", icon: "inbox",
+        anyCap: ["attendance.approvals", "leave.approvals"] },
       // Clock in (the QR scanner station) punches OTHER people's badges, and the punch endpoints
       // only trust a Super-Admin session (attendance.kiosk_guard) — so only super_admin gets the
       // tab. Everyone else clocks themselves in from the Overview's day strip.
-      { href: "/scanner", label: "Clock in", icon: "qr", roles: ["super_admin"] },
+      { href: "/scanner", label: "Clock in", icon: "qr", cap: "attendance.kiosk" },
     ] },
     { href: "/north-star", label: "Our North Star", icon: "compass" },
     { section: "Admin" },
     { group: "Admin", icon: "sliders", children: [
       { href: "/people", label: "People", icon: "users", min: "team_lead" },
-      { href: "/reports", label: "Reports", icon: "chart", min: "team_lead" },
+      // Shown when the person holds ANY report capability — `reports.tasks` is open to everyone by
+      // default, so in practice this tab is always available; it disappears only if a Super Admin
+      // revokes every report from a role. `anyCap` and not a single key, because there are six.
+      { href: "/reports", label: "Reports", icon: "chart", anyCap: ["reports.attendance", "reports.gym",
+        "reports.tasks", "reports.team", "reports.leave", "reports.overdue"] },
       // These four follow CAPABILITIES, not roles — they are exactly the tabs the Permissions
       // console can reassign, so a hardcoded `roles: ["super_admin"]` here would hide a page the
       // server had just started allowing. /people and /reports keep `min` because their endpoints
@@ -1223,6 +1230,7 @@
     // which reads as "the feature is broken", exactly the failure mode the Team Lead dead-button
     // incident produced (AGENTS.md §5). Entries with no capability keep the rank/role gates.
     if (n.cap) return (USER.caps || []).indexOf(n.cap) !== -1;
+    if (n.anyCap) return n.anyCap.some((c) => (USER.caps || []).indexOf(c) !== -1);
     if (n.roles) return n.roles.includes(USER.role);
     if (n.min) return (ROLE_RANK[USER.role] || 0) >= ROLE_RANK[n.min];
     return true;

@@ -71,3 +71,34 @@ class RoleCapability(Base):
     # cascades away a live permission decision is an outage.
     updated_by_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class UserCapability(Base):
+    """A per-PERSON deviation, layered on top of their role's (`RoleCapability` above).
+
+    The case this exists for: "Maria specifically may run payroll." Without it the only way to say
+    that is to invent a role for one person, and a role per exception is how a permission model
+    becomes unreadable.
+
+    🔴 **Resolution order is role defaults -> role overrides -> USER overrides**, and the user layer
+    is applied last so it always wins. It is deliberately NOT a way around the invariants: every row
+    is re-checked by `capabilities.is_grantable` against **that person's role** when it resolves, so
+    a user override cannot hand a `viewer` a write, cannot touch a `locked` capability, and cannot
+    change anything for a Super Admin. Same deltas-not-snapshots contract as the role table, and the
+    same reason: a capability added in a later deploy must arrive with its default, not denied.
+
+    🔴 The row is keyed by user id and **survives a role change**. That is the honest behaviour — the
+    grant was made about the person, not the seat — but it means promoting somebody does not clear
+    their exceptions. The console shows every person holding one, so they can be seen and removed;
+    `services/permissions.user_overrides` is what it reads.
+    """
+
+    __tablename__ = "user_capabilities"
+
+    user_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    capability: Mapped[str] = mapped_column(String(60), primary_key=True)
+    allowed: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    # No FK, for the reason RoleCapability documents: `people.delete_person` hand-nulls references
+    # and knows nothing about this table. Rows for a deleted user are pruned by `prune_orphans`.
+    updated_by_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)

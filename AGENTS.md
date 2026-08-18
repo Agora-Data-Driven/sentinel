@@ -421,13 +421,87 @@ Manager do?" existed only as ~41 `require_min_role`/`require_roles` sites across
 | | Decided from | Example | Lives in | Editable in the console? |
 |---|---|---|---|---|
 | **Surface access** | the role ALONE | "may open Payroll", "may approve leave" | `capabilities.py` | **yes** |
-| **Object-scoped rules** | the role **and the row** | "an employee may edit a task *if assigned to it or it's in their team queue*" | `services/task_perms.py` | **no, and never** |
+| **Object-scoped rules** | the role **and the row** | "an employee may edit a task *if assigned to it or it's in their team queue*" | `services/task_perms.py` | **the ROLE half only — see below** |
 
 🔴 **Do not migrate `task_perms` into the capability registry.** There is no cell in a role ×
 capability grid for "assigned only" — forcing it in either drops that nuance (handing every employee
 edit rights over every colleague's card, the regression §5 documents) or turns a console a human is
 meant to reason about into a rules engine nobody can read. **A capability that cannot be decided from
 the role alone does not belong there.**
+
+#### The task board: the role half of a predicate CAN be a capability (2026-08-18)
+
+Seven `task_perms` predicates now ask `permissions.has_cap` while keeping their object test in code.
+The four Atrium ones were always pure role tests. The interesting three are `can_reassign` /
+`can_prioritize` / `can_review`, which were `_is_full(user) or _lead_may_act(user, task)` and
+**collapse exactly** to `has_cap(...) and can_view(user, task)`:
+
+```
+  _is_full(u) or _lead_may_act(u, t)
+= (role in FULL) or (role == team_lead and can_view(u, t))
+= (role in FULL and can_view(u, t)) or (role == team_lead and can_view(u, t))   [1]
+= role in (FULL | {team_lead}) and can_view(u, t)          # i.e. MANAGER_ROLES
+```
+
+🔴 **Step [1] is only legal because `FULL ⊆ VIEW_ALL_ROLES`**, which makes `can_view` unconditionally
+True for AM/admin/super_admin. Remove a FULL role from `VIEW_ALL_ROLES` and those three predicates
+silently NARROW. `tests/test_task_capabilities.py::test_the_collapse_premise_still_holds` pins it,
+and `test_predicate_is_unchanged_for_every_role` re-implements each original body and compares, for
+every role × card shape × in/out of department.
+
+What it buys: the scope rides along with the grant. Giving an employee `tasks.review` lets them
+approve work **they can already see** — their own cards and their department's queue — not the
+estate. That is why these are safe to expose as checkboxes at all.
+
+🔴 **`can_delete` deliberately does NOT collapse.** Delete is the only irreversible act and
+`can_view` reaches a lead through branches as thin as "somebody named you on one step", so its scope
+stays `_is_full(user) or _dept(user, task)`. Two more rules there: the **creator branch is checked
+BEFORE the capability** (anyone may quick-add a card, so anyone must be able to undo that — gating it
+would strand every employee's own mistakes), and a granted employee may tidy their *department*,
+never everything they can see.
+
+🔴 **Still not capabilities, and should not become them:** `can_view`, `can_edit`, `can_move`,
+`can_tick_step`, `is_assigned`. These are decided by the ROW alone (assigned to me / my team's
+unclaimed queue / my department read-only) and have no role half to lift out.
+
+#### Per-PERSON exceptions layer on top (2026-08-18)
+
+`models.UserCapability` + the console's **People** tab. Resolution is
+**role defaults → role overrides (`role_capabilities`) → person (`user_capabilities`)**, person last
+so it always wins. It exists so "Maria specifically may run payroll" does not require inventing a
+role for one person.
+
+- 🔴 **It is not a way around the invariants.** Every row is re-checked by `is_grantable` against
+  **that person's role** at resolution time, so it cannot give a `viewer` a write, cannot touch a
+  `locked` capability, and is inert for a Super Admin.
+- 🔴 **A row survives a role change**, because the grant was made about the person. Demote them and
+  a write they could no longer hold goes **inert** — and the People tab still LISTS it, marked
+  inactive, because a permission that silently does nothing is exactly what somebody needs to see in
+  order to delete it.
+- 🔴 **`people.delete_person` calls `permissions.prune_orphans`.** Neither capability table has an
+  FK (both document why), so nothing cleans these up automatically — and a row keyed by a recycled
+  user id would hand a future person somebody else's permissions.
+- `/api/auth/me` ships **`caps_for_user`**, never `caps_for(role)`. Shipping the role's set would
+  hide features from somebody the API allows — the dead-button failure pointed the other way.
+
+#### Reports: one capability per report
+
+`capabilities.REPORT_CAPS` maps the `report` path segment to a capability, and
+`reports._require_access` is now a dict lookup. Six capabilities rather than one `reports.view`
+because the six already had six different answers — collapsing them would either leak the
+payroll-adjacent ones to a team lead or take the overdue list off them. 🔴 **An unknown report name
+is now a 404.** It used to fall through the access check and be handled by `_build` returning
+nothing, so any report added later without a rule was world-readable; the default is closed.
+
+#### Two UI/API mismatches closed
+
+- `dashboard.is_admin` is now `has_cap(insights.view)`, not `role in ADMIN_ROLES`. Granting
+  `insights.view` used to open `GET /api/insights` while the Overview block that renders it stayed
+  hidden. The payload key is unchanged — `dashboard.js` reads it.
+- `attendance.kiosk_guard`'s session branch is now `has_cap(attendance.kiosk)`, so the scanner can go
+  to an office manager without making them a Super Admin. 🔴 The **kiosk-key branch stays first and
+  untouched**: an unattended kiosk carries no session and must not depend on the capability table.
+  It is still deliberately OPEN in non-production when no `KIOSK_KEY` is set.
 
 **Every default is a mechanical translation of the guard it replaced** — `_at_least(X)` where the
 code said `require_min_role(X)`, an explicit set where it said `require_roles(...)`.
@@ -458,6 +532,12 @@ Two more things that are load-bearing:
   in a later deploy arrive with its coded default already applied to every role. A snapshot would
   freeze the roster as it stood the day somebody last opened the console, so every new capability
   would land silently denied to everybody.
+- 🔴 **`has_cap(user, cap)` and `caps_for(role)` take NO session** — `resolved()` opens its own on a
+  cache miss. That is what makes `task_perms` able to ask at all: its predicates are `(user, task)`,
+  called from ~67 sites and from `serializers.task_card` once per card, and threading a `Session`
+  through all of them to read a seven-row table would be both a huge diff and the per-card read
+  §5's query budget forbids. A failed read falls back to the **coded defaults** and is not cached —
+  denying everything would take the app down over a blip; allowing everything is unthinkable.
 - 🟡 **The resolved matrix is cached per process (`PERMISSIONS_CACHE_SECONDS`, default 15).** Sentinel
   runs up to three instances, so a **revoke** takes up to that long to reach the other two. The
   console says so on screen; set it to `0` to resolve per request. The console's own read bypasses the
@@ -1985,7 +2065,7 @@ Get-ChildItem tests\test_*.py | ForEach-Object { python -m pytest -q $_.FullName
 
 Existing coverage: attendance engine, CSRF, events, gym plan, internal HMAC endpoints, leave,
 observability, security headers, RBAC, **the capability layer + Permissions console
-(`test_permissions.py`)**.
+(`test_permissions.py`), the task-board predicate rewrite (`test_task_capabilities.py`, which re-derives every original body and compares), and the per-person layer + reports (`test_user_capabilities.py`)**.
 
 🔴 **Never run two pytest processes at once — the suite is not concurrency-safe with itself.**
 `tests/conftest.py` pins `DATABASE_URL` to ONE fixed path (`%TEMP%/sentinel_pytest.db`) and rebuilds

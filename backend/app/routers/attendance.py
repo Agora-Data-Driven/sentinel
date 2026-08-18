@@ -35,10 +35,12 @@ from ..models import (
 from ..schemas import AttendanceEditIn, AttendanceRequestIn, EventIn, OfflineSyncIn, RequestDecisionIn, ScanIn, SelfEventIn
 from ..capabilities import (
     CAP_ATTENDANCE_APPROVALS,
+    CAP_ATTENDANCE_KIOSK,
     CAP_ATTENDANCE_EDIT_RECORDS,
     CAP_ATTENDANCE_RECORDS,
 )
 from ..security import get_current_user, get_current_user_optional, require_cap
+from ..services import permissions as perms_svc
 from ..serializers import attendance_request_dict, summary_dict, user_public
 from ..services import attendance as att
 from ..services import audit
@@ -67,7 +69,10 @@ def kiosk_guard(request: Request, user: User | None = Depends(get_current_user_o
         supplied = request.headers.get("X-Kiosk-Key") or request.query_params.get("kiosk_key")
         if supplied == settings.kiosk_key:
             return
-    if user is not None and user.role == ROLE_SUPER_ADMIN:
+    # The session path is now a CAPABILITY, so the scanner can be handed to an office manager
+    # without making them a Super Admin. The KEY path above is untouched and stays first: an
+    # unattended kiosk carries no session and must not depend on the capability table.
+    if perms_svc.has_cap(user, CAP_ATTENDANCE_KIOSK):
         return
     if not settings.kiosk_key:
         if settings.is_production:

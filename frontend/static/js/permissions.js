@@ -32,7 +32,25 @@ window.pageInit = async (S) => {
   view.innerHTML = '<div class="pagehead"><div><h2>Permissions</h2>'
     + '<div class="lead">What each role may do. Tick a box to grant a capability, untick to revoke — '
     + 'every change is audit-logged.</div></div></div>'
+    + '<div class="tabs" id="pm-tabs">'
+    + '<button class="active" data-tab="roles">Roles</button>'
+    + '<button data-tab="people">People</button>'
+    + '<button data-tab="history">History</button>'
+    + '</div>'
     + '<div id="pm-body"><div class="skeleton" style="height:320px"></div></div>';
+
+  // 🔴 Each tab OWNS #pm-body and re-renders it wholesale, so switching away drops any unsaved
+  // edits in the other one. That is deliberate over trying to keep two dirty grids alive at once:
+  // the Roles grid and a person grid can grant the same capability, and two half-saved views of one
+  // answer is how a console starts lying about what is in force.
+  S.qsa("#pm-tabs button").forEach((b) => b.onclick = () => {
+    S.qsa("#pm-tabs button").forEach((x) => x.classList.remove("active"));
+    b.classList.add("active");
+    pending = new Map();
+    if (b.dataset.tab === "roles") load();
+    else if (b.dataset.tab === "people") loadPeople();
+    else loadHistory();
+  });
 
   async function load() {
     const body = S.qs("#pm-body");
@@ -203,6 +221,193 @@ window.pageInit = async (S) => {
   // it enforces its own capability anyway.
   async function refreshMe() {
     try { S.user = await S.api("/api/auth/me"); } catch (e) { /* keep the boot snapshot */ }
+  }
+
+  // ================= People tab: per-person exceptions =================
+  // A grant here is layered ON TOP of the person's role, so the UI must always show BOTH — a
+  // checkbox with no indication of where it came from turns "Maria has payroll" into a mystery the
+  // next admin cannot unpick. Each row says whether the answer comes from the role or from an
+  // exception, and the exceptions are listed separately so they can be found and removed.
+  let people = null;
+  let editing = null;      // the loaded user_matrix, or null
+  let personPending = new Map();
+
+  async function loadPeople() {
+    const body = S.qs("#pm-body");
+    try { people = (await S.api("/api/permissions/people")).people; }
+    catch (e) { S.loadErr(body, e, loadPeople); return; }
+    editing = null;
+    personPending = new Map();
+    renderPeople();
+  }
+
+  function renderPeople() {
+    const rows = people.length
+      ? people.map((p) => '<tr><td><div>' + S.esc(p.name) + '</div>'
+          + '<div class="muted" style="font-size:12px">' + S.esc(p.email) + ' · ' + S.esc(p.role_label) + '</div></td>'
+          + '<td>' + p.caps.map((c) => '<span class="pill ' + (c.inert ? "grey" : (c.allowed ? "green" : "amber")) + '"'
+              + ' title="' + S.esc(c.inert ? (c.reason || "") : (c.allowed ? "Granted on top of their role" : "Revoked from their role")) + '">'
+              + (c.allowed ? "+" : "−") + " " + S.esc(c.label)
+              + (c.inert ? " (inactive)" : "") + '</span>').join(" ")
+          + '</td>'
+          + '<td style="text-align:right;white-space:nowrap">'
+          + '<button class="btn sm ghost" data-person="' + p.user_id + '">Edit</button>'
+          + (canEdit ? ' <button class="btn sm danger" data-clear="' + p.user_id + '">Clear</button>' : "")
+          + '</td></tr>').join("")
+      : '<tr><td colspan="3"><div class="empty">Nobody has an exception to their role. '
+        + 'Everyone gets exactly what the Roles tab says.</div></td></tr>';
+
+    S.qs("#pm-body").innerHTML = '<div class="mgr-strip">'
+      + '<span>' + people.length + " person" + (people.length === 1 ? "" : "s") + " with exceptions</span>"
+      + '<span class="muted" style="font-size:12px">An exception follows the PERSON, so it survives a '
+      + 'role change — and goes inactive if their new role could not hold it.</span>'
+      + (canEdit ? '<button class="btn sm ghost" id="pm-addperson">Add an exception</button>' : "")
+      + "</div>"
+      + '<div class="table-wrap"><table><thead><tr><th style="min-width:220px">Person</th>'
+      + '<th>Exceptions</th><th style="text-align:right">Actions</th></tr></thead>'
+      + "<tbody>" + rows + "</tbody></table></div>";
+
+    S.qsa("[data-person]").forEach((b) => b.onclick = () => openPerson(+b.dataset.person));
+    S.qsa("[data-clear]").forEach((b) => b.onclick = () => clearPerson(+b.dataset.clear));
+    const add = S.qs("#pm-addperson");
+    if (add) add.onclick = pickPerson;
+  }
+
+  async function pickPerson() {
+    let staff;
+    try { staff = await S.api("/api/people"); }
+    catch (e) { S.toast(e.detail || "Couldn't load the team", "err"); return; }
+    const opts = staff.map((u) => '<option value="' + u.id + '">' + S.esc(u.name + " · " + u.role_label) + "</option>").join("");
+    const m = S.modal({
+      title: "Add a per-person exception",
+      body: '<label class="field"><span>Who</span><select id="pp-who">' + opts + "</select></label>"
+        + '<div class="form-hint">You will pick the capabilities on the next screen. Their role stays '
+        + "as it is — this only records the difference.</div>",
+      footer: '<button class="btn ghost" id="pp-cancel">Cancel</button>'
+        + '<button class="btn primary" id="pp-go">Continue</button>',
+    });
+    S.qs("#pp-cancel").onclick = m.close;
+    S.qs("#pp-go").onclick = () => { const id = +S.qs("#pp-who").value; m.close(); openPerson(id); };
+  }
+
+  async function openPerson(userId) {
+    try { editing = await S.api("/api/permissions/people/" + userId); }
+    catch (e) { S.toast(e.detail || "Couldn't load that person", "err"); return; }
+    personPending = new Map();
+    renderPerson();
+  }
+
+  function personState(cap) {
+    const p = personPending.get(cap.key);
+    return p === undefined ? cap.allowed : p;
+  }
+
+  function renderPerson() {
+    const u = editing.user;
+    const dirty = personPending.size;
+    let rowsHtml = "";
+    for (const group of editing.groups) {
+      const inGroup = editing.capabilities.filter((c) => c.group === group);
+      if (!inGroup.length) continue;
+      rowsHtml += '<tr><td colspan="3" class="section-label" style="padding-top:14px">' + S.esc(group) + "</td></tr>";
+      for (const cap of inGroup) {
+        const on = personState(cap);
+        const differs = on !== cap.from_role;
+        rowsHtml += "<tr><td><div>" + S.esc(cap.label)
+          + (cap.locked ? ' <span class="pill amber">locked</span>' : "")
+          + (cap.write ? "" : ' <span class="pill grey">read</span>')
+          + '</div><div class="muted" style="font-size:12px">' + S.esc(cap.description) + "</div></td>"
+          + '<td class="muted" style="white-space:nowrap">'
+          + (cap.from_role ? "Their role: yes" : "Their role: no") + "</td>"
+          + '<td style="text-align:center" title="' + S.esc(cap.editable ? "" : (cap.reason || "")) + '">'
+          + '<input type="checkbox" style="width:auto" data-pcap="' + S.esc(cap.key) + '"'
+          + (on ? " checked" : "") + (cap.editable && canEdit ? "" : " disabled") + ">"
+          + (differs ? ' <span class="pill amber">exception</span>' : "")
+          + "</td></tr>";
+      }
+    }
+    S.qs("#pm-body").innerHTML = '<div class="mgr-strip">'
+      + '<button class="btn sm ghost" id="pm-back">← All people</button>'
+      + "<span><b>" + S.esc(u.name) + "</b> · " + S.esc(u.role_label) + "</span>"
+      + '<span class="muted" style="font-size:12px">Ticking a box that differs from their role records '
+      + "an exception. Matching their role again removes it.</span></div>"
+      + '<div class="table-wrap"><table><thead><tr><th style="min-width:280px">Capability</th>'
+      + '<th>From their role</th><th style="text-align:center">This person</th></tr></thead>'
+      + "<tbody>" + rowsHtml + "</tbody></table></div>"
+      + (canEdit
+        ? '<div class="row between" style="margin-top:14px"><div class="muted">'
+          + (dirty ? dirty + " unsaved change" + (dirty === 1 ? "" : "s") : "No unsaved changes") + "</div>"
+          + '<div class="row" style="gap:8px">'
+          + '<button class="btn ghost" id="pm-pcancel"' + (dirty ? "" : " disabled") + ">Discard</button>"
+          + '<button class="btn primary" id="pm-psave"' + (dirty ? "" : " disabled") + ">Save changes</button>"
+          + "</div></div>"
+        : "");
+
+    S.qs("#pm-back").onclick = loadPeople;
+    S.qsa("[data-pcap]:not([disabled])").forEach((box) => {
+      box.onchange = () => {
+        const cap = editing.capabilities.find((c) => c.key === box.dataset.pcap);
+        if (box.checked === cap.allowed) personPending.delete(cap.key);
+        else personPending.set(cap.key, box.checked);
+        renderPerson();
+      };
+    });
+    const c = S.qs("#pm-pcancel");
+    if (c) c.onclick = () => { personPending = new Map(); renderPerson(); };
+    const sv = S.qs("#pm-psave");
+    if (sv) sv.onclick = savePerson;
+  }
+
+  async function savePerson() {
+    const changes = [];
+    personPending.forEach((allowed, capability) => changes.push({ capability: capability, allowed: allowed }));
+    if (!changes.length) return;
+    try {
+      const res = await S.api("/api/permissions/people/" + editing.user.id,
+        { method: "PUT", body: { changes: changes } });
+      editing = res.matrix;
+      personPending = new Map();
+      if ((res.refused || []).length) S.toast(res.refused[0].reason || "Some changes were refused", "err");
+      else S.toast("Saved", "ok");
+      renderPerson();
+      await refreshMe();
+    } catch (e) { S.toast(e.detail || "Couldn't save", "err"); }
+  }
+
+  async function clearPerson(userId) {
+    if (!confirm("Remove every exception for this person? They will get exactly what their role gives.")) return;
+    try {
+      const res = await S.api("/api/permissions/people/" + userId + "/reset", { method: "POST" });
+      S.toast(res.cleared ? res.cleared + " exception(s) removed" : "Nothing to remove", "ok");
+      await loadPeople();
+      await refreshMe();
+    } catch (e) { S.toast(e.detail || "Couldn't clear", "err"); }
+  }
+
+  // ================= History tab =================
+  async function loadHistory() {
+    const body = S.qs("#pm-body");
+    let changes;
+    try { changes = (await S.api("/api/permissions/audit")).changes; }
+    catch (e) { S.loadErr(body, e, loadHistory); return; }
+    const rows = changes.length
+      ? changes.map((c) => "<tr><td>" + S.esc(c.at.replace("T", " ").slice(0, 16)) + "</td>"
+          + "<td>" + S.esc(c.actor) + "</td>"
+          + '<td><span class="pill grey">' + S.esc(c.scope) + "</span></td>"
+          + "<td>" + S.esc(c.label || c.target || "") + "</td>"
+          + "<td>" + (c.action === "reset"
+              ? '<span class="pill grey">reset to defaults</span>'
+              : (c.allowed
+                  ? '<span class="pill green">granted</span>'
+                  : '<span class="pill amber">revoked</span>'))
+          + "</td></tr>").join("")
+      : '<tr><td colspan="5"><div class="empty">No permission changes recorded yet.</div></td></tr>';
+    body.innerHTML = '<div class="mgr-strip"><span>The last ' + changes.length
+      + " permission change" + (changes.length === 1 ? "" : "s") + "</span>"
+      + '<span class="muted" style="font-size:12px">Every grant and revoke is recorded in the audit '
+      + "log; this is that log filtered to permissions.</span></div>"
+      + '<div class="table-wrap"><table><thead><tr><th>When</th><th>Who</th><th>Scope</th>'
+      + "<th>Target</th><th>Change</th></tr></thead><tbody>" + rows + "</tbody></table></div>";
   }
 
   load();

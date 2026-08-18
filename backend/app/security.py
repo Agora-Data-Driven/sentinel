@@ -131,10 +131,10 @@ def require_cap(cap_key: str):
     unknown one, so a typo CLOSES the endpoint rather than opening it.
     """
 
-    def _guard(user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> User:
+    def _guard(user: User = Depends(get_current_user)) -> User:
         from .services import permissions as perms_svc
 
-        if not perms_svc.has_cap(db, user, cap_key):
+        if not perms_svc.has_cap(user, cap_key):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient role")
         return user
 
