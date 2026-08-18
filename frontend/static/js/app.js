@@ -101,6 +101,7 @@
     target: P('<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.2"/>'),
     heart: P('<path d="M12 20s-7-4.6-9.2-9A4.7 4.7 0 0 1 12 6a4.7 4.7 0 0 1 9.2 5C19 15.4 12 20 12 20z"/>'),
     lock: P('<rect x="4.5" y="10.5" width="15" height="10" rx="2.2"/><path d="M8 10.5V7a4 4 0 0 1 8 0v3.5"/><path d="M12 14.5v2.5"/>'),
+    shield: P('<path d="M12 3l7.5 3v5.5c0 4.6-3.1 8.3-7.5 9.5-4.4-1.2-7.5-4.9-7.5-9.5V6z"/><path d="M9.2 12l2 2 3.6-3.8"/>'),
     run: P('<circle cx="14" cy="4.8" r="1.8"/><path d="M13 8.5l-3.2 2 1.6 3.2M11.4 13.7L9.5 20M11.4 13.7l3 1.4.9 4.9M13 8.5l3.2 1.4 1 2.8 2.3.6M13 8.5l-4.5 1"/>'),
     // The task form's property rows (taskboard.js `taskForm`) label each row with one of these.
     // They live HERE rather than inline in that file because this object is the icon registry and
@@ -182,9 +183,14 @@
     { group: "Admin", icon: "sliders", children: [
       { href: "/people", label: "People", icon: "users", min: "team_lead" },
       { href: "/reports", label: "Reports", icon: "chart", min: "team_lead" },
-      { href: "/payroll", label: "Payroll", icon: "wallet", roles: ["super_admin"] },
-      { href: "/manage", label: "Manage", icon: "sliders", roles: ["super_admin"] },
-      { href: "/settings", label: "Settings", icon: "gear", min: "admin" },
+      // These four follow CAPABILITIES, not roles — they are exactly the tabs the Permissions
+      // console can reassign, so a hardcoded `roles: ["super_admin"]` here would hide a page the
+      // server had just started allowing. /people and /reports keep `min` because their endpoints
+      // are still rank-gated (reports.py decides per report, inline).
+      { href: "/payroll", label: "Payroll", icon: "wallet", cap: "payroll.manage" },
+      { href: "/manage", label: "Manage", icon: "sliders", cap: "manage.console" },
+      { href: "/permissions", label: "Permissions", icon: "shield", cap: "permissions.view" },
+      { href: "/settings", label: "Settings", icon: "gear", cap: "settings.view" },
     ] },
   ];
 
@@ -1211,6 +1217,12 @@
   async function doLogout() { try { await api("/api/auth/logout", { method: "POST" }); } finally { location.href = "https://agoradatadriven.com"; } }
   function navAllowed(n) {
     if (n.hideRoles && n.hideRoles.includes(USER.role)) return false;
+    // 🔴 `cap` is checked BEFORE `roles`/`min` and wins outright. A nav entry whose page is gated by a
+    // capability must follow the capability, or the Permissions console becomes a lie: a Super Admin
+    // grants Admin the payroll console, the API starts answering 200, and the tab is still hidden —
+    // which reads as "the feature is broken", exactly the failure mode the Team Lead dead-button
+    // incident produced (AGENTS.md §5). Entries with no capability keep the rank/role gates.
+    if (n.cap) return (USER.caps || []).indexOf(n.cap) !== -1;
     if (n.roles) return n.roles.includes(USER.role);
     if (n.min) return (ROLE_RANK[USER.role] || 0) >= ROLE_RANK[n.min];
     return true;
@@ -1506,6 +1518,16 @@
     get vocab() { return VOCAB; },
     view: () => qs("#view"),
     can: (min) => (ROLE_RANK[USER.role] || 0) >= ROLE_RANK[min],
+    // Does the signed-in user hold a named CAPABILITY? `caps` is resolved SERVER-side and shipped on
+    // /api/auth/me, which is the point: a Super Admin can move a capability between roles in the
+    // Permissions console, so anything the UI derives from `role` on its own goes stale the moment
+    // they do. Prefer this over `can("admin")` for any surface whose capability exists.
+    //
+    // 🔴 It is a CONVENIENCE, never the enforcement. Every endpoint behind a `hasCap` check runs its
+    // own `require_cap` and answers a real 403 — AGENTS.md §7, "Enforce a permission only in the UI".
+    // Absent `caps` (an older cached /me, a partial boot) reads as "no", so the failure mode is a
+    // hidden button rather than one that 403s on click.
+    hasCap: (cap) => !!(USER && USER.caps && USER.caps.indexOf(cap) !== -1),
   };
   window.Sentinel = Sentinel;
 

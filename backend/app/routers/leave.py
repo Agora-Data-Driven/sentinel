@@ -25,7 +25,8 @@ def _remaining(db: Session, user_id: int, lt: LeaveType, year: int) -> float:
 from ..database import get_db
 from ..models import LeaveBalance, LeaveRequest, LeaveType, User
 from ..schemas import LeaveDecisionIn, LeaveRequestIn
-from ..security import get_current_user, require_min_role
+from ..capabilities import CAP_LEAVE_APPROVALS
+from ..security import get_current_user, require_cap
 from ..serializers import leave_balance_dict, leave_request_dict, leave_type_dict
 from ..services import audit
 from ..services import leave as leave_svc
@@ -111,7 +112,7 @@ def create_request(payload: LeaveRequestIn, user: User = Depends(get_current_use
 @router.get("/requests")
 def all_requests(
     status: str | None = Query(None),
-    reviewer: User = Depends(require_min_role(ROLE_TEAM_LEAD)),
+    reviewer: User = Depends(require_cap(CAP_LEAVE_APPROVALS)),
     db: Session = Depends(get_db),
 ):
     q = select(LeaveRequest).order_by(LeaveRequest.created_at.desc())
@@ -126,13 +127,13 @@ def all_requests(
         #
         # 🔴 An empty set now matches nobody, where `None == None` used to match every
         # department-less person. A lead with no department of their own sees no requests here —
-        # which is the honest answer, and `require_min_role` still lets any admin above them decide.
+        # which is the honest answer, and anybody else holding `leave.approvals` can still decide.
         rows = [r for r in rows if teams_svc.shares_department(db.get(User, r.user_id), reviewer)]
     return [leave_request_dict(r, db) for r in rows]
 
 
 @router.patch("/request/{req_id}")
-def decide(req_id: int, payload: LeaveDecisionIn, reviewer: User = Depends(require_min_role(ROLE_TEAM_LEAD)), db: Session = Depends(get_db)):
+def decide(req_id: int, payload: LeaveDecisionIn, reviewer: User = Depends(require_cap(CAP_LEAVE_APPROVALS)), db: Session = Depends(get_db)):
     req = db.get(LeaveRequest, req_id)
     if not req:
         raise HTTPException(status_code=404, detail="Request not found")

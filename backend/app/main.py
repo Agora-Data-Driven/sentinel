@@ -40,6 +40,7 @@ from .routers import (
     notifications,
     payroll,
     people,
+    permissions,
     reports,
     stream,
     tasks,
@@ -510,7 +511,7 @@ def _startup_safeguards() -> None:
 # `dev` is registered UNCONDITIONALLY and gates itself per request (routers/dev.py): making the
 # route's existence depend on a setting's value at import time is how an endpoint ends up "gone"
 # in one worker and live in another.
-for r in (auth, attendance, gym, tasks, people, leave, notifications, reports, admin, meta, manage, payroll, cron, stream, internal, development, dev):
+for r in (auth, attendance, gym, tasks, people, leave, notifications, reports, admin, meta, manage, payroll, permissions, cron, stream, internal, development, dev):
     app.include_router(r.router)
 
 
@@ -689,6 +690,7 @@ _PAGES = {
     "/reports": "reports.html",
     "/settings": "settings.html",
     "/manage": "manage.html",
+    "/permissions": "permissions.html",
     "/payroll": "payroll.html",
     # The Task Board got its own page back on 2026-08-03 (decision D7). It was embedded in the
     # dashboard from 2026-07-26 until then; `/dashboard?open=<id>` still forwards here, see below.

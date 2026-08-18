@@ -4,8 +4,10 @@
    and export the sheet to CSV. Everything is gated server-side too — this page just draws it. */
 window.pageInit = async (S) => {
   const view = S.view();
-  if (S.user.role !== "super_admin") {
-    view.innerHTML = `<div class="empty card pad" style="margin-top:30px">Payroll is restricted to Super Admins.</div>`;
+  // Capability, not role — see the same note in manage.js.
+  if (!S.hasCap("payroll.manage")) {
+    view.innerHTML = `<div class="empty card pad" style="margin-top:30px">You don't have access to Payroll.
+      A Super Admin can grant it in Admin → Permissions.</div>`;
     return;
   }
 

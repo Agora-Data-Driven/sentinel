@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ..constants import GYM_DAY_TYPES, ROLE_SUPER_ADMIN
+from ..constants import GYM_DAY_TYPES
 from ..database import get_db
 from ..models import (
     Client,
@@ -33,7 +33,8 @@ from ..models import (
     User,
     UserTeam,
 )
-from ..security import get_current_user, require_roles
+from ..capabilities import CAP_MANAGE_CONSOLE
+from ..security import get_current_user, require_cap
 from ..serializers import client_dict, leave_type_dict, shift_template_dict, team_dict
 from ..services import atrium_bridge
 from ..services import atrium_tasks
@@ -67,7 +68,7 @@ def _opt_int(payload: dict, key: str, default: int | None) -> int | None:
 router = APIRouter(
     prefix="/api/manage",
     tags=["manage"],
-    dependencies=[Depends(require_roles(ROLE_SUPER_ADMIN))],  # whole console is SA-only
+    dependencies=[Depends(require_cap(CAP_MANAGE_CONSOLE))],  # one capability gates the whole console
 )
 
 

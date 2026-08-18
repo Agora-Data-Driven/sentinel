@@ -3,8 +3,13 @@
    (gym exercises, clients, departments, leave types). */
 window.pageInit = async (S) => {
   const view = S.view();
-  if (S.user.role !== "super_admin") {
-    view.innerHTML = `<div class="empty card pad" style="margin-top:30px">This console is for Super Admins only.</div>`;
+  // Gated on the CAPABILITY, not on `role === "super_admin"` — a Super Admin can hand `manage.console`
+  // to another role in Permissions, and a page that kept testing the role would refuse somebody the
+  // API had just started admitting. Wording follows suit: naming a role here would be a second,
+  // stale copy of the rule.
+  if (!S.hasCap("manage.console")) {
+    view.innerHTML = `<div class="empty card pad" style="margin-top:30px">You don't have access to the Manage console.
+      A Super Admin can grant it in Admin → Permissions.</div>`;
     return;
   }
 

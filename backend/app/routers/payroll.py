@@ -1,7 +1,7 @@
 """Payroll / Accounting — Super Admin ONLY. Computes each employee's net pay for a month from the
 attendance, overtime, and leave data already in Sentinel, with editable per-person bonus/deduction.
 
-Every route is gated by ``require_roles(ROLE_SUPER_ADMIN)`` so salaries are never exposed to other
+Every route is gated by the ``payroll.manage`` capability so salaries are never exposed to other
 roles — not just hidden in the UI. All salary/bonus changes are written to the audit trail.
 """
 from __future__ import annotations
@@ -12,18 +12,18 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..constants import ROLE_SUPER_ADMIN
 from ..database import get_db
 from ..models import PayrollEntry, User
 from ..schemas import PayrollAdjustIn, PayrollFinalizeIn, SalaryIn
-from ..security import require_roles
+from ..capabilities import CAP_PAYROLL_MANAGE
+from ..security import require_cap
 from ..services import audit
 from ..services import payroll as payroll_svc
 from ..utils.csv_export import csv_response
 
 router = APIRouter(prefix="/api/payroll", tags=["payroll"])
 
-_SA = require_roles(ROLE_SUPER_ADMIN)
+_SA = require_cap(CAP_PAYROLL_MANAGE)
 
 
 def _valid_period(period: str) -> str:

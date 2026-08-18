@@ -31,7 +31,8 @@ from ..schemas import (
     GymRoutineIn,
     GymSessionEditIn,
 )
-from ..security import get_current_user, require_min_role, require_roles
+from ..capabilities import CAP_GYM_EDIT_LOGS, CAP_GYM_ROLLUP
+from ..security import get_current_user, require_cap
 from ..serializers import gym_log_dict, gym_routine_dict
 from ..services import audit
 from ..services import development as dev_svc
@@ -431,7 +432,7 @@ def calendar(
 @router.get("/summary")
 def summary(
     team_id: int | None = Query(None),
-    admin: User = Depends(require_min_role(ROLE_TEAM_LEAD)),
+    admin: User = Depends(require_cap(CAP_GYM_ROLLUP)),
     db: Session = Depends(get_db),
 ):
     """Week-to-date compliance per user (Completed / Incomplete / Missing)."""
@@ -471,7 +472,7 @@ def summary(
 def admin_edit_log(
     log_id: int,
     payload: GymAdminEditIn,
-    admin: User = Depends(require_roles(ROLE_SUPER_ADMIN)),
+    admin: User = Depends(require_cap(CAP_GYM_EDIT_LOGS)),
     db: Session = Depends(get_db),
 ):
     """Super Admin correction of any user's session (day type / status / notes)."""

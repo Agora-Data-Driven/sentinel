@@ -1,7 +1,7 @@
 window.pageInit = async (S) => {
   const view = S.view();
   const isMgr = S.can("team_lead");
-  const isSA = S.user.role === "super_admin";
+  const canEditLogs = S.hasCap("gym.edit_logs");
   const SET_TYPES = ["Normal", "Warm-up", "Drop", "To failure"];
   const GYM_STATUSES = ["Completed", "Incomplete", "Missing"];
   const GYM_DAYS = ["Push", "Pull", "Legs", "Custom"];          // splits you can log
@@ -1005,13 +1005,13 @@ window.pageInit = async (S) => {
     S.qs("#tabc").innerHTML = '<div class="skeleton" style="height:200px"></div>';
     const rows = await S.api("/api/gym/summary");
     S.qs("#tabc").innerHTML = `<div class="table-wrap"><table>
-      <thead><tr><th>Employee</th><th>Sessions (wk)</th><th>Completed</th><th>Incomplete</th><th>This week</th>${isSA ? "<th></th>" : ""}</tr></thead>
+      <thead><tr><th>Employee</th><th>Sessions (wk)</th><th>Completed</th><th>Incomplete</th><th>This week</th>${canEditLogs ? "<th></th>" : ""}</tr></thead>
       <tbody>${rows.map((r, i) => `<tr>
         <td class="t-name">${S.avatar({ name: r.name }, "sm")}${S.esc(r.name)}</td>
         <td>${r.sessions}</td><td>${r.completed}</td><td>${r.incomplete}</td>
         <td><div class="row">${r.logs.length ? r.logs.map((g) => `<span class="pill day ${g.day_type}" title="${g.day_type} · ${g.status}">${g.day_type[0]}</span>`).join("") : '<span class="muted">—</span>'}</div></td>
-        ${isSA ? `<td style="text-align:right">${r.logs.length ? `<button class="btn sm ghost" data-manage="${i}">Manage</button>` : ""}</td>` : ""}</tr>`).join("")}</tbody></table></div>`;
-    if (isSA) S.qsa("[data-manage]").forEach((b) => b.onclick = () => manageSessions(rows[+b.dataset.manage]));
+        ${canEditLogs ? `<td style="text-align:right">${r.logs.length ? `<button class="btn sm ghost" data-manage="${i}">Manage</button>` : ""}</td>` : ""}</tr>`).join("")}</tbody></table></div>`;
+    if (canEditLogs) S.qsa("[data-manage]").forEach((b) => b.onclick = () => manageSessions(rows[+b.dataset.manage]));
   }
 
   // Super Admin: edit/delete any employee's gym sessions (this week).

@@ -181,8 +181,18 @@ def dev_login(payload: DevLoginIn, response: Response, db: Session = Depends(get
 
 @router.get("/me")
 def me(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    from ..services import permissions as perms_svc
+
     team = db.get(Team, user.team_id) if user.team_id else None
-    return user_full(user, team)
+    # 🔴 `caps` is added HERE, not on `user_full`. That serializer is called once per person in the
+    # People directory and once per assignee/supporter on the board, and resolving capabilities needs
+    # the override table — so putting it there would add a read to a hot path for an answer only the
+    # signed-in user's own record has any use for (AGENTS.md §5, "the board has a QUERY BUDGET").
+    #
+    # This is what the frontend gates its nav and buttons on instead of re-deriving from `role` — a
+    # UI mirror of a server rule is how "Team Lead can't assign" shipped as a dead button rather than
+    # a 403. It stays a convenience: every endpoint behind it enforces its own capability.
+    return {**user_full(user, team), "caps": sorted(perms_svc.caps_for(db, user.role))}
 
 
 @router.post("/logout")

@@ -569,6 +569,19 @@ class PersonCreateIn(BaseModel):
     password: str | None = None  # optional initial password
 
 
+class PermissionChangeIn(BaseModel):
+    role: str
+    capability: str
+    allowed: bool
+
+
+class PermissionChangesIn(BaseModel):
+    """A BATCH of grants/revokes. The console saves a whole grid, not one checkbox at a time, so a
+    change that is only coherent with another (grant the read, grant the write) lands together."""
+
+    changes: list[PermissionChangeIn]
+
+
 class PersonUpdateIn(BaseModel):
     name: str | None = None
     email: str | None = None

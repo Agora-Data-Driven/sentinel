@@ -1,7 +1,7 @@
 window.pageInit = async (S) => {
   const view = S.view();
   const isMgr = S.can("team_lead");
-  const isSA = S.user.role === "super_admin";
+  const canEditRecords = S.hasCap("attendance.edit_records");
   const iso = (d) => d.toISOString().slice(0, 10);
   const toHM = (isoStr) => isoStr ? new Date(isoStr).toLocaleTimeString("en-GB", { timeZone: "Asia/Manila", hour: "2-digit", minute: "2-digit" }) : "";
   const STATUSES = ["OnTime", "Late", "Absent", "HalfDay", "MissingClockOut", "OnLeave"];
@@ -42,7 +42,7 @@ window.pageInit = async (S) => {
       <select id="f-team"><option value="">All teams</option>${teams.map((t) => `<option value="${t.id}">${S.esc(t.name)}</option>`).join("")}</select>
       <span class="grow"></span>
     </div><div id="sum-table"></div>`;
-    const cols = 7 + (isSA ? 1 : 0);
+    const cols = 7 + (canEditRecords ? 1 : 0);
     const load = async () => {
       // Same guard as reports.js: From > To makes the server answer zero rows, which rendered "No
       // records for this range." — a sentence about the DATA when the fault is in the question, and on
@@ -65,7 +65,7 @@ window.pageInit = async (S) => {
       try { rows = await S.api("/api/attendance/summary?" + q); }
       catch (e) { S.loadErr("#sum-table", e, load); return; }
       S.qs("#sum-table").innerHTML = `<div class="table-wrap tall"><table>
-        <thead><tr><th class="sortable">Employee</th><th class="sortable">Date</th><th class="sortable">In</th><th class="sortable">Out</th><th class="sortable">Hours</th><th class="sortable">Status</th><th class="sortable">Handover</th>${isSA ? "<th></th>" : ""}</tr></thead>
+        <thead><tr><th class="sortable">Employee</th><th class="sortable">Date</th><th class="sortable">In</th><th class="sortable">Out</th><th class="sortable">Hours</th><th class="sortable">Status</th><th class="sortable">Handover</th>${canEditRecords ? "<th></th>" : ""}</tr></thead>
         <tbody>${rows.length ? rows.map((s, i) => `<tr>
           <td class="t-name">${S.avatar(s.user, "sm")}${S.esc(s.user ? s.user.name : "?")}</td>
           ${/* 🔴 `data-sort` carries the RAW value for every cell whose display form does not sort:
@@ -78,8 +78,8 @@ window.pageInit = async (S) => {
           <td>${s.total_work_hours}h</td>
           <td>${S.statusPill(s.status)}</td>
           <td class="sub" style="max-width:220px">${S.esc(s.handover_note || "—")}</td>
-          ${isSA ? `<td style="text-align:right"><button class="btn sm ghost" data-edit="${i}">Edit</button></td>` : ""}</tr>`).join("") : `<tr><td colspan="${cols}"><div class="empty">No records for this range.</div></td></tr>`}</tbody></table></div>`;
-      if (isSA) S.qsa("#sum-table [data-edit]").forEach((b) => b.onclick = () => openEdit(rows[+b.dataset.edit], load));
+          ${canEditRecords ? `<td style="text-align:right"><button class="btn sm ghost" data-edit="${i}">Edit</button></td>` : ""}</tr>`).join("") : `<tr><td colspan="${cols}"><div class="empty">No records for this range.</div></td></tr>`}</tbody></table></div>`;
+      if (canEditRecords) S.qsa("#sum-table [data-edit]").forEach((b) => b.onclick = () => openEdit(rows[+b.dataset.edit], load));
       // 🔴 Sorting REORDERS the DOM rows, but `data-edit` is an INDEX into `rows` — which does not move.
       // That is why the handler above reads `rows[+b.dataset.edit]` rather than the row's position, and
       // why sorting cannot desync Edit from the record it opens. Don't switch it to a row index.

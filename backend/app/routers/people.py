@@ -6,7 +6,7 @@ from datetime import timedelta
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..constants import (
@@ -38,7 +38,14 @@ from ..models import (
     UserTeam,
 )
 from ..schemas import PersonCreateIn, PersonUpdateIn
-from ..security import get_current_user, is_admin, require_min_role, require_roles
+from ..capabilities import (
+    CAP_PEOPLE_BADGE,
+    CAP_PEOPLE_CREATE,
+    CAP_PEOPLE_DELETE,
+    CAP_PEOPLE_EDIT,
+    CAP_PEOPLE_SET_ROLE,
+)
+from ..security import get_current_user, is_admin, require_cap
 from ..serializers import (CardPrefetch, gym_log_dict, leave_balance_dict, summary_dict, task_card,
                            user_full)
 from ..services import audit
@@ -167,7 +174,7 @@ def profile(user_id: int, viewer: User = Depends(get_current_user), db: Session 
     }
 
 
-@router.post("", dependencies=[Depends(require_roles(ROLE_SUPER_ADMIN))])
+@router.post("", dependencies=[Depends(require_cap(CAP_PEOPLE_CREATE))])
 def create_person(payload: PersonCreateIn, actor: User = Depends(get_current_user), db: Session = Depends(get_db)):
     if payload.role not in ALL_ROLES:
         raise HTTPException(status_code=400, detail="Invalid role")
@@ -194,14 +201,68 @@ def create_person(payload: PersonCreateIn, actor: User = Depends(get_current_use
     return user_full(u, team)
 
 
+def _active_super_admins(db: Session, excluding: int | None = None) -> int:
+    q = select(func.count()).select_from(User).where(
+        User.role == ROLE_SUPER_ADMIN, User.is_active.is_(True)
+    )
+    if excluding is not None:
+        q = q.where(User.id != excluding)
+    return int(db.execute(q).scalar() or 0)
+
+
+def _guard_role_write(db: Session, actor: User, target: User, data: dict) -> None:
+    """Refuse a `role` / `is_active` write this actor may not make. Called before the setattr loop.
+
+    🔴 **THIS ROUTE WAS A PRIVILEGE-ESCALATION PATH UNTIL 2026-08-17.** It was guarded by
+    `require_min_role("admin")` and applied every field through a generic `setattr` loop, so `role`
+    was written exactly like `phone` — meaning **any Admin could PATCH themselves to
+    `super_admin`** and take payroll, the Manage console and the delete button with them. The Manage
+    UI is Super-Admin-only, but that is a frontend gate and this is an open API (AGENTS.md §7:
+    "Enforce a permission only in the UI → RBAC belongs in a dependency guard"). Editing a
+    colleague's record and deciding what that colleague may DO are two different powers, and the
+    generic loop had quietly fused them.
+
+    Two separate refusals, and neither one implies the other:
+
+    - **Changing a role needs `people.set_role`** — a LOCKED, Super-Admin-only capability, so the
+      Permissions console itself cannot hand this out (`capabilities.is_grantable`). Gated on the
+      role actually CHANGING, not merely being present in the payload: the Manage form submits every
+      field on every save, so gating on presence would 403 a Super Admin's colleague editing a phone
+      number.
+    - **The LAST active Super Admin cannot be demoted or deactivated**, by anybody, including
+      themselves. `main.py`'s startup safeguard would recreate a platform owner on the next boot,
+      but "log in as nobody until someone redeploys" is not a recovery story — and on
+      `--min-instances 1` that next boot may be days away.
+    """
+    from ..services import permissions as perms_svc
+
+    changing_role = "role" in data and data["role"] != target.role
+    deactivating = data.get("is_active") is False and target.is_active
+    if changing_role and not perms_svc.has_cap(db, actor, CAP_PEOPLE_SET_ROLE):
+        raise HTTPException(
+            status_code=403,
+            detail="Only a Super Admin can change somebody's role.",
+        )
+    losing_super = target.role == ROLE_SUPER_ADMIN and (changing_role or deactivating)
+    if losing_super and _active_super_admins(db, excluding=target.id) == 0:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This is the only active Super Admin. Promote somebody else first, or nobody will "
+                "be able to manage Sentinel."
+            ),
+        )
+
+
 @router.patch("/{user_id}")
-def update_person(user_id: int, payload: PersonUpdateIn, actor: User = Depends(require_min_role("admin")), db: Session = Depends(get_db)):
+def update_person(user_id: int, payload: PersonUpdateIn, actor: User = Depends(require_cap(CAP_PEOPLE_EDIT)), db: Session = Depends(get_db)):
     u = db.get(User, user_id)
     if not u:
         raise HTTPException(status_code=404, detail="Employee not found")
     data = payload.model_dump(exclude_unset=True)
     if "role" in data and data["role"] not in ALL_ROLES:
         raise HTTPException(status_code=400, detail="Invalid role")
+    _guard_role_write(db, actor, u, data)
     # Password is set separately (hashed), and never echoed in the audit log.
     new_password = data.pop("password", None)
     # Departments are a JOIN TABLE, not a column — pop it before the generic `setattr` loop below
@@ -296,7 +357,7 @@ def get_avatar(user_id: int, actor: User = Depends(get_current_user), db: Sessio
 
 
 @router.get("/{user_id}/qr")
-def qr_badge(user_id: int, actor: User = Depends(require_min_role("admin")), db: Session = Depends(get_db)):
+def qr_badge(user_id: int, actor: User = Depends(require_cap(CAP_PEOPLE_BADGE)), db: Session = Depends(get_db)):
     u = db.get(User, user_id)
     if not u:
         raise HTTPException(status_code=404, detail="Employee not found")
@@ -316,7 +377,7 @@ def qr_badge(user_id: int, actor: User = Depends(require_min_role("admin")), db:
 
 
 @router.get("/{user_id}/badge")
-def badge_code(user_id: int, actor: User = Depends(require_min_role("admin")), db: Session = Depends(get_db)):
+def badge_code(user_id: int, actor: User = Depends(require_cap(CAP_PEOPLE_BADGE)), db: Session = Depends(get_db)):
     """The employee's badge CODE (the same token the QR encodes) — for typing when they can't scan,
     or to re-give if they lost their badge. Admin+ only (a token can punch that person's attendance)."""
     u = db.get(User, user_id)
@@ -333,7 +394,7 @@ def badge_code(user_id: int, actor: User = Depends(require_min_role("admin")), d
 
 
 @router.post("/{user_id}/qr/regenerate")
-def regenerate_qr(user_id: int, actor: User = Depends(require_min_role("admin")), db: Session = Depends(get_db)):
+def regenerate_qr(user_id: int, actor: User = Depends(require_cap(CAP_PEOPLE_BADGE)), db: Session = Depends(get_db)):
     """Issue a fresh QR token for an employee (revokes the old one). Assigns it to that employee."""
     u = db.get(User, user_id)
     if not u:
@@ -349,7 +410,7 @@ def regenerate_qr(user_id: int, actor: User = Depends(require_min_role("admin"))
     return {"ok": True, "user_id": u.id}
 
 
-@router.delete("/{user_id}", dependencies=[Depends(require_roles(ROLE_SUPER_ADMIN))])
+@router.delete("/{user_id}", dependencies=[Depends(require_cap(CAP_PEOPLE_DELETE))])
 def delete_person(user_id: int, actor: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Permanently remove an employee and clean up their dependent records.
 

@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..constants import GROWTH_DIMENSIONS, ROLE_ADMIN
+from ..constants import GROWTH_DIMENSIONS
 from ..database import get_db
 from ..models import (
     BodyMetric,
@@ -50,7 +50,8 @@ from ..schemas import (
     SkillIn,
     SkillUpdateIn,
 )
-from ..security import get_current_user, require_min_role
+from ..capabilities import CAP_GROWTH_TEAM, CAP_READING_CANON
+from ..security import get_current_user, require_cap
 from ..serializers import (
     achievement_dict,
     body_metric_dict,
@@ -108,7 +109,7 @@ def team_growth(
     days: int = Query(team_growth_svc.DEFAULT_WINDOW_DAYS, ge=1, le=180,
                       description="Velocity measurement window, in days."),
     refresh: bool = Query(False, description="Bypass the rollup cache and re-read the engine."),
-    viewer: User = Depends(require_min_role(ROLE_ADMIN)),
+    viewer: User = Depends(require_cap(CAP_GROWTH_TEAM)),
     db: Session = Depends(get_db),
 ):
     """Everyone's growth in one payload, for the Overview's admin Team-progress panel.
@@ -524,7 +525,7 @@ def set_reading_progress(item_id: int, payload: ReadingProgressIn, user: User = 
 
 # --- Reading canon (admin curation) -----------------------------------------
 @router.post("/reading/canon")
-def add_canon(payload: ReadingItemIn, admin: User = Depends(require_min_role(ROLE_ADMIN)), db: Session = Depends(get_db)):
+def add_canon(payload: ReadingItemIn, admin: User = Depends(require_cap(CAP_READING_CANON)), db: Session = Depends(get_db)):
     it = ReadingItem(
         title=payload.title,
         author=payload.author,
@@ -541,7 +542,7 @@ def add_canon(payload: ReadingItemIn, admin: User = Depends(require_min_role(ROL
 
 
 @router.patch("/reading/canon/{item_id}")
-def update_canon(item_id: int, payload: ReadingItemUpdateIn, admin: User = Depends(require_min_role(ROLE_ADMIN)), db: Session = Depends(get_db)):
+def update_canon(item_id: int, payload: ReadingItemUpdateIn, admin: User = Depends(require_cap(CAP_READING_CANON)), db: Session = Depends(get_db)):
     it = db.get(ReadingItem, item_id)
     if not it:
         raise HTTPException(status_code=404, detail="Reading item not found")
@@ -551,7 +552,7 @@ def update_canon(item_id: int, payload: ReadingItemUpdateIn, admin: User = Depen
 
 
 @router.delete("/reading/canon/{item_id}", status_code=204)
-def delete_canon(item_id: int, admin: User = Depends(require_min_role(ROLE_ADMIN)), db: Session = Depends(get_db)):
+def delete_canon(item_id: int, admin: User = Depends(require_cap(CAP_READING_CANON)), db: Session = Depends(get_db)):
     it = db.get(ReadingItem, item_id)
     if not it:
         raise HTTPException(status_code=404, detail="Reading item not found")
