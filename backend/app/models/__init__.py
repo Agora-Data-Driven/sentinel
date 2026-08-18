@@ -40,7 +40,7 @@ from .gym import ExerciseLibrary, GymExercise, GymLog, GymPlanOverride, GymRouti
 from .leave import LeaveBalance, LeaveRequest, LeaveType
 from .notification import Notification
 from .payroll import PayrollEntry
-from .system import AuditLog, RoleCapability, SystemSetting
+from .system import AuditLog, RoleCapability, SystemSetting, UserCapability
 from .task import (AtriumApproval, RecurringService, ServiceTemplate, Task, TaskComment,
                    TaskHistory, TaskRequest, TaskSupporter, TaskVocabItem)
 from .user import QRToken, ShiftTemplate, Team, User, UserTeam
@@ -90,4 +90,5 @@ __all__ = [
     "AuditLog",
     "RoleCapability",
     "SystemSetting",
+    "UserCapability",
 ]

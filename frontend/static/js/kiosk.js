@@ -15,7 +15,7 @@ window.pageInit = async (S) => {
   if (MODE === "scanner") {
     try {
       const me = await S.api("/api/auth/me");
-      if (me.role !== "super_admin") { S.toast("Super Admin only", "err"); setTimeout(() => (location.href = "/dashboard"), 1200); return; }
+      if (!(me.caps || []).includes("attendance.kiosk")) { S.toast("You don't have access to the scanner", "err"); setTimeout(() => (location.href = "/dashboard"), 1200); return; }
     } catch (e) { location.href = "/login"; return; }
   }
 

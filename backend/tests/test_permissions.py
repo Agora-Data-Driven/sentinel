@@ -33,7 +33,7 @@ _ORIGINAL_GATES = [
     ("leave.approvals", "min:team_lead"),
     ("tasks.recurring", (C.ROLE_ACCOUNT_MANAGER, C.ROLE_ADMIN, C.ROLE_SUPER_ADMIN)),
     ("tasks.requests", (C.ROLE_ACCOUNT_MANAGER, C.ROLE_ADMIN, C.ROLE_SUPER_ADMIN)),
-    ("tasks.atrium_share", (C.ROLE_ACCOUNT_MANAGER, C.ROLE_ADMIN, C.ROLE_SUPER_ADMIN)),
+    ("atrium.bridge", (C.ROLE_ACCOUNT_MANAGER, C.ROLE_ADMIN, C.ROLE_SUPER_ADMIN)),
     ("tasks.adoption", (C.ROLE_SUPER_ADMIN,)),
     ("growth.team", "min:admin"),
     ("reading.canon", "min:admin"),
@@ -175,12 +175,12 @@ def test_revoking_a_capability_closes_a_real_endpoint(client, db, auth, make_use
 
 def test_an_unknown_capability_key_closes_rather_than_opens(db, make_user):
     sa = make_user(C.ROLE_SUPER_ADMIN)
-    assert perms_svc.has_cap(db, sa, "typo.not.a.capability") is False
+    assert perms_svc.has_cap(sa, "typo.not.a.capability") is False
 
 
 def test_an_inactive_user_holds_nothing(db, make_user):
     sa = make_user(C.ROLE_SUPER_ADMIN, active=False)
-    assert perms_svc.has_cap(db, sa, "settings.view") is False
+    assert perms_svc.has_cap(sa, "settings.view") is False
 
 
 # --------------------------------------------------------------------------------------
@@ -386,6 +386,10 @@ def test_me_caps_follow_an_override(client, db, auth, make_user):
     assert "payroll.manage" in client.get("/api/auth/me").json()["caps"]
 
 
-def test_an_employee_ships_a_small_cap_set(client, auth, make_user):
+def test_an_employee_ships_only_the_capabilities_open_to_everyone(client, auth, make_user):
+    """An employee holds no managerial capability. `reports.tasks` is the one thing defaulted to
+    every role — its rows are filtered by what the person can already see on the board — so this
+    asserts the exact set rather than emptiness."""
     auth(make_user(C.ROLE_EMPLOYEE))
-    assert client.get("/api/auth/me").json()["caps"] == []
+    caps = client.get("/api/auth/me").json()["caps"]
+    assert caps == ["reports.tasks"]

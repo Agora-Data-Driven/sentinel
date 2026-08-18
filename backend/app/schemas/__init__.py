@@ -582,6 +582,17 @@ class PermissionChangesIn(BaseModel):
     changes: list[PermissionChangeIn]
 
 
+class UserPermissionChangeIn(BaseModel):
+    capability: str
+    allowed: bool
+
+
+class UserPermissionChangesIn(BaseModel):
+    """A batch of per-PERSON exceptions. The user id is in the path, not repeated per change."""
+
+    changes: list[UserPermissionChangeIn]
+
+
 class PersonUpdateIn(BaseModel):
     name: str | None = None
     email: str | None = None

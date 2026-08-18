@@ -55,6 +55,7 @@ from dataclasses import dataclass
 
 from .constants import (
     ALL_ROLES,
+    MANAGER_ROLES,
     ROLE_ACCOUNT_MANAGER,
     ROLE_ADMIN,
     ROLE_RANK,
@@ -169,6 +170,16 @@ CAPABILITIES: tuple[Capability, ...] = (
         write=False,
     ),
     Capability(
+        key="attendance.kiosk",
+        label="Run the attendance scanner",
+        group="Attendance & Leave",
+        description=(
+            "Punch other people's badges from the /scanner tool. A badge scan clocks that person "
+            "in or out, so this is a write on somebody else's record."
+        ),
+        default=_SA_ONLY,
+    ),
+    Capability(
         key="attendance.edit_records",
         label="Edit an attendance record",
         group="Attendance & Leave",
@@ -204,11 +215,79 @@ CAPABILITIES: tuple[Capability, ...] = (
         description="See the task-request queue and accept or decline what a client or teammate raised.",
         default=_AM_PLUS,
     ),
+    # ---------------- Task board: the day-to-day verbs ----------------
+    # 🔴 THESE FOUR ARE SCOPED BY `can_view`, NOT UNSCOPED GRANTS. Holding one means "you may do this
+    # to a card you can already SEE" — the object test stays in `services/task_perms`, where it can
+    # ask about the row. Granting `tasks.review` to an employee therefore lets them approve work on
+    # their own cards and their department's queue, NOT the whole estate. See task_perms for the
+    # proof that this is exactly what the old `_is_full(user) or _lead_may_act(user, task)` meant.
     Capability(
-        key="tasks.atrium_share",
-        label="Publish work to a client",
+        key="tasks.review",
+        label="Approve or send back work",
         group="Task board",
-        description="Send a card to Atrium, retry a failed share, and clear or audit an existing one.",
+        description="Decide a review on a card you can see — approve it, or request changes.",
+        default=frozenset(MANAGER_ROLES),
+    ),
+    Capability(
+        key="tasks.reassign",
+        label="Assign work to someone else",
+        group="Task board",
+        description="Change the lead or department on a card you can see. Claiming work yourself is not this.",
+        default=frozenset(MANAGER_ROLES),
+    ),
+    Capability(
+        key="tasks.prioritize",
+        label="Set a task's priority",
+        group="Task board",
+        description="Change Urgent / Medium / Low on a card you can see — a management call.",
+        default=frozenset(MANAGER_ROLES),
+    ),
+    Capability(
+        key="tasks.delete",
+        label="Delete a task",
+        group="Task board",
+        description=(
+            "Delete somebody else's card. The only irreversible act here, so it keeps a tighter "
+            "scope than the rest: a team lead only within their own department. Anyone may always "
+            "delete a card they raised themselves."
+        ),
+        default=frozenset(MANAGER_ROLES),
+    ),
+    # ---------------- Client (Atrium) cards ----------------
+    Capability(
+        key="atrium.bridge",
+        label="Send Sentinel work to a client",
+        group="Client cards",
+        description=(
+            "Publish a Sentinel task's client-safe fields into that client's Atrium workspace, "
+            "retry a failed share, and audit or clear a stale one."
+        ),
+        # 🔴 ONE capability for the whole share lifecycle. This was briefly two — a route guard
+        # (`tasks.atrium_share`) and the service predicate `task_perms.can_bridge` — which is the same
+        # authority written down twice and therefore two checkboxes that could disagree. The route
+        # guard is gone; both doors ask this.
+        default=_AM_PLUS,
+    ),
+    Capability(
+        key="atrium.view",
+        label="See client-owned cards",
+        group="Client cards",
+        description="See the cards Atrium owns on the board — work that has no Sentinel row of its own.",
+        default=frozenset(MANAGER_ROLES | {ROLE_VIEWER}),
+        write=False,
+    ),
+    Capability(
+        key="atrium.edit",
+        label="Edit client-owned cards",
+        group="Client cards",
+        description="Change a client card's content: title, dates, breakdown, notes and comments.",
+        default=frozenset(MANAGER_ROLES),
+    ),
+    Capability(
+        key="atrium.manage",
+        label="Manage client-owned cards",
+        group="Client cards",
+        description="The three decisions reserved for managers on a client card: priority, client visibility, deletion.",
         default=_AM_PLUS,
     ),
     # ---------------- Growth & Gym ----------------
@@ -241,6 +320,64 @@ CAPABILITIES: tuple[Capability, ...] = (
         group="Growth & Gym",
         description="Change or delete another person's logged workout.",
         default=_SA_ONLY,
+    ),
+    # ---------------- Reports ----------------
+    # 🔴 ONE CAPABILITY PER REPORT, not a single `reports.view`. "Who may see which report" is the
+    # question an ops lead actually asks, and the six had six DIFFERENT answers already
+    # (`reports._require_access`) — collapsing them into one would either leak the payroll-adjacent
+    # ones to a team lead or take the overdue list away from them. `tasks` is deliberately open to
+    # everyone: its rows are filtered by task visibility further down, so it shows each person only
+    # what their board already shows them.
+    Capability(
+        key="reports.attendance",
+        label="Attendance report",
+        group="Reports",
+        description="Everyone's daily attendance over a date range, exportable to CSV.",
+        default=_at_least(ROLE_ADMIN),
+        write=False,
+    ),
+    Capability(
+        key="reports.gym",
+        label="Gym compliance report",
+        group="Reports",
+        description="Training compliance per person over a period, exportable to CSV.",
+        default=_at_least(ROLE_ADMIN),
+        write=False,
+    ),
+    Capability(
+        key="reports.leave",
+        label="Leave summary report",
+        group="Reports",
+        description="Leave taken and remaining balances across the company.",
+        default=_at_least(ROLE_ADMIN),
+        write=False,
+    ),
+    Capability(
+        key="reports.team",
+        label="Team performance report",
+        group="Reports",
+        description="Throughput and delivery performance per department.",
+        default=frozenset(_at_least(ROLE_ADMIN) | {ROLE_ACCOUNT_MANAGER}),
+        write=False,
+    ),
+    Capability(
+        key="reports.overdue",
+        label="Overdue tasks report",
+        group="Reports",
+        description="Work past its due date. A team lead sees their own departments' rows only.",
+        default=frozenset(_at_least(ROLE_ADMIN) | {ROLE_TEAM_LEAD}),
+        write=False,
+    ),
+    Capability(
+        key="reports.tasks",
+        label="Task summary report",
+        group="Reports",
+        description=(
+            "A rollup of task activity. Open to everyone by default — the rows are filtered by what "
+            "each person can already see on the board."
+        ),
+        default=frozenset(ALL_ROLES),
+        write=False,
     ),
     # ---------------- System ----------------
     Capability(
@@ -334,11 +471,19 @@ CAP_PAYROLL_MANAGE = "payroll.manage"
 CAP_ATTENDANCE_APPROVALS = "attendance.approvals"
 CAP_ATTENDANCE_RECORDS = "attendance.records"
 CAP_ATTENDANCE_EDIT_RECORDS = "attendance.edit_records"
+CAP_ATTENDANCE_KIOSK = "attendance.kiosk"
 CAP_LEAVE_APPROVALS = "leave.approvals"
 CAP_TASKS_RECURRING = "tasks.recurring"
 CAP_TASKS_ADOPTION = "tasks.adoption"
 CAP_TASKS_REQUESTS = "tasks.requests"
-CAP_TASKS_ATRIUM_SHARE = "tasks.atrium_share"
+CAP_TASKS_REVIEW = "tasks.review"
+CAP_TASKS_REASSIGN = "tasks.reassign"
+CAP_TASKS_PRIORITIZE = "tasks.prioritize"
+CAP_TASKS_DELETE = "tasks.delete"
+CAP_ATRIUM_BRIDGE = "atrium.bridge"
+CAP_ATRIUM_VIEW = "atrium.view"
+CAP_ATRIUM_EDIT = "atrium.edit"
+CAP_ATRIUM_MANAGE = "atrium.manage"
 CAP_GROWTH_TEAM = "growth.team"
 CAP_READING_CANON = "reading.canon"
 CAP_GYM_ROLLUP = "gym.rollup"
@@ -348,6 +493,24 @@ CAP_SETTINGS_EDIT = "settings.edit"
 CAP_AUDIT_VIEW = "audit.view"
 CAP_ANNOUNCE_SEND = "announce.send"
 CAP_INSIGHTS_VIEW = "insights.view"
+CAP_REPORTS_ATTENDANCE = "reports.attendance"
+CAP_REPORTS_GYM = "reports.gym"
+CAP_REPORTS_LEAVE = "reports.leave"
+CAP_REPORTS_TEAM = "reports.team"
+CAP_REPORTS_OVERDUE = "reports.overdue"
+CAP_REPORTS_TASKS = "reports.tasks"
+
+# The six reports, keyed by the `report` path segment `routers/reports.py` receives. A report with
+# no entry here has no capability and is refused — adding a report means adding its capability, and
+# the failure mode of forgetting is a closed door rather than an open one.
+REPORT_CAPS = {
+    "attendance": CAP_REPORTS_ATTENDANCE,
+    "gym": CAP_REPORTS_GYM,
+    "leave": CAP_REPORTS_LEAVE,
+    "team": CAP_REPORTS_TEAM,
+    "overdue": CAP_REPORTS_OVERDUE,
+    "tasks": CAP_REPORTS_TASKS,
+}
 CAP_MANAGE_CONSOLE = "manage.console"
 CAP_SYSTEM_RUN_DAILY = "system.run_daily"
 CAP_PERMISSIONS_VIEW = "permissions.view"

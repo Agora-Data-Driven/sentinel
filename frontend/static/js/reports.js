@@ -1,16 +1,16 @@
 window.pageInit = async (S) => {
   const view = S.view();
-  const role = S.user.role;
-  const admin = S.can("admin");
   const teams = await S.api("/api/teams");
 
   const ALL = [
-    { key: "attendance", label: "Attendance", access: () => admin },
-    { key: "gym", label: "Gym Compliance", access: () => admin },
-    { key: "tasks", label: "Task Summary", access: () => true },
-    { key: "team", label: "Team Performance", access: () => admin || role === "account_manager" },
-    { key: "leave", label: "Leave Summary", access: () => admin },
-    { key: "overdue", label: "Overdue Tasks", access: () => admin || role === "team_lead" },
+    // Each report follows its own CAPABILITY (capabilities.REPORT_CAPS), so a Super Admin moving
+    // one in Admin -> Permissions shows/hides the tab to match. The server enforces the same key.
+    { key: "attendance", label: "Attendance", access: () => S.hasCap("reports.attendance") },
+    { key: "gym", label: "Gym Compliance", access: () => S.hasCap("reports.gym") },
+    { key: "tasks", label: "Task Summary", access: () => S.hasCap("reports.tasks") },
+    { key: "team", label: "Team Performance", access: () => S.hasCap("reports.team") },
+    { key: "leave", label: "Leave Summary", access: () => S.hasCap("reports.leave") },
+    { key: "overdue", label: "Overdue Tasks", access: () => S.hasCap("reports.overdue") },
   ].filter((r) => r.access());
 
   const iso = (d) => d.toISOString().slice(0, 10);

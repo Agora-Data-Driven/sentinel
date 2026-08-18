@@ -22,7 +22,7 @@ from ..services import permissions as perms_svc
 router = APIRouter(prefix="/api/cron", tags=["cron"])
 
 
-def _authorize(x_cron_key: str | None, user: User | None, db: Session) -> None:
+def _authorize(x_cron_key: str | None, user: User | None) -> None:
     """Two independent doors: the Scheduler's shared secret, or a session holding `system.run_daily`.
 
     The key branch stays a constant-time compare and stays FIRST — an unattended job carries no
@@ -30,7 +30,7 @@ def _authorize(x_cron_key: str | None, user: User | None, db: Session) -> None:
     """
     if settings.cron_key and x_cron_key and secrets.compare_digest(x_cron_key, settings.cron_key):
         return
-    if perms_svc.has_cap(db, user, CAP_SYSTEM_RUN_DAILY):
+    if perms_svc.has_cap(user, CAP_SYSTEM_RUN_DAILY):
         return
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to run jobs")
 
@@ -48,7 +48,7 @@ def run_report(
     just to refresh a document. Safe to call repeatedly: the report is derived state and the Doc is
     replaced wholesale each time.
     """
-    _authorize(x_cron_key, user, db)
+    _authorize(x_cron_key, user)
     return daily.publish_report(db)
 
 
@@ -59,5 +59,5 @@ def run_daily(
     user: User | None = Depends(get_current_user_optional),
     db: Session = Depends(get_db),
 ):
-    _authorize(x_cron_key, user, db)
+    _authorize(x_cron_key, user)
     return daily.run(db, day)

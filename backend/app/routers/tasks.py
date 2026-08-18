@@ -41,8 +41,8 @@ from ..schemas import (
     TaskUpdateIn,
 )
 from ..capabilities import (
+    CAP_ATRIUM_BRIDGE,
     CAP_TASKS_ADOPTION,
-    CAP_TASKS_ATRIUM_SHARE,
     CAP_TASKS_RECURRING,
     CAP_TASKS_REQUESTS,
 )
@@ -1926,7 +1926,7 @@ def resolve_change_request(task_id: str, comment_id: str, user: User = Depends(g
 # reinstate a version that discards the bytes.
 
 
-@router.post("/{task_id}/send-to-atrium", dependencies=[Depends(require_cap(CAP_TASKS_ATRIUM_SHARE))])
+@router.post("/{task_id}/send-to-atrium", dependencies=[Depends(require_cap(CAP_ATRIUM_BRIDGE))])
 def send_to_atrium(task_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Share a task with its client: MINT the Atrium card, link it, and send the client-safe subset.
 
@@ -1953,7 +1953,7 @@ def send_to_atrium(task_id: str, user: User = Depends(get_current_user), db: Ses
             "sync_error": task.atrium_sync_error, "atrium_payload": atrium_payload(task, db)}
 
 
-@router.post("/{task_id}/atrium-retry", dependencies=[Depends(require_cap(CAP_TASKS_ATRIUM_SHARE))])
+@router.post("/{task_id}/atrium-retry", dependencies=[Depends(require_cap(CAP_ATRIUM_BRIDGE))])
 def retry_atrium_push(task_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Re-send the client-safe subset after a failed push. The board offers this on a stale card."""
     task = _resolve_task(db, task_id)
@@ -1971,7 +1971,7 @@ def retry_atrium_push(task_id: str, user: User = Depends(get_current_user), db: 
     return {"ok": True, "sync_error": None}
 
 
-@router.get("/atrium/stale-shares", dependencies=[Depends(require_cap(CAP_TASKS_ATRIUM_SHARE))])
+@router.get("/atrium/stale-shares", dependencies=[Depends(require_cap(CAP_ATRIUM_BRIDGE))])
 def list_stale_shares(db: Session = Depends(get_db)):
     """The reconcile backlog (D15): rows claiming to be shared that point at no Atrium card.
 
@@ -1984,7 +1984,7 @@ def list_stale_shares(db: Session = Depends(get_db)):
     return task_bridge.stale_shares(db)
 
 
-@router.post("/{task_id}/atrium-clear-share", dependencies=[Depends(require_cap(CAP_TASKS_ATRIUM_SHARE))])
+@router.post("/{task_id}/atrium-clear-share", dependencies=[Depends(require_cap(CAP_ATRIUM_BRIDGE))])
 def clear_stale_share(task_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Resolve a stale row the other way: it was never really shared, so stop claiming it was."""
     task = _resolve_task(db, task_id)

@@ -192,7 +192,10 @@ def me(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     # This is what the frontend gates its nav and buttons on instead of re-deriving from `role` — a
     # UI mirror of a server rule is how "Team Lead can't assign" shipped as a dead button rather than
     # a 403. It stays a convenience: every endpoint behind it enforces its own capability.
-    return {**user_full(user, team), "caps": sorted(perms_svc.caps_for(db, user.role))}
+    # 🔴 `caps_for_user`, NOT `caps_for(role)` — this must include the person's own exceptions
+    # (models.UserCapability) or the UI hides features the API allows, which is the dead-button
+    # failure of AGENTS.md §5 pointed the other way.
+    return {**user_full(user, team), "caps": sorted(perms_svc.caps_for_user(user))}
 
 
 @router.post("/logout")
