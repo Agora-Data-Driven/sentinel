@@ -18,7 +18,14 @@ from ..models import (
     User,
 )
 from ..schemas import AnnouncementIn, SettingsIn
-from ..security import get_current_user, require_min_role
+from ..capabilities import (
+    CAP_ANNOUNCE_SEND,
+    CAP_AUDIT_VIEW,
+    CAP_INSIGHTS_VIEW,
+    CAP_SETTINGS_EDIT,
+    CAP_SETTINGS_VIEW,
+)
+from ..security import get_current_user, require_cap
 from ..serializers import summary_dict, user_public
 from ..services import attendance as att
 from ..services import audit
@@ -31,7 +38,7 @@ router = APIRouter(prefix="/api", tags=["admin"])
 
 # --- Settings --------------------------------------------------------------
 @router.get("/admin/settings")
-def get_settings(admin: User = Depends(require_min_role("admin")), db: Session = Depends(get_db)):
+def get_settings(admin: User = Depends(require_cap(CAP_SETTINGS_VIEW)), db: Session = Depends(get_db)):
     smap = settings_svc.get_map(db)
     return {
         "settings": smap,
@@ -40,7 +47,7 @@ def get_settings(admin: User = Depends(require_min_role("admin")), db: Session =
 
 
 @router.patch("/admin/settings")
-def update_settings(payload: SettingsIn, admin: User = Depends(require_min_role("admin")), db: Session = Depends(get_db)):
+def update_settings(payload: SettingsIn, admin: User = Depends(require_cap(CAP_SETTINGS_EDIT)), db: Session = Depends(get_db)):
     for key, value in payload.settings.items():
         old, new = settings_svc.set_value(db, key, value, admin.id)
         if old != new:
@@ -56,7 +63,7 @@ def audit_logs(
     table: str | None = Query(None),
     action: str | None = Query(None),
     actor_id: int | None = Query(None),
-    admin: User = Depends(require_min_role("admin")),
+    admin: User = Depends(require_cap(CAP_AUDIT_VIEW)),
     db: Session = Depends(get_db),
 ):
     q = select(AuditLog).order_by(AuditLog.created_at.desc())
@@ -85,7 +92,7 @@ def audit_logs(
 
 # --- Announcements ---------------------------------------------------------
 @router.post("/admin/announce")
-def announce(payload: AnnouncementIn, admin: User = Depends(require_min_role("admin")), db: Session = Depends(get_db)):
+def announce(payload: AnnouncementIn, admin: User = Depends(require_cap(CAP_ANNOUNCE_SEND)), db: Session = Depends(get_db)):
     sent = notif.broadcast(db, title=payload.title, body=payload.body)
     audit.record(db, actor_id=admin.id, table_name="notifications", action="broadcast",
                  new={"title": payload.title, "recipients": sent})
@@ -97,7 +104,7 @@ _WD = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
 
 
 @router.get("/insights")
-def insights(admin: User = Depends(require_min_role("admin")), db: Session = Depends(get_db)):
+def insights(admin: User = Depends(require_cap(CAP_INSIGHTS_VIEW)), db: Session = Depends(get_db)):
     """14-day clock-in trend for the dashboard chart.
 
     Presence only — absence is deliberately not derived here (product call, 2026-07-27:

@@ -52,6 +52,21 @@ def _clear_atrium_cache():
     atrium_tasks._invalidate()
 
 
+@pytest.fixture(autouse=True)
+def _clear_permissions_cache():
+    """`services/permissions` caches the resolved role->capability matrix in a MODULE-level dict.
+
+    Exactly the same hazard as the Atrium cache above, and worse in its symptoms: the cache outlives
+    the per-test schema rebuild, so a test that grants a capability would leak that grant into the
+    next test's 403 assertions — an RBAC suite quietly testing the wrong thing. Cleared on both
+    sides of every test.
+    """
+    from app.services import permissions as perms_svc
+    perms_svc.invalidate()
+    yield
+    perms_svc.invalidate()
+
+
 @pytest.fixture
 def db():
     session = SessionLocal()

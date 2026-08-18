@@ -117,6 +117,7 @@ backend/app/
   config.py        env-driven settings (pydantic-settings)
   database.py      engine / session / Base
   constants.py     roles, statuses, ROLE_RANK
+  capabilities.py  the NAMED-CAPABILITY registry + its invariants ← "what may this role do", §3
   security.py      JWT cookie auth + RBAC dependency guards      ← auth lives HERE
   sso.py           portal ag_sso cookie verification
   middleware.py    CSP, Permissions-Policy, security headers, gzip ← see §5 gotchas
@@ -157,6 +158,7 @@ deploy/            deploy.ps1, seed-job.ps1, DEPLOY.md
 | `reports.py` | 6 reports + CSV export |
 | `admin.py` | System settings, announcements, audit log |
 | `manage.py` | Admin management screens |
+| `permissions.py` | **The role × capability console** (page `/permissions`) — read/edit which capability each role holds. Deliberately NOT under `/api/manage`; see §3 |
 | `notifications.py` | Bell, unread counts |
 | `meta.py` | Enums/constants for the frontend |
 | `cron.py` | Scheduled job endpoints — `POST /daily` (the full pass, **manual only**, see §2) and `POST /report` (regenerate the personal context Google Doc; what Cloud Scheduler actually calls) |
@@ -409,6 +411,85 @@ and writes nothing**, which no point on a linear ladder can express — so:
 
 Adding a task write? Add a case to the `test_viewer_is_refused_every_task_write` parametrisation in
 `tests/test_security_rbac.py`. The audit is the feature; the role is three lines.
+
+### 🔴 There are now TWO kinds of permission here, and only one of them is a matrix (2026-08-17)
+
+`backend/app/capabilities.py` is the registry; `services/permissions.py` resolves it; the Super
+Admin edits it at **`/permissions`** (Admin → Permissions). Before it, "what exactly can an Account
+Manager do?" existed only as ~41 `require_min_role`/`require_roles` sites across nine routers.
+
+| | Decided from | Example | Lives in | Editable in the console? |
+|---|---|---|---|---|
+| **Surface access** | the role ALONE | "may open Payroll", "may approve leave" | `capabilities.py` | **yes** |
+| **Object-scoped rules** | the role **and the row** | "an employee may edit a task *if assigned to it or it's in their team queue*" | `services/task_perms.py` | **no, and never** |
+
+🔴 **Do not migrate `task_perms` into the capability registry.** There is no cell in a role ×
+capability grid for "assigned only" — forcing it in either drops that nuance (handing every employee
+edit rights over every colleague's card, the regression §5 documents) or turns a console a human is
+meant to reason about into a rules engine nobody can read. **A capability that cannot be decided from
+the role alone does not belong there.**
+
+**Every default is a mechanical translation of the guard it replaced** — `_at_least(X)` where the
+code said `require_min_role(X)`, an explicit set where it said `require_roles(...)`.
+`tests/test_permissions.py::test_default_matches_the_guard_it_replaced` re-derives all 24 from
+`ROLE_RANK`, so a typo fails the suite rather than silently opening or closing an endpoint. Adding a
+capability? Add its row to `_ORIGINAL_GATES` too.
+
+**Three invariants (`capabilities.is_grantable`), re-checked at RESOLUTION time and not only at write
+time** — so a hand-run `INSERT`, a restored backup or a future bug in the write path is *inert*
+rather than obeyed:
+
+1. **`super_admin` holds every capability, always, and its column is not editable.** The console is
+   itself reached through a capability; a grid that can revoke it locks the last Super Admin out of
+   the only page that could give it back.
+2. **`locked` capabilities are editable by nobody** — `people.set_role`, `people.create`,
+   `people.delete` (privilege escalation) and `permissions.manage` (the console's own).
+3. **`viewer` can never hold a `write` capability**, the same rule its floor rank enforces for
+   `require_min_role`. One checkbox would otherwise undo decision D8 above.
+
+Two more things that are load-bearing:
+
+- 🔴 **`routers/permissions.py` is deliberately NOT under `/api/manage`.** That console is gated by
+  ONE capability (`manage.console`) which is grantable — so behind that gate, giving somebody the
+  departments-and-leave-types screen would silently also give them the power to grant themselves
+  everything else.
+- 🔴 **`role_capabilities` stores DELTAS, never a snapshot.** An empty table means "exactly what the
+  code ships with", which is what makes Reset a single `DELETE` — and what makes a capability added
+  in a later deploy arrive with its coded default already applied to every role. A snapshot would
+  freeze the roster as it stood the day somebody last opened the console, so every new capability
+  would land silently denied to everybody.
+- 🟡 **The resolved matrix is cached per process (`PERMISSIONS_CACHE_SECONDS`, default 15).** Sentinel
+  runs up to three instances, so a **revoke** takes up to that long to reach the other two. The
+  console says so on screen; set it to `0` to resolve per request. The console's own read bypasses the
+  cache — a permissions page that lies about its own state is worse than a slow one. `conftest.py`
+  clears it around every test, or a granted capability leaks into the next test's 403 assertions.
+
+**Use `require_cap` for anything reassignable; `require_min_role`/`require_roles` remain correct** for
+a gate that is genuinely "this rung and up" and that nobody should be able to move (the attendance
+`kiosk_guard`, the internal HMAC endpoints). A capability key that does not exist in the registry
+answers **False**, so a typo in a guard CLOSES the endpoint rather than opening it.
+
+The frontend gates on `S.hasCap("…")` and a nav entry's `cap:`, fed by `caps` on `/api/auth/me` —
+never by re-deriving from `role`, which goes stale the moment a Super Admin moves a capability. It
+stays a convenience: every endpoint behind it enforces its own `require_cap`.
+
+### 🔴 `PATCH /api/people/{id}` was a privilege-escalation path until 2026-08-17
+
+It was guarded by `require_min_role("admin")` and applied every field through a generic `setattr`
+loop — so `role` was written exactly like `phone`, and **any Admin could PATCH themselves to
+`super_admin`**, taking payroll, the Manage console and the delete button with them. The Manage UI is
+Super-Admin-only, but that is a frontend gate on an open API (§7: "Enforce a permission only in the
+UI"). `people._guard_role_write` now imposes two separate refusals:
+
+- **changing a role needs `people.set_role`** — locked, so the console cannot hand it out. Gated on
+  the role actually *changing*, not on being present in the payload: the Manage form submits every
+  field on every save, so gating on presence would 403 an Admin editing a phone number.
+- **the LAST active Super Admin cannot be demoted or deactivated**, by anybody including themselves.
+  `main.py`'s startup safeguard would recreate a platform owner eventually, but on `--min-instances 1`
+  that next boot may be days away — "nobody can log in until someone redeploys" is not a recovery
+  story.
+
+Pinned by `tests/test_permissions.py` (§5 and §6 there, weighted toward the refusals).
 
 **RBAC is enforced at the dependency layer**, so every protected endpoint returns a real
 401/403 — never just hidden UI. Two factories in [security.py](backend/app/security.py):
@@ -1903,7 +1984,8 @@ Get-ChildItem tests\test_*.py | ForEach-Object { python -m pytest -q $_.FullName
 ```
 
 Existing coverage: attendance engine, CSRF, events, gym plan, internal HMAC endpoints, leave,
-observability, security headers, RBAC.
+observability, security headers, RBAC, **the capability layer + Permissions console
+(`test_permissions.py`)**.
 
 🔴 **Never run two pytest processes at once — the suite is not concurrency-safe with itself.**
 `tests/conftest.py` pins `DATABASE_URL` to ONE fixed path (`%TEMP%/sentinel_pytest.db`) and rebuilds
@@ -1946,6 +2028,8 @@ curl.exe -s https://sentinel-585951669065.asia-southeast1.run.app/api/health
 | Forget to bump `CACHE` in `sw.js` | Users keep getting stale CSS/JS after a deploy. |
 | Use `us-central1` | Sentinel is **`asia-southeast1`**. |
 | Enforce a permission only in the UI | RBAC belongs in a dependency guard. |
+| Put a `task_perms`-style rule in `capabilities.py` | A capability is decided from the ROLE alone. Anything that needs the row stays in `task_perms` — §3. |
+| Unlock `permissions.manage` or `people.set_role` | Both are privilege escalation: the console could then grant away the power to grant everything. |
 | Add a column without an Alembic migration | Works locally (`create_all`), breaks prod. |
 | `datetime.now()` | Use `utils/time.utcnow()`. Everything is stored UTC. |
 | Inline `<script>` in a page | CSP forbids it — `script-src 'self'`. |

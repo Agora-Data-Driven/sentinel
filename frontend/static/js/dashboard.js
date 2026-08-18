@@ -96,7 +96,7 @@ window.pageInit = async (S) => {
   if (d.is_admin) {
     html += `<div class="row between sect-head" style="margin-top:30px">
         <div class="section-label">${S.ICON.users}Across Agora</div>
-        ${u.role === "super_admin" ? `<button class="btn sm ghost" id="run-daily" title="Recompute yesterday's attendance and send reminders now">${S.ICON.check}Run daily processing</button>` : ""}
+        ${S.hasCap("system.run_daily") ? `<button class="btn sm ghost" id="run-daily" title="Recompute yesterday's attendance and send reminders now">${S.ICON.check}Run daily processing</button>` : ""}
       </div>
       <div id="dash-team"></div>
       <div class="kpis" id="dash-kpis" style="margin:18px 0"></div>

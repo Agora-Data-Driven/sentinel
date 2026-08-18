@@ -110,6 +110,13 @@ class Settings(BaseSettings):
     # seconds stale on the board. Raising it much past ~60s would start being visible to a person
     # editing in Atrium and refreshing here.
     atrium_cache_seconds: int = 15
+    # How long a resolved role->capability matrix is cached IN-PROCESS (`services/permissions`).
+    # `require_cap` runs on every guarded request, so resolving from the DB each time would put a
+    # SELECT on a large share of all traffic. The cost is that a REVOKE made on one instance is not
+    # seen by the other two until their cache expires — hence a short window rather than "until
+    # boot". `0` disables caching entirely and resolves per request, which is the right setting if
+    # permissions ever become something that has to be revoked in an emergency.
+    permissions_cache_seconds: int = 15
     # OPTIONAL: pin the Growth hub's Mentor Library to ONE Atrium workspace's Watcher archive
     # (services/atrium_watcher.py). Unset (the default) reads EVERY workspace, which is what you
     # want: Watcher's channels are per-client, but mentor content (Nick Saraev, Carson Reed, ...)

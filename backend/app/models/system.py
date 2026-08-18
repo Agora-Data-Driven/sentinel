@@ -1,9 +1,9 @@
-"""audit_logs, system_settings."""
+"""audit_logs, system_settings, role_capabilities."""
 from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ..database import Base
@@ -31,4 +31,43 @@ class SystemSetting(Base):
     value: Mapped[str] = mapped_column(Text, default="")
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     updated_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class RoleCapability(Base):
+    """A Super Admin's DEVIATION from a capability's coded default — never the full answer.
+
+    🔴 **This table stores DELTAS, and that is the whole safety model.** `app/capabilities.py`
+    owns what each role can do by default; a row here says only "for this one role, this one
+    capability is now on/off, whatever the code says". Three things follow, and all three are the
+    reason it is not a full role × capability snapshot:
+
+    - **An empty table means "exactly what the code ships with"** — which is also what makes
+      `POST /api/permissions/reset` a single `DELETE`, so a Super Admin who has made a mess of the
+      grid is always one click from a known-good state.
+    - **A capability added in a later deploy arrives with its coded default already applied** to
+      every role. A snapshot table would freeze the roster as it stood the day somebody last
+      touched the console, so every new capability would land silently denied to everybody.
+    - **A row is deleted, not flipped, when it matches the default again** (`services/permissions`
+      does this), so the table stays a short, readable list of *decisions somebody made*.
+
+    🔴 A row here is a REQUEST, not an authority: `capabilities.effective_caps` re-checks every one
+    against `is_grantable` when it resolves, so a row that would hand a viewer a write or revoke a
+    Super Admin's console is inert however it got here (a hand-run INSERT, a restored backup).
+    """
+
+    __tablename__ = "role_capabilities"
+
+    # Composite PK: one row per (role, capability) is exactly the constraint we want, enforced by
+    # the DB rather than by remembering to check before every insert.
+    role: Mapped[str] = mapped_column(String(32), primary_key=True)
+    capability: Mapped[str] = mapped_column(String(60), primary_key=True)
+    allowed: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    # 🔴 NO ForeignKey, unlike `SystemSetting.updated_by_id` above — deliberately. `people.delete_person`
+    # hand-nulls every reference to a departing user and knows nothing about this table, so an FK here
+    # would make deleting the Super Admin who last edited permissions fail on Postgres with an
+    # integrity error (SQLite would let it through, so it would pass locally and break in prod). An
+    # override must outlive whoever set it: losing the attribution is a nuisance, a delete that
+    # cascades away a live permission decision is an outage.
+    updated_by_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)

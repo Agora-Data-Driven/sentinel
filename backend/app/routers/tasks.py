@@ -40,7 +40,13 @@ from ..schemas import (
     TaskStatusIn,
     TaskUpdateIn,
 )
-from ..security import get_current_user, is_manager, require_roles
+from ..capabilities import (
+    CAP_TASKS_ADOPTION,
+    CAP_TASKS_ATRIUM_SHARE,
+    CAP_TASKS_RECURRING,
+    CAP_TASKS_REQUESTS,
+)
+from ..security import get_current_user, is_manager, require_cap
 from ..serializers import (CardPrefetch, atrium_payload, comment_dict, task_card, task_detail,
                            user_public)
 from ..services import atrium_tasks
@@ -57,7 +63,6 @@ from ..utils.time import today_ph, to_ph, utcnow
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 log = logging.getLogger(__name__)
 
-AM_PLUS = ("account_manager", "admin", "super_admin")
 _NOT_FOUND = "Task not found"
 _FORBIDDEN = "Not permitted"
 
@@ -581,14 +586,14 @@ def _recurring_dict(r, db: Session) -> dict:
 
 
 # 🔴 Declared BEFORE `GET /{task_id}` or FastAPI matches "recurring" as a task id (AGENTS.md §5).
-@router.get("/recurring", dependencies=[Depends(require_roles(*AM_PLUS))])
+@router.get("/recurring", dependencies=[Depends(require_cap(CAP_TASKS_RECURRING))])
 def list_recurring(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Retainer deliverables that generate themselves (WP 6.1, M10)."""
     rows = db.execute(select(RecurringService).order_by(RecurringService.title)).scalars().all()
     return [_recurring_dict(r, db) for r in rows]
 
 
-@router.post("/recurring", dependencies=[Depends(require_roles(*AM_PLUS))])
+@router.post("/recurring", dependencies=[Depends(require_cap(CAP_TASKS_RECURRING))])
 def create_recurring(payload: RecurringServiceIn,
                      user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Set up a recurrence.
@@ -616,7 +621,7 @@ def create_recurring(payload: RecurringServiceIn,
     return _recurring_dict(rec, db)
 
 
-@router.patch("/recurring/{rec_id}", dependencies=[Depends(require_roles(*AM_PLUS))])
+@router.patch("/recurring/{rec_id}", dependencies=[Depends(require_cap(CAP_TASKS_RECURRING))])
 def update_recurring(rec_id: int, payload: RecurringServiceIn,
                      user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     rec = db.get(RecurringService, rec_id)
@@ -631,7 +636,7 @@ def update_recurring(rec_id: int, payload: RecurringServiceIn,
     return _recurring_dict(rec, db)
 
 
-@router.delete("/recurring/{rec_id}", dependencies=[Depends(require_roles(*AM_PLUS))])
+@router.delete("/recurring/{rec_id}", dependencies=[Depends(require_cap(CAP_TASKS_RECURRING))])
 def delete_recurring(rec_id: int, user: User = Depends(get_current_user),
                      db: Session = Depends(get_db)):
     """Stop a recurrence. Tasks it already generated are ordinary tasks and are left alone."""
@@ -645,7 +650,7 @@ def delete_recurring(rec_id: int, user: User = Depends(get_current_user),
     return {"ok": True}
 
 
-@router.post("/recurring/run", dependencies=[Depends(require_roles(*AM_PLUS))])
+@router.post("/recurring/run", dependencies=[Depends(require_cap(CAP_TASKS_RECURRING))])
 def run_recurring_now(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Generate anything due right now, without waiting for the nightly tick.
 
@@ -654,10 +659,7 @@ def run_recurring_now(user: User = Depends(get_current_user), db: Session = Depe
     return task_recurring.run(db, today_ph(), user)
 
 
-_SUPER = ("super_admin",)
-
-
-@router.get("/adoption/plan", dependencies=[Depends(require_roles(*_SUPER))])
+@router.get("/adoption/plan", dependencies=[Depends(require_cap(CAP_TASKS_ADOPTION))])
 def adoption_plan(client: str = Query(..., min_length=1),
                   user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """What adopting this workspace's Atrium cards WOULD do (WP 3.4). Writes nothing.
@@ -671,7 +673,7 @@ def adoption_plan(client: str = Query(..., min_length=1),
         raise HTTPException(status_code=400, detail=str(exc))
 
 
-@router.post("/adoption/apply", dependencies=[Depends(require_roles(*_SUPER))])
+@router.post("/adoption/apply", dependencies=[Depends(require_cap(CAP_TASKS_ADOPTION))])
 def adoption_apply(payload: TaskAdoptionApplyIn,
                    user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Actually import them. A DIFFERENT endpoint from the plan, on purpose.
@@ -698,7 +700,7 @@ def adoption_apply(payload: TaskAdoptionApplyIn,
     return result
 
 
-@router.post("/adoption/revert", dependencies=[Depends(require_roles(*_SUPER))])
+@router.post("/adoption/revert", dependencies=[Depends(require_cap(CAP_TASKS_ADOPTION))])
 def adoption_revert(payload: TaskAdoptionRevertIn,
                     user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Undo one adoption run. Rows that have been worked on since are KEPT and reported."""
@@ -871,7 +873,7 @@ def _request_dict(r: TaskRequest, db: Session) -> dict:
 
 
 # 🔴 Declared BEFORE `GET /{task_id}` or FastAPI matches "requests" as a task id (AGENTS.md §5).
-@router.get("/requests", dependencies=[Depends(require_roles(*AM_PLUS))])
+@router.get("/requests", dependencies=[Depends(require_cap(CAP_TASKS_REQUESTS))])
 def list_requests(status_filter: str = Query("pending", alias="status"),
                   user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """The intake queue (D3, WP 3.3): what clients have asked for, awaiting triage.
@@ -889,7 +891,7 @@ def list_requests(status_filter: str = Query("pending", alias="status"),
     return {"requests": [_request_dict(r, db) for r in rows], "pending": pending}
 
 
-@router.post("/requests/{request_id}/accept", dependencies=[Depends(require_roles(*AM_PLUS))])
+@router.post("/requests/{request_id}/accept", dependencies=[Depends(require_cap(CAP_TASKS_REQUESTS))])
 def accept_request(request_id: int, payload: TaskRequestDecisionIn,
                    user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Turn a client's ask into a real task. THIS is the moment it reaches the delivery board.
@@ -951,7 +953,7 @@ def accept_request(request_id: int, payload: TaskRequestDecisionIn,
     return {"ok": True, "request": _request_dict(req, db), "task": task_detail(task, db)}
 
 
-@router.post("/requests/{request_id}/decline", dependencies=[Depends(require_roles(*AM_PLUS))])
+@router.post("/requests/{request_id}/decline", dependencies=[Depends(require_cap(CAP_TASKS_REQUESTS))])
 def decline_request(request_id: int, payload: TaskRequestDecisionIn,
                     user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Say no, on the record, with a reason.
@@ -1924,7 +1926,7 @@ def resolve_change_request(task_id: str, comment_id: str, user: User = Depends(g
 # reinstate a version that discards the bytes.
 
 
-@router.post("/{task_id}/send-to-atrium", dependencies=[Depends(require_roles(*AM_PLUS))])
+@router.post("/{task_id}/send-to-atrium", dependencies=[Depends(require_cap(CAP_TASKS_ATRIUM_SHARE))])
 def send_to_atrium(task_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Share a task with its client: MINT the Atrium card, link it, and send the client-safe subset.
 
@@ -1951,7 +1953,7 @@ def send_to_atrium(task_id: str, user: User = Depends(get_current_user), db: Ses
             "sync_error": task.atrium_sync_error, "atrium_payload": atrium_payload(task, db)}
 
 
-@router.post("/{task_id}/atrium-retry", dependencies=[Depends(require_roles(*AM_PLUS))])
+@router.post("/{task_id}/atrium-retry", dependencies=[Depends(require_cap(CAP_TASKS_ATRIUM_SHARE))])
 def retry_atrium_push(task_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Re-send the client-safe subset after a failed push. The board offers this on a stale card."""
     task = _resolve_task(db, task_id)
@@ -1969,7 +1971,7 @@ def retry_atrium_push(task_id: str, user: User = Depends(get_current_user), db: 
     return {"ok": True, "sync_error": None}
 
 
-@router.get("/atrium/stale-shares", dependencies=[Depends(require_roles(*AM_PLUS))])
+@router.get("/atrium/stale-shares", dependencies=[Depends(require_cap(CAP_TASKS_ATRIUM_SHARE))])
 def list_stale_shares(db: Session = Depends(get_db)):
     """The reconcile backlog (D15): rows claiming to be shared that point at no Atrium card.
 
@@ -1982,7 +1984,7 @@ def list_stale_shares(db: Session = Depends(get_db)):
     return task_bridge.stale_shares(db)
 
 
-@router.post("/{task_id}/atrium-clear-share", dependencies=[Depends(require_roles(*AM_PLUS))])
+@router.post("/{task_id}/atrium-clear-share", dependencies=[Depends(require_cap(CAP_TASKS_ATRIUM_SHARE))])
 def clear_stale_share(task_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Resolve a stale row the other way: it was never really shared, so stop claiming it was."""
     task = _resolve_task(db, task_id)

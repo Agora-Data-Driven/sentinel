@@ -112,6 +112,35 @@ def require_min_role(minimum: str):
     return _guard
 
 
+def require_cap(cap_key: str):
+    """Dependency factory: 403 unless the current user's role holds the named CAPABILITY.
+
+    The named-capability guard, and the one to reach for in new code. `require_min_role` /
+    `require_roles` above still exist and are still correct — they are the right tool for a gate
+    whose answer is genuinely "this rung of the ladder and up" and that nobody should be able to
+    reassign. Everything that IS reassignable goes through here, because this is what the Super
+    Admin's Permissions console can actually move (`app/capabilities.py`).
+
+        router = APIRouter(prefix="/api/thing",
+                           dependencies=[Depends(require_cap(CAP_THING_MANAGE))])
+
+        @router.patch("/{id}")
+        def edit(id: int, user: User = Depends(require_cap(CAP_THING_EDIT)), ...): ...
+
+    🔴 The capability key must exist in the registry — `permissions.has_cap` answers False for an
+    unknown one, so a typo CLOSES the endpoint rather than opening it.
+    """
+
+    def _guard(user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> User:
+        from .services import permissions as perms_svc
+
+        if not perms_svc.has_cap(db, user, cap_key):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient role")
+        return user
+
+    return _guard
+
+
 def is_admin(user: User) -> bool:
     return user.role in ADMIN_ROLES
 

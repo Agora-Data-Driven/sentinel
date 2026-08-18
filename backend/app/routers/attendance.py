@@ -33,7 +33,12 @@ from ..models import (
     User,
 )
 from ..schemas import AttendanceEditIn, AttendanceRequestIn, EventIn, OfflineSyncIn, RequestDecisionIn, ScanIn, SelfEventIn
-from ..security import get_current_user, get_current_user_optional, require_min_role, require_roles
+from ..capabilities import (
+    CAP_ATTENDANCE_APPROVALS,
+    CAP_ATTENDANCE_EDIT_RECORDS,
+    CAP_ATTENDANCE_RECORDS,
+)
+from ..security import get_current_user, get_current_user_optional, require_cap
 from ..serializers import attendance_request_dict, summary_dict, user_public
 from ..services import attendance as att
 from ..services import audit
@@ -274,7 +279,7 @@ def create_request(
 @router.get("/requests")
 def list_requests(
     status_filter: str | None = Query(None, alias="status"),
-    reviewer: User = Depends(require_min_role(ROLE_TEAM_LEAD)),
+    reviewer: User = Depends(require_cap(CAP_ATTENDANCE_APPROVALS)),
     db: Session = Depends(get_db),
 ):
     q = select(AttendanceRequest).order_by(AttendanceRequest.created_at.desc())
@@ -288,7 +293,7 @@ def list_requests(
 def decide_request(
     req_id: int,
     payload: RequestDecisionIn,
-    reviewer: User = Depends(require_min_role(ROLE_TEAM_LEAD)),
+    reviewer: User = Depends(require_cap(CAP_ATTENDANCE_APPROVALS)),
     db: Session = Depends(get_db),
 ):
     req = db.get(AttendanceRequest, req_id)
@@ -319,7 +324,7 @@ def summaries(
     from_: date | None = Query(None, alias="from"),
     to: date | None = Query(None),
     team_id: int | None = Query(None),
-    admin: User = Depends(require_min_role(ROLE_TEAM_LEAD)),
+    admin: User = Depends(require_cap(CAP_ATTENDANCE_RECORDS)),
     db: Session = Depends(get_db),
 ):
     q = select(DailyAttendanceSummary).order_by(DailyAttendanceSummary.date.desc())
@@ -354,7 +359,7 @@ def _ph_to_utc(day: date, hhmm: str) -> datetime:
 def edit_summary(
     summary_id: int,
     payload: AttendanceEditIn,
-    admin: User = Depends(require_roles(ROLE_SUPER_ADMIN)),
+    admin: User = Depends(require_cap(CAP_ATTENDANCE_EDIT_RECORDS)),
     db: Session = Depends(get_db),
 ):
     """Super Admin manual correction of a day's attendance (fix a wrong/missed scan)."""

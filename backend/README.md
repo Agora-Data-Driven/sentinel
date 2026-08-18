@@ -13,7 +13,8 @@ unit map + cookbook.
 | `app/config.py` | `Settings` (pydantic-settings) — every env var the app reads |
 | `app/database.py` | Engine / `SessionLocal` / `Base` / `get_db` |
 | `app/constants.py` | Roles, statuses, `ROLE_RANK` — 🔴 `ROLE_VIEWER` is a read-only SEAT at the floor of the rank, not a rung; reads name it via `VIEW_ALL_ROLES` |
-| `app/security.py` | `get_current_user`, `require_min_role`, `require_roles` factories; `user_from_sso` `:50` |
+| `app/capabilities.py` | **The named-capability registry** — one `Capability` per reassignable surface, its coded default set, and `is_grantable` (the three invariants: Super Admin holds everything, `locked` is nobody's to move, `viewer` never holds a `write`). 🔴 Role-alone decisions only; anything needing the ROW stays in `services/task_perms.py` (AGENTS.md §3) |
+| `app/security.py` | `get_current_user`, **`require_cap`** (the guard for anything reassignable), `require_min_role` / `require_roles` factories; `user_from_sso` `:50` |
 | `app/sso.py` | Portal `ag_sso` cookie parsing (`email_from_cookie`, `COOKIE_NAME`) |
 | `app/middleware.py` | `_csp()`, `_permissions_policy()`, `SecurityHeadersMiddleware` (also sets `Cache-Control: no-cache` on non-API responses), **`ConditionalGZipMiddleware`** (gzip everything except the SSE streams — 🔴 `_NO_COMPRESS_PREFIXES`; gzip buffers, so a compressed SSE frame emits zero bytes and the live board silently dies), `RateLimitMiddleware` (hand-rolled on purpose), `CSRFMiddleware` |
 | `app/assets.py` | **Content-hashed CSS/JS URLs.** `Assets(frontend_dir)` hashes every `static/**/*.{js,css}` into a `build_id` at import, rewrites each page shell's `src=`/`href=` to `?v=<id>`, and `is_current()` decides who earns `immutable`. 🔴 Hashed by CONTENT, not mtime — an asset a deploy didn't touch keeps its URL and stays cached. See AGENTS.md §5 |
@@ -73,6 +74,14 @@ unit map + cookbook.
 3. **Change RBAC on an endpoint** — swap the `Depends(require_min_role(...))` /
    `require_roles(...)` guard (factories in `security.py`); update `tests/test_security_rbac.py`
    to pin it. Verify: `python -m pytest tests/test_security_rbac.py -v`. Deploy: `..\deploy\deploy.ps1`.
+3b. **Add a REASSIGNABLE permission** (one the Super Admin can move between roles) — add a
+   `Capability` to `app/capabilities.py` with its `group`, `description`, coded `default` set and
+   `write` flag, plus the matching `CAP_*` constant; guard the endpoint with
+   `Depends(require_cap(CAP_...))`; add its row to `_ORIGINAL_GATES` in `tests/test_permissions.py`
+   (that test re-derives every default from `ROLE_RANK`, so a missing row fails rather than silently
+   shipping). No migration and no frontend change needed — the console renders from the registry.
+   🔴 `locked=True` for anything that grants privilege escalation. Verify:
+   `python -m pytest tests/test_permissions.py -q`.
 4. **Add an internal HMAC endpoint** — copy `/mentor-search` in `routers/internal.py:128`:
    `_verify(x_academy_ts, x_academy_sig, "<purpose>")`; the purpose string must match the caller's
    signer exactly (Mastery Engine `lib/sentinel.js` / Atrium bridge). Add a case to
