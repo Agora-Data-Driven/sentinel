@@ -1785,6 +1785,16 @@ path into a real entry; `update_area` remains for editing/clearing it, but the c
 prefer `add_growth`. The same cap-the-index bug is documented one section down for
 `mentor_library` — it is the same mistake, and it has now been made twice.
 
+**Uploading a PDF IS adding an entry (2026-08-31).** `POST /api/development/growth/upload`
+(multipart: `file`, `dimension`, `kind`, `title?`, `status`) runs `services/pdf_text.py` (pypdf, lazy
+import → 503 when the image lacks it) and stores the text as the entry's `detail`, page-marked
+(`[page N]`), with an import header line. **No bucket, no blob column, no migration** — the file is not
+kept, because an entry is the only shape the coach can read (index + on-demand body, above). Rules
+carried over: the text is capped at `pdf_text.MAX_CHARS` (200k) and a cut is **written into the text**
+("N more pages were NOT imported") so the coach reports a gap, never an absence; a scanned PDF with no
+text layer is a 400, not an empty entry. The "↑ upload PDF" link sits next to "+ add entry" in every
+dimension's Notes section (`growth.js` `pdfForm`). Covered by `tests/test_growth_pdf_upload.py`.
+
 Covered by `tests/test_growth_notes.py`. 🔴 The column reaches **prod** via
 `main._ensure_columns` (deploys don't run alembic); `b6d2f8a4c7e9` is the local/migrated path and is
 existence-guarded because `create_all` usually wins the race.

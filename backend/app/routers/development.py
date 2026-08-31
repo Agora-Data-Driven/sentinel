@@ -6,7 +6,7 @@ internal HMAC endpoint (see routers/internal.py).
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -349,6 +349,66 @@ def add_growth(payload: GrowthItemIn, user: User = Depends(get_current_user), db
     db.add(g)
     db.commit()
     return growth_item_dict(g)
+
+
+# "Upload a PDF" = make an entry whose detail is the PDF's text. Nothing else is stored — no bucket,
+# no blob column, no migration — because the entry is the ONLY thing the coach can read: its title
+# joins the complete index on every turn and its body is fetched whole when a conversation bears on
+# it. A stored file the coach cannot see would be a filing cabinet with the coach locked out.
+# Text extraction + the declared-truncation rule live in services/pdf_text.py.
+@router.post("/growth/upload")
+async def upload_growth_pdf(
+    file: UploadFile = File(...),
+    dimension: str = Form("professional"),
+    kind: str = Form("note"),
+    title: str | None = Form(None),
+    status: str = Form("open"),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    from ..services import pdf_text
+
+    name = (file.filename or "").strip()
+    ctype = (file.content_type or "").lower()
+    if ctype != "application/pdf" and not name.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Please upload a PDF")
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="The file was empty")
+    if len(data) > pdf_text.MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="PDF is too large (max 15 MB)")
+    try:
+        got = pdf_text.extract_pdf_text(data)
+    except pdf_text.PdfUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except pdf_text.PdfError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # The title is the load-bearing field (it is all the coach sees until it opens the body), so it
+    # is taken from, in order: what the worker typed, the PDF's own metadata title, the file name.
+    stem = name[:-4] if name.lower().endswith(".pdf") else name
+    final_title = ((title or "").strip() or got.title or stem.replace("_", " ").replace("-", " ").strip()
+                   or "Uploaded PDF")[:200]
+    if kind not in ("note", "reflection", "obstacle"):
+        kind = "note"
+    if status not in ("open", "resolved", "archived"):
+        status = "open"
+    header = (f"[Imported from PDF \"{name or 'upload.pdf'}\" — {got.pages} page{'s' if got.pages != 1 else ''}, "
+              f"{got.pages_imported} imported, {today_ph().isoformat()}]\n\n")
+    g = GrowthItem(
+        user_id=user.id,
+        dimension=_dimension_or_400(dimension),
+        kind=kind,
+        title=final_title,
+        detail=header + got.text,
+        status=status,
+    )
+    db.add(g)
+    db.commit()
+    out = growth_item_dict(g)
+    out["import"] = {"pages": got.pages, "pages_imported": got.pages_imported,
+                     "chars": len(g.detail or ""), "truncated": got.truncated}
+    return out
 
 
 @router.patch("/growth/{item_id}")
