@@ -510,7 +510,10 @@ async function mountGrowth(S, root, opts) {
     const items = notesFor(key);
     const unfiled = (areaOf(key).other_info || "").trim();
     const inner = `<div class="sub" style="margin-bottom:10px">Anything worth keeping for this area — one idea per entry, each with its own title. Your coach always sees every title, and reads an entry's detail when the conversation calls for it.</div>
-      ${readOnly ? "" : `<div style="margin-bottom:8px"><a href="#" class="linky" data-add-note="${key}">+ add entry</a></div>`}
+      ${readOnly ? "" : `<div class="row" style="gap:14px;margin-bottom:8px">
+        <a href="#" class="linky" data-add-note="${key}">+ add entry</a>
+        <a href="#" class="linky" data-upload-pdf="${key}" title="Import a PDF as an entry — its text becomes the detail, so your coach can read it">↑ upload PDF</a>
+      </div>`}
       ${items.length ? `<div class="note-list">${items.map(noteRow).join("")}</div>`
         : '<div class="empty">No entries yet.</div>'}
       ${unfiled ? `
@@ -797,6 +800,7 @@ async function mountGrowth(S, root, opts) {
     S.qsa("[data-file-info]").forEach((a) => a.onclick = (e) => { e.preventDefault(); fileUnfiledForm(a.dataset.fileInfo); });
 
     S.qsa("[data-add-note]").forEach((a) => a.onclick = (e) => { e.preventDefault(); noteForm(null, a.dataset.addNote); });
+    S.qsa("[data-upload-pdf]").forEach((a) => a.onclick = (e) => { e.preventDefault(); pickPdf(a.dataset.uploadPdf); });
     S.qsa("[data-edit-note]").forEach((a) => a.onclick = (e) => {
       e.preventDefault();
       noteForm((data.growth || []).find((g) => g.id == a.dataset.editNote));
@@ -850,6 +854,52 @@ async function mountGrowth(S, root, opts) {
       return g ? api(`/api/development/growth/${g.id}`, { method: "PATCH", body })
         : api("/api/development/growth", { method: "POST", body });
     }, { wide: true });
+  }
+
+  // --- upload a PDF as an entry ---------------------------------------------------------------
+  // The PDF's text becomes the entry's detail (server: POST /api/development/growth/upload,
+  // services/pdf_text.py). That is the ONLY way a document can reach the coach: an entry's title is
+  // in the coach's index on every turn and its body is fetched whole when a chat bears on it. The
+  // file itself is not kept — nothing the coach can't read is worth storing here.
+  // One hidden <input type=file> per panel; `pickPdf` remembers which area the click came from.
+  let pdfTargetDim = "professional";
+  function pdfInput() {
+    let inp = S.qs("#gp-pdf-file", root);
+    if (inp) return inp;
+    inp = document.createElement("input");
+    inp.type = "file"; inp.id = "gp-pdf-file"; inp.accept = "application/pdf,.pdf"; inp.hidden = true;
+    inp.onchange = () => {
+      const f = inp.files && inp.files[0];
+      inp.value = "";
+      if (f) pdfForm(f, pdfTargetDim);
+    };
+    root.appendChild(inp);
+    return inp;
+  }
+  function pickPdf(dimKey) { pdfTargetDim = dimKey || "professional"; pdfInput().click(); }
+
+  function pdfForm(file, dimKey) {
+    if (file.size > 15 * 1024 * 1024) { S.toast(`"${file.name}" is larger than 15 MB`, "err"); return; }
+    const stem = file.name.replace(/\.pdf$/i, "").replace(/[_-]+/g, " ").trim();
+    formModal(`Upload PDF — ${dimName(dimKey).toLowerCase()}`, [
+      { name: "title", label: `Title — what "${file.name}" is about (this is what your coach always sees)`, value: stem, ph: "e.g. Employee handbook 2026" },
+      { name: "dimension", label: "Area", type: "select", value: dimKey, options: DIMS.map((d) => ({ v: d.key, t: d.name })) },
+      { name: "kind", label: "Kind", type: "select", value: "note", options: KINDS },
+      { name: "status", label: "Status", type: "select", value: "open", options: [{ v: "open", t: "Open" }, { v: "resolved", t: "Resolved" }, { v: "archived", t: "Archived" }] },
+    ], async (o) => {
+      if (!String(o.title || "").trim()) throw { detail: "Give it a title — that's the part your coach always sees." };
+      const form = new FormData();
+      form.append("file", file, file.name);
+      form.append("title", o.title);
+      form.append("dimension", o.dimension);
+      form.append("kind", o.kind);
+      form.append("status", o.status);
+      const r = await api("/api/development/growth/upload", { method: "POST", form });
+      const imp = (r && r.import) || {};
+      S.toast(imp.truncated
+        ? `Imported ${imp.pages_imported} of ${imp.pages} pages — the PDF was cut to fit, and the entry says where`
+        : `Imported ${imp.pages || "the"} page${imp.pages === 1 ? "" : "s"} (${(imp.chars || 0).toLocaleString()} chars) — your coach can read it now`, "ok");
+    });
   }
 
   /** Move a dimension's leftover free-form blob into a real titled entry, then clear the blob.

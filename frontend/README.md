@@ -19,7 +19,7 @@ kiosk. Operating rules (CSP, cache bumping, `api()`-only fetches) live in
 | `static/js/growth-page.js` | `/growth` = a manager's read-only view of ONE person (`?user=<id>`); without a `?user` it redirects to the Overview |
 | `static/js/attendance.js` · `approvals.js` | Time page · combined attendance+leave approvals inbox (team_lead+) |
 | `static/js/gym.js` | Calendar, no-lock day editor, saved routines (one-tap workout templates), history, **coach log-visibility toggle** (`renderCoachVis` — withholds the workout log from the AI coach; see AGENTS.md §5) |
-| `static/js/growth.js` | **`window.GrowthPanel`, a component — not a page controller.** `mount(S, root, {userId, ringsHost, mast})` renders the 4-dimension compass (each ring links into its engine tab) and the ledger (pace band, per-dimension details, Mentor Library import). `ringsHost` splits the two so the Overview can put the task board between them |
+| `static/js/growth.js` | **`window.GrowthPanel`, a component — not a page controller.** `mount(S, root, {userId, ringsHost, mast})` renders the 4-dimension compass (each ring links into its engine tab) and the ledger (pace band, per-dimension details, Mentor Library import). `ringsHost` splits the two so the Overview can put the task board between them. Each dimension's Notes section has **"+ add entry"** and **"↑ upload PDF"** (`pdfForm` → multipart `POST /api/development/growth/upload`; the PDF's text becomes the entry, so the coach can read it) |
 | `static/js/reading.js` | Reading canon |
 | `static/js/academy.js` | Mastery Engine iframe (Professional tab) |
 | `static/js/engine-tab.js` | ONE controller for the Philosophical + Spiritual tabs — each shell pins a program via `<body data-program>` → iframe `?program=` |
