@@ -123,8 +123,12 @@ $envVars = "ENVIRONMENT=production,SECURE_COOKIES=true,DEV_LOGIN_ENABLED=false,T
 # or every call answers 403 — granted here idempotently (a repeat binding is a no-op), and the API is
 # enabled the same way. Set -VertexEnabled:$false to ship with the Draft-with-AI button saying "unavailable".
 if ($VertexEnabled) {
-  gcloud services enable aiplatform.googleapis.com --project $Project *> $null
-  gcloud projects add-iam-policy-binding $Project --member "serviceAccount:$ServiceAccount" --role "roles/aiplatform.user" --condition None *> $null
+  # 🔴 Through cmd, not PowerShell redirection. gcloud prints "Updated IAM policy for project …" on
+  # STDERR, and under this script's `$ErrorActionPreference = "Stop"` PowerShell 5.1 turns that line
+  # into a terminating NativeCommandError — `*> $null` does not save you (the first deploy of this
+  # block died exactly there, AFTER the binding had applied). cmd's own redirection never re-raises.
+  cmd /c "gcloud services enable aiplatform.googleapis.com --project $Project >nul 2>&1"
+  cmd /c "gcloud projects add-iam-policy-binding $Project --member serviceAccount:$ServiceAccount --role roles/aiplatform.user --condition None >nul 2>&1"
   $envVars += ",VERTEX_GEMINI_ENABLED=true,VERTEX_PROJECT=$Project,VERTEX_LOCATION=$VertexLocation,VERTEX_MODEL=$VertexModel"
 }
 
