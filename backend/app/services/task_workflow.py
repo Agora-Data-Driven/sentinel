@@ -22,6 +22,7 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from ..constants import (
+    HOLD_KINDS,
     NOTIF_TASK_ASSIGNED,
     NOTIF_TASK_REVIEW,
     REVIEW_APPROVED,
@@ -133,6 +134,8 @@ def _sync_hold(db: Session, task: Task, old: str, stage: str, actor: User) -> No
         task.on_hold = False
         task.hold_reason = None
         task.resume_to = None
+        task.hold_kind = None
+        task.blocked_by_task_id = None
         _log(db, task, actor.id, "on_hold", "on hold", "resumed")
         return
     if task.on_hold or stage != "blocked":
@@ -151,13 +154,21 @@ def _sync_hold(db: Session, task: Task, old: str, stage: str, actor: User) -> No
 
 # --- park / resume (M3) -------------------------------------------------------------------------
 
-def park(db: Session, task: Task, actor: User, reason: str = "") -> tuple[str, str]:
+def park(db: Session, task: Task, actor: User, reason: str = "", kind: str | None = None,
+         blocked_by_task_id: int | None = None) -> tuple[str, str]:
     """Pause the task in the blocked column, remembering where it came from. (status, error).
 
     `hold_reason` is INTERNAL. A park reason is usually about money, legal or a client who has gone
     quiet — Atrium's own card carries such a field, but we deliberately never push ours (the client
     sees the stage, never the reason). See `task_bridge.SAFE`.
+
+    `kind` (constants.HOLD_KINDS) is the structured half, added 2026-09-02 so the AM's and COO's
+    "waiting on the client vs waiting on us" split can be COUNTED; `blocked_by_task_id` names the
+    card this one waits on when the kind is `task`. Both live and die with the hold (`_sync_hold`
+    clears them on resume).
     """
+    if kind is not None and kind not in HOLD_KINDS:
+        return "", f"Unknown hold kind '{kind}'."
     target = _status_for(db, "blocked")
     if not target:
         return "", ("There is no blocked column on this board, so there is nowhere to park work. "
@@ -171,10 +182,14 @@ def park(db: Session, task: Task, actor: User, reason: str = "") -> tuple[str, s
     old = task.status
     task.on_hold = True
     task.hold_reason = (reason or "").strip() or None
+    task.hold_kind = kind
+    task.blocked_by_task_id = blocked_by_task_id if kind == "task" else None
     task.status = target
     if old != target:
         _log(db, task, actor.id, "status", old, target)
     _log(db, task, actor.id, "on_hold", None, task.hold_reason or "parked")
+    if kind:
+        _log(db, task, actor.id, "hold_kind", None, kind)
     on_status_change(db, task, old, target, actor)
     return target, ""
 

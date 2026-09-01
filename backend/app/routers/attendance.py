@@ -33,6 +33,7 @@ from ..models import (
     User,
 )
 from ..schemas import AttendanceEditIn, AttendanceRequestIn, EventIn, OfflineSyncIn, RequestDecisionIn, ScanIn, SelfEventIn
+from ..services import task_sessions
 from ..capabilities import (
     CAP_ATTENDANCE_APPROVALS,
     CAP_ATTENDANCE_KIOSK,
@@ -166,6 +167,11 @@ def _record_event(
         dup = "Already clocked in today" if action == ACTION_CLOCK_IN else "Already clocked out today"
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=dup) from None
 
+    # Clocking out ends the working day, so it ends any task timer still running (2026-09-02). A
+    # forgotten Start Work must never keep counting overnight — services/task_sessions caps and flags
+    # it; the person can trim the flagged block tomorrow.
+    if action == ACTION_CLOCK_OUT:
+        task_sessions.close_open(db, user.id, source="auto_clockout")
     summary = att.recompute_summary(db, user, day, commit=False)
     db.commit()
     return {

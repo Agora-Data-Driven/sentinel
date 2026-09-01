@@ -46,6 +46,14 @@ _ORIGINAL_GATES = [
     ("insights.view", "min:admin"),
     ("manage.console", (C.ROLE_SUPER_ADMIN,)),
     ("system.run_daily", (C.ROLE_SUPER_ADMIN,)),
+    # Operating-system release (2026-09-02). New surfaces, so there was no guard to translate — these
+    # are the gates as DESIGNED (docs/SENTINEL_OPERATING_SYSTEM.md §E): reads name the viewer seat,
+    # the two writes are management acts.
+    ("ops.view", (C.ROLE_ADMIN, C.ROLE_SUPER_ADMIN, C.ROLE_VIEWER)),
+    ("clients.view", (C.ROLE_ACCOUNT_MANAGER, C.ROLE_ADMIN, C.ROLE_SUPER_ADMIN, C.ROLE_VIEWER)),
+    ("clients.assign_am", (C.ROLE_ACCOUNT_MANAGER, C.ROLE_ADMIN, C.ROLE_SUPER_ADMIN)),
+    ("ai.draft", (C.ROLE_TEAM_LEAD, C.ROLE_ACCOUNT_MANAGER, C.ROLE_ADMIN, C.ROLE_SUPER_ADMIN)),
+    ("certifications.manage", "min:team_lead"),
 ]
 
 

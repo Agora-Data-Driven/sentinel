@@ -57,7 +57,7 @@ from ..services import notifications as notif
 from ..services import atrium_identity
 from ..services import teams as teams_svc
 from ..services import (task_adoption, task_bridge, task_config, task_origin, task_perms,
-                        task_recurring, task_templates, task_workflow)
+                        task_recurring, task_sessions, task_templates, task_workflow)
 from ..utils.time import today_ph, to_ph, utcnow
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
@@ -798,6 +798,81 @@ def throughput_history(weeks: int = Query(8, ge=2, le=26),
     }
 
 
+# --- Work sessions (services/task_sessions, 2026-09-02) --------------------------------------------
+# 🔴 `/sessions/active` and `/sessions/pause` are registered ABOVE `GET /{task_id}` on purpose: FastAPI
+# matches in declaration order, and a literal path declared after `/{task_id}` is swallowed by it and
+# answers 404 "Task not found" — the same trap `routers/gym.py` documents for `/routines`.
+
+@router.get("/sessions/active")
+def active_session(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """The card this person is working on right now, or {"active": null}. Feeds the topbar strip."""
+    s = task_sessions.active_for(db, user.id)
+    task = db.get(Task, s.task_id) if s else None
+    return {"active": task_sessions.session_dict(s, task) if s else None}
+
+
+@router.post("/sessions/pause")
+def pause_session(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Stop whatever is running. Idempotent — pausing nothing is fine."""
+    closed = task_sessions.close_open(db, user.id, source="start_work")
+    db.commit()
+    tasks = {t.id: t for t in db.execute(select(Task).where(Task.id.in_([s.task_id for s in closed] or [-1]))).scalars()}
+    return {"closed": [task_sessions.session_dict(s, tasks.get(s.task_id)) for s in closed]}
+
+
+@router.post("/{task_id}/sessions/start")
+def start_session(task_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """START WORK. Opens a session on this card (closing any other running one) and, when the card is
+    still in To Do or Revision Needed, moves it to In Progress through the ordinary move path — the
+    same `_apply_status` every other move affordance uses, so the history, the projection and the
+    broadcast all happen.
+
+    `can_edit`, like ticking a step: working a card is editing the work. A viewer never reaches this.
+    """
+    task = _own_row(db, task_id, user, task_perms.can_edit, "worked on")
+    stage = task_config.stage_for(db, task.status)
+    if stage == "completed":
+        raise HTTPException(status_code=409, detail="That task is already completed.")
+    if stage == "blocked":
+        raise HTTPException(status_code=409, detail="That task is parked — resume it first.")
+    session, closed = task_sessions.start(db, task, user)
+    moved = False
+    if stage in ("todo", "revision"):
+        target = task_config.status_for_stage(db, "in_progress")
+        if target and target != task.status:
+            _apply_status(db, task, target, user)
+            moved = True
+    if not moved:
+        db.commit()
+    _log(db, task.id, user.id, "session", None, "started")
+    db.commit()
+    return {"ok": True, "moved": moved, "status": task.status,
+            "active": task_sessions.session_dict(session, task),
+            "closed": [task_sessions.session_dict(s, db.get(Task, s.task_id)) for s in closed]}
+
+
+@router.post("/{task_id}/sessions/pause")
+def pause_task_session(task_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """PAUSE this card's running session (a no-op if it is not the one running)."""
+    task = _own_row(db, task_id, user, task_perms.can_edit, "paused")
+    closed = task_sessions.close_for_task(db, task, user)
+    db.commit()
+    return {"ok": True, "closed": task_sessions.session_dict(closed, task) if closed else None}
+
+
+@router.get("/{task_id}/sessions")
+def list_sessions(task_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    task = _own_row(db, task_id, user, task_perms.can_view, "read")
+    rows = task_sessions.sessions_for_task(db, task.id)
+    users = {u.id: u for u in db.execute(select(User).where(User.id.in_({s.user_id for s in rows} or [-1]))).scalars()}
+    out = []
+    for s in rows:
+        d = task_sessions.session_dict(s, task)
+        d["user"] = user_public(users.get(s.user_id))
+        out.append(d)
+    return {"sessions": out, "minutes": sum(d["minutes"] for d in out)}
+
+
 @router.get("/templates")
 def list_templates(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Service-template catalog for the New Task picker (DB-backed). Declared before /{task_id}."""
@@ -1123,6 +1198,11 @@ def create_task(payload: TaskCreateIn, background: BackgroundTasks,
     # one label, always right, no manual step, and the same rule Atrium applies to the same card.
     labels = _derived_labels(db, payload.assigned_team_id)
     description = payload.description or (tpl.default_description if tpl else None)
+    # Estimate: what the caller typed, else the recipe's typical effort (2026-09-02). A seed, not a
+    # lock — and blank stays blank rather than a guessed number the Monitor would then sum.
+    estimate = payload.estimate_minutes
+    if estimate is None and tpl is not None:
+        estimate = getattr(tpl, "estimate_minutes", None)
     task = Task(
         title=payload.title,
         description=description,
@@ -1146,6 +1226,7 @@ def create_task(payload: TaskCreateIn, background: BackgroundTasks,
         due_date=payload.due_date,
         start_date=payload.start_date,
         service_charge=payload.service_charge,  # already normalized by the schema (blank/zero → None)
+        estimate_minutes=estimate,
         labels_json=json.dumps(labels),
         maintasks_json=maintasks_svc.dumps(maintasks),  # legacy checklist_json no longer written
         deliverable_url=payload.deliverable_url,
@@ -1676,9 +1757,16 @@ def park_task(task_id: str, payload: TaskParkIn, user: User = Depends(get_curren
     parked in, never that we are waiting on their invoice.
     """
     task = _own_row(db, task_id, user, task_perms.can_move, "parked")
-    _status, err = task_workflow.park(db, task, user, payload.reason)
+    if payload.blocked_by_task_id is not None:
+        other = db.get(Task, payload.blocked_by_task_id)
+        if other is None or other.id == task.id:
+            raise HTTPException(status_code=400, detail="That task to wait on doesn't exist.")
+    _status, err = task_workflow.park(db, task, user, payload.reason, kind=payload.kind,
+                                      blocked_by_task_id=payload.blocked_by_task_id)
     if err:
         raise HTTPException(status_code=409, detail=err)
+    # Parking ends the work for now, so it ends the timer too (services/task_sessions).
+    task_sessions.close_for_task(db, task, user)
     return _after_move(db, task, user, "park")
 
 
@@ -1835,6 +1923,8 @@ def submit_for_review(task_id: str, user: User = Depends(get_current_user),
     err = task_workflow.submit_review(db, task, user)
     if err:
         raise HTTPException(status_code=409, detail=err)
+    # Submitting says "I'm done for now" — the timer stops with it (services/task_sessions).
+    task_sessions.close_for_task(db, task, user)
     db.commit()
     _broadcast("updated", task, user.id)
     return task_detail(task, db)

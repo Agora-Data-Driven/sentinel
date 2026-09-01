@@ -110,6 +110,20 @@ class Settings(BaseSettings):
     # seconds stale on the board. Raising it much past ~60s would start being visible to a person
     # editing in Atrium and refreshing here.
     atrium_cache_seconds: int = 15
+
+    # --- AI task drafting (services/ai_draft.py, 2026-09-02) ----------------------------------------
+    # Vertex AI Gemini through the Cloud Run runtime service account — GCP-billed, NO API key — the
+    # same pattern Atrium's intel_ai.py uses. Off unless VERTEX_GEMINI_ENABLED=1 AND VERTEX_PROJECT is
+    # set; off means the Draft-with-AI button says so and the AM files the tasks by hand. The runtime
+    # SA needs roles/aiplatform.user or every call answers 403 (deploy.ps1 grants it).
+    vertex_gemini_enabled: bool = False
+    vertex_project: str = ""
+    vertex_location: str = "global"
+    vertex_model: str = "gemini-2.5-flash"
+    # Per-task work sessions (services/task_sessions.py). A session that runs past the cap is clamped
+    # and flagged rather than trusted — nobody works eight hours on one card without a break, and a
+    # forgotten timer must not inflate a day.
+    session_cap_minutes: int = 240
     # How long a resolved role->capability matrix is cached IN-PROCESS (`services/permissions`).
     # `require_cap` runs on every guarded request, so resolving from the DB each time would put a
     # SELECT on a large share of all traffic. The cost is that a REVOKE made on one instance is not

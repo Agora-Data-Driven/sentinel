@@ -384,6 +384,8 @@ def test_viewer_can_open_a_task(client, db, make_user, auth):
     ("post",  "/{id}/review/approve",   {}),
     ("post",  "/{id}/review/request-changes", {"note": "x"}),
     ("post",  "/{id}/send-back",        {"reason": "x"}),
+    ("post",  "/{id}/sessions/start",   {}),
+    ("post",  "/{id}/sessions/pause",   {}),
     ("post",  "/{id}/send-to-atrium",   {}),
     ("post",  "/{id}/atrium-retry",     {}),
     ("post",  "/{id}/atrium-clear-share", {}),

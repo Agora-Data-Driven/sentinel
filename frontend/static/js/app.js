@@ -153,7 +153,11 @@
     // was embedded here from 2026-07-26 until 2026-08-03, when decision D7 gave it its own page
     // again; `/dashboard?open=<id>` forwards to /tasks for the notifications minted in that window.
     { href: "/dashboard", label: "Overview", icon: "grid" },
+    // Operating-system release (2026-09-02). Clients follows its CAPABILITY (AM+ and the viewer seat
+    // by default), the Calendar is everyone's — it is a projection of the board they already see.
+    { href: "/clients", label: "Clients", icon: "building", cap: "clients.view" },
     { href: "/tasks", label: "Task Board", icon: "board" },
+    { href: "/calendar", label: "Calendar", icon: "calendar" },
     // The four Growth tabs mirror the Overview's four dimensions one-to-one:
     // Professional (the engine's career programs, formerly "Academy"), Philosophical and
     // Spiritual (each a Mastery Engine pinned to its reading program), Physical (the gym,
@@ -759,6 +763,10 @@
         <header class="top">
           <button class="iconbtn hamburger" id="ham" aria-label="Menu">${ICON.menu}</button>
           <button class="cmdk-trigger" id="cmdk-trigger" title="Search (Ctrl K)" aria-label="Open command palette">${ICON.search}<span>Search anything</span><kbd>Ctrl K</kbd></button>
+          ${/* WORKING ON… (2026-09-02). The card whose timer is running, on every page, with Pause —
+                so a person can never lose track of an open session. Filled by refreshWorkStrip()
+                from /api/tasks/sessions/active; hidden when nothing runs. */""}
+          <div class="work-strip" id="work-strip" hidden></div>
           ${/* `role="group"` + a label, because these two buttons only mean something as a PAIR — read
                 one at a time they are "Light mode" / "Dark mode" with no hint that they are one
                 control. `aria-pressed` is set alongside the `.on` class by `setTheme`, so the current
@@ -800,6 +808,43 @@
     wireBell();
     initCommandPalette();
     mountAssistant();
+    refreshWorkStrip();
+    // A minute is the strip's own unit, so a minute is the poll — another tab's Start Work shows up
+    // here within one. Cheap: one indexed SELECT on the person's open sessions.
+    setInterval(refreshWorkStrip, 60000);
+  }
+
+  // ---------------- "Working on …" strip ----------------
+  // The one running task session (services/task_sessions). Fail-soft and never a toast: the strip is
+  // decoration on the way to the board, and a failed count must not put an error over somebody's page.
+  let workTick = null;
+  async function refreshWorkStrip() {
+    const host = qs("#work-strip");
+    if (!host) return;
+    let a = null;
+    try { a = (await api("/api/tasks/sessions/active")).active; } catch (e) { return; }
+    if (workTick) { clearInterval(workTick); workTick = null; }
+    if (!a) { host.hidden = true; host.innerHTML = ""; return; }
+    const started = Date.parse(a.started_at);
+    const fmt = () => {
+      const s = Math.max(0, Math.floor((Date.now() - started) / 1000));
+      const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = s % 60;
+      return (h ? h + ":" : "") + String(m).padStart(2, "0") + ":" + String(ss).padStart(2, "0");
+    };
+    host.innerHTML = `<i class="ws-pulse"></i>
+      <a class="ws-title" href="/tasks?open=${a.task_id}" title="${esc(a.task_title || "")}">${esc(a.task_title || "Working")}</a>
+      <span class="ws-time" id="ws-time">${fmt()}</span>
+      <button type="button" class="btn sm" id="ws-pause">Pause</button>`;
+    host.hidden = false;
+    workTick = setInterval(() => { const t = qs("#ws-time"); if (t) t.textContent = fmt(); }, 1000);
+    qs("#ws-pause").onclick = async () => {
+      try {
+        await api("/api/tasks/sessions/pause", { method: "POST" });
+        toast("Paused — the time is saved on the card", "ok");
+        refreshWorkStrip();
+        document.dispatchEvent(new CustomEvent("sentinel:session"));
+      } catch (e) { toast(e.detail || "Couldn't pause", "err"); }
+    };
   }
 
   // ---------------- Holistic AI coach (global) ----------------
@@ -1517,6 +1562,8 @@
     fmtTime, fmtDate, fmtDateFull, timeAgo, priorityDot, labelPills, statusPill,
     roleRank: ROLE_RANK,
     refreshVocab,
+    // Re-read the "Working on …" strip after a Start Work / Pause on the board (taskboard.js).
+    refreshWorkStrip,
     get user() { return USER; }, set user(u) { USER = u; },
     get colors() { return COLORS; },
     // The snapshot boot() already paid for. A getter, so a `refreshVocab()` is picked up by anyone

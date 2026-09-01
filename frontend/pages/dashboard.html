@@ -27,6 +27,13 @@
   <script src="/static/js/teamgrowth.js"></script>
   <!-- timespent.js defines window.TimeSpent (minutes in the engine — both the strip and the team table). -->
   <script src="/static/js/timespent.js"></script>
+  <!-- The role-shaped landing (2026-09-02): opsui.js is shared drawing; today.js / accounts.js /
+       ops.js each define ONE mountable object (TodayPage / AccountsPage / OpsPage) and dashboard.js
+       picks by role. None of them may define window.pageInit. -->
+  <script src="/static/js/opsui.js"></script>
+  <script src="/static/js/today.js"></script>
+  <script src="/static/js/accounts.js"></script>
+  <script src="/static/js/ops.js"></script>
   <script src="/static/js/dashboard.js"></script>
 </body>
 </html>

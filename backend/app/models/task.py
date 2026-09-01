@@ -88,6 +88,17 @@ class Task(Base):
     on_hold: Mapped[bool] = mapped_column(Boolean, default=False)
     hold_reason: Mapped[str | None] = mapped_column(Text, nullable=True)   # 🔒 internal
     resume_to: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # WHY it is waiting, structured (constants.HOLD_KINDS) — 2026-09-02. `hold_reason` is prose for
+    # the reader; this is the one field the AM's and COO's "blocked by the client vs blocked by us"
+    # split can count. 🔒 Internal like the reason. Written only by `task_workflow.park`.
+    hold_kind: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    # The one task this one is waiting on, when `hold_kind == "task"`. A single pointer, not a
+    # dependency graph — 90% of "why is this waiting" is answered by naming one card.
+    blocked_by_task_id: Mapped[int | None] = mapped_column(ForeignKey("tasks.id"), nullable=True)
+    # Estimated effort in minutes — OPTIONAL, defaulted from the service template so coverage is
+    # high where it matters and blank elsewhere. The Monitor's relative band stays the truthful
+    # default; hours are only shown where enough cards on screen carry an estimate.
+    estimate_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # --- Review gate (M2, decision D5) --------------------------------------------------------
     # NULL = never submitted. Otherwise pending | approved | changes_requested (constants.REVIEW_*).
@@ -257,6 +268,11 @@ class ServiceTemplate(Base):
     default_priority: Mapped[str | None] = mapped_column(String(16), nullable=True)
     default_labels_json: Mapped[str] = mapped_column(Text, default="[]")  # ["Design","Ads",...]
     default_description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Operating-system release (2026-09-02): the recipe's typical effort, copied onto a new task's
+    # `estimate_minutes` when the caller left it blank, and the credential the work needs
+    # (a `certifications.key`). Both optional; both surfaced, never enforced.
+    estimate_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    required_certification: Mapped[str | None] = mapped_column(String(60), nullable=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

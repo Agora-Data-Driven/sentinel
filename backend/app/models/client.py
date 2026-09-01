@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Integer, String
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ..database import Base
@@ -26,4 +26,9 @@ class Client(Base):
     # inactive client keeps its whole history and simply leaves the pickers.
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False,
                                             server_default="1")
+    # WHO OWNS THE ACCOUNT (2026-09-02). Atrium owns the client's identity; who at Agora is
+    # accountable for it is a STAFFING fact, so it lives here beside the staff table. Drives the AM's
+    # "My accounts" view and the AI drafter's default assignee. NULL = nobody named yet — the
+    # Clients page says so rather than guessing from who filed the most cards.
+    account_manager_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

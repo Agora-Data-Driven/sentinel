@@ -45,6 +45,7 @@ from .time_entry import TimeEntry
 from .task import (AtriumApproval, RecurringService, ServiceTemplate, Task, TaskComment,
                    TaskHistory, TaskRequest, TaskSupporter, TaskVocabItem)
 from .user import QRToken, ShiftTemplate, Team, User, UserTeam
+from .work import Certification, TaskSession
 
 __all__ = [
     "Team",
@@ -93,4 +94,6 @@ __all__ = [
     "SystemSetting",
     "UserCapability",
     "TimeEntry",
+    "TaskSession",
+    "Certification",
 ]

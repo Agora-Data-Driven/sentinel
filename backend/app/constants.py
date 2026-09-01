@@ -174,6 +174,38 @@ PRIORITIES = [PRIORITY_URGENT, PRIORITY_MEDIUM, PRIORITY_LOW]
 # see task_vocab's docstring for what keying off a display string cost this board.
 ORIGIN_PLANNED = "planned"
 ORIGIN_ADDED = "added"
+
+# --- Operating-system release (2026-09-02) -------------------------------------------------------
+# WHY a parked card is waiting — structured, so the AM/COO can split "blocked by the client" from
+# "blocked by us" without reading every hold reason. Keys are stored on `tasks.hold_kind`; labels are
+# what the UI prints. 🔒 Internal like `hold_reason`: never crosses to the client.
+HOLD_KINDS: dict[str, str] = {
+    "client": "Waiting on client",
+    "access": "Waiting for access",
+    "asset": "Waiting for an asset",
+    "am_decision": "Waiting for AM decision",
+    "reviewer": "Waiting for reviewer",
+    "task": "Waiting on another task",
+    "other": "Other",
+}
+HOLD_KINDS_ON_US = {"access", "asset", "am_decision", "reviewer", "task", "other"}
+
+# Worker STAGE — readiness, orthogonal to `role` (authority). Shadow → Contributor → Workstream
+# Owner → Client Owner. Surfaced on cards and at assignment; a Contributor or Shadow leading live
+# client work gets a reviewer flagged as required. Not enforced in v1.
+STAGE_SHADOW = "shadow"
+STAGE_CONTRIBUTOR = "contributor"
+STAGE_WORKSTREAM_OWNER = "workstream_owner"
+STAGE_CLIENT_OWNER = "client_owner"
+WORKER_STAGES = [STAGE_SHADOW, STAGE_CONTRIBUTOR, STAGE_WORKSTREAM_OWNER, STAGE_CLIENT_OWNER]
+STAGE_LABELS = {
+    STAGE_SHADOW: "Shadow",
+    STAGE_CONTRIBUTOR: "Contributor",
+    STAGE_WORKSTREAM_OWNER: "Workstream Owner",
+    STAGE_CLIENT_OWNER: "Client Owner",
+}
+# Stages that always need a reviewer on live client work.
+STAGES_NEED_REVIEWER = {STAGE_SHADOW, STAGE_CONTRIBUTOR}
 TASK_ORIGINS = [ORIGIN_PLANNED, ORIGIN_ADDED]
 
 # --- Task labels: DERIVED from the department, never chosen (decision D14) -------------------

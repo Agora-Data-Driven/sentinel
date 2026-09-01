@@ -9,6 +9,10 @@
 > Unit file maps + cookbooks:
 > [backend/README.md](backend/README.md) · [frontend/README.md](frontend/README.md) ·
 > [deploy/README.md](deploy/README.md).
+> **The operating-system release (2026-09-02) is BUILT — §5 "Sentinel as the operating system".**
+> Proposal + rationale: [docs/SENTINEL_OPERATING_SYSTEM.md](docs/SENTINEL_OPERATING_SYSTEM.md); the
+> team's SOP: [docs/SENTINEL_SOP.md](docs/SENTINEL_SOP.md); the mockup it was built from:
+> `docs/sentinel_ops_mockup.html`.
 
 ---
 
@@ -165,6 +169,7 @@ deploy/            deploy.ps1, seed-job.ps1, DEPLOY.md
 | `stream.py` | SSE push to the browser |
 | `dev.py` | **Local-development live reload** (`GET /api/dev/reload`, SSE). 404s in production — §5 |
 | `internal.py` | **HMAC-signed** service-to-service (Mastery Engine ↔ Sentinel, Atrium → Sentinel). Purposes: `user-lookup`, `academy-people`, `holistic-profile`, `growth-detail`, `mentor-search`, `task-request`, `task-feedback`, **`board`**, **`work-digest`**, **`work-detail`** |
+| `ops.py` | **The operating-system surfaces (2026-09-02)** — `/api/ops/today` (time + training), `/calendar` (projection), `/clients` + `/clients/{id}` (health), `/clients/{id}/account-manager`, `/exceptions` (the COO's list), `/ai/draft-tasks`, `/certifications`, `/meta`. Thin; the rules are `services/{today,calendar_view,client_health,operations,ai_draft}.py`. See §5 |
 
 Adding a router? Register it in the tuple at [main.py:513](backend/app/main.py#L513).
 
@@ -1946,6 +1951,73 @@ section · view) are a click away, deliberately not on the page. Four things to 
   next beat would simply re-stamp it.
 - **Writes are the person's own, or an admin's on their behalf** (`time_spent.may_write`). A team lead
   can read a report's time (`can_view`) but not rewrite it. Every write clears the team cache.
+
+### 🔴 Sentinel as the operating system — Today · Clients · Operations · Calendar · Start Work (2026-09-02)
+
+Built overnight from the owner-approved proposal in [docs/SENTINEL_OPERATING_SYSTEM.md](docs/SENTINEL_OPERATING_SYSTEM.md)
+(read §E there for the reasoning; this section is the operating rules). The SOP the team follows is
+[docs/SENTINEL_SOP.md](docs/SENTINEL_SOP.md).
+
+**One landing page, three shapes.** `/dashboard` is still everyone's landing page; `dashboard.js`
+mounts ONE role-shaped block under the greeting — `today.js` (employee / intern / team_lead:
+work today, waiting, time today, training), `accounts.js` (account_manager: needs-your-action,
+account health, commitments, people) or `ops.js` (admin / super_admin / viewer: the exception list,
+stats, client health, capacity) — and the growth compass + ledger follow it, unchanged. Each is a
+mountable object like `GrowthPanel` (never `window.pageInit`), fail-soft on its own. `opsui.js` is
+their shared drawing: **one row shape per task everywhere** (`.os-row`), stage tested through
+`S.vocab.task_status_meta`, never a status label.
+
+**New pages:** `/clients` (`clients.js`; `?client=<id>` drills into one account, with "Draft with AI"
+and the account-manager control) and `/calendar` (`calendar.js`). Nav follows capabilities:
+Clients is `clients.view`, the Calendar is everyone's.
+
+**The one new data primitive: `task_sessions`** (`models/work.py`, `services/task_sessions.py`).
+Per-task work time, written ONLY by Start Work / Pause / Submit / Park / clock-out — never typed.
+Rules: one open session per person (starting another card pauses the first); a session past
+`SESSION_CAP_MINUTES` (240) is **clamped and flagged `auto_cap`**, never trusted; clock-out closes it
+(`auto_clockout`, in `routers/attendance._record_event`); Start Work on a To Do / Revision card moves
+it to In Progress **through `_apply_status`**, so history, projection and broadcast all happen. The
+topbar's "Working on …" strip (`app.js refreshWorkStrip`, polled every 60s) and the record's footer
+(taskboard.js `#d-start` / `#d-pause`) are its two doors. 🔴 `/sessions/active` and `/sessions/pause`
+are declared **above** `GET /{task_id}` in `routers/tasks.py` or they 404 as "Task not found".
+🔴 Session time is INTERNAL — not in `task_bridge.SAFE`, not in the staff mirror.
+
+**Structured holds.** `tasks.hold_kind` (constants.HOLD_KINDS) + `tasks.blocked_by_task_id` ride with
+`on_hold`/`hold_reason`/`resume_to` — written by `task_workflow.park`, cleared by `_sync_hold`, and
+that is the only writer. It is what lets the AM's and COO's screens split "waiting on the client"
+from "waiting on us" without reading prose. The park dialog (`askPark`) offers the kinds as chips.
+
+**Client health is a PRINTED rule** (`services/client_health.py`): red = overdue ∨ blocked on us > 2d
+∨ review waiting > 24h; amber = due today ∨ waiting on the client ∨ untouched 14d; else green. Both
+screens print the rule and the reason in words. Only Sentinel rows count — an un-adopted Atrium card
+has no hold kind or review state to test. `clients.account_manager_id` is a staffing fact and lives
+here, not in Atrium (`PATCH /api/ops/clients/{id}/account-manager`, cap `clients.assign_am`).
+
+**The calendar has NO table** (`services/calendar_view.py`): task due dates (through `can_view` /
+`is_assigned`, the board's own predicates), recurring services' trigger days, approved leave. Change
+the due date on the card and the calendar moves.
+
+**Operations is exceptions only** (`services/operations.py`): red clients, heavy people (the
+Monitor's relative band), absence without cover, client-blocked > 2d, reviews > 24h, changes requested
+twice in 30d, stalled learners. 🔴 Stalled learners are skipped entirely while `engine_error` is set —
+an unreachable engine makes every row read zero, and zero is UNKNOWN there.
+
+**AI drafting proposes, never writes** (`services/ai_draft.py`, Vertex Gemini via the runtime SA —
+`deploy.ps1` grants `roles/aiplatform.user` and sets `VERTEX_*`). It returns `TaskCreateIn`-shaped
+proposals validated against Sentinel's roster (warnings computed HERE: leave, heavy, stage needs a
+reviewer, not in the department, missing certification); the UI posts each kept one to `POST /api/tasks`.
+Off (`VERTEX_GEMINI_ENABLED` unset) → 503 and the button says "unavailable — file it by hand".
+
+**Stage and certifications are SURFACED, not enforced** (v1). `users.stage` (Shadow → Contributor →
+Workstream Owner → Client Owner) is readiness, orthogonal to `role`; `certifications` +
+`service_templates.required_certification` produce warnings at drafting. Enforcement is a later,
+separate decision.
+
+**What did not change:** no new statuses (review and hold are flags on the five stages — D13); no pod
+entity (client AM + card holders express it); estimates are optional and template-defaulted
+(`estimate_minutes`), and the Monitor's relative band stays the truthful capacity default; the daily
+cron is still NOT scheduled (see §2). New columns reach prod via `_ensure_columns`; the two tables via
+`create_all`; migration `c9e4a7b2d6f1` is the guarded twin. Pinned by `tests/test_operating_system.py`.
 
 ### 🔴 The Coach FAB is not a second assistant — ONE DOOR PER PAGE
 

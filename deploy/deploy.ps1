@@ -72,6 +72,10 @@ param(
   # scale-up all day. This is a real (small) standing cost — pass `-MinInstances 0` to trade it back
   # for cold starts.
   [int]$MinInstances        = 1,
+  # AI task drafting (2026-09-02). See the Vertex block below.
+  [bool]$VertexEnabled      = $true,
+  [string]$VertexLocation   = "global",          # `global` serves flash AND pro; asia-southeast1 404s on pro
+  [string]$VertexModel      = "gemini-2.5-flash",
   # 🔴 Cloud Run's default cap is 100 and Sentinel had no cap at all. Every instance opens its OWN
   # connection pool (app/config.py: 5 held + 15 burst), and `db-f1-micro` allows only ~25 connections
   # for the whole estate — so this number and the pool are ONE decision: worst case is
@@ -113,6 +117,16 @@ $deployArgs = @(
 # GOOGLE-SIGNIN-SETUP.md). If you MUST keep the dev-login dropdown temporarily, append
 # ",ALLOW_DEV_LOGIN_IN_PROD=true" below — the app will boot with a loud SECURITY warning.
 $envVars = "ENVIRONMENT=production,SECURE_COOKIES=true,DEV_LOGIN_ENABLED=false,TIMEZONE=Asia/Manila,PORTAL_LOGIN_URL=$PortalLoginUrl,CANONICAL_HOST=$CanonicalHost,SKILL_MASTERY_URL=$SkillMasteryUrl,GOOGLE_REDIRECT_URI=$GoogleRedirectUri,ATRIUM_API_URL=$AtriumApiUrl,REPORT_DOC_ID=$ReportDocId,REPORT_USER_EMAIL=$ReportUserEmail,REPORT_IMPERSONATE_SA=$ReportImpersonateSa"
+
+# AI task drafting (services/ai_draft.py, 2026-09-02) — Vertex AI Gemini through the runtime SA, GCP-billed,
+# no API key: the same pattern Atrium's deploy_dash_platform.ps1 uses. The SA needs roles/aiplatform.user
+# or every call answers 403 — granted here idempotently (a repeat binding is a no-op), and the API is
+# enabled the same way. Set -VertexEnabled:$false to ship with the Draft-with-AI button saying "unavailable".
+if ($VertexEnabled) {
+  gcloud services enable aiplatform.googleapis.com --project $Project *> $null
+  gcloud projects add-iam-policy-binding $Project --member "serviceAccount:$ServiceAccount" --role "roles/aiplatform.user" --condition None *> $null
+  $envVars += ",VERTEX_GEMINI_ENABLED=true,VERTEX_PROJECT=$Project,VERTEX_LOCATION=$VertexLocation,VERTEX_MODEL=$VertexModel"
+}
 
 if ($DemoSqlite) {
   Write-Host "DEMO mode: ephemeral SQLite, single instance (data resets on restart)." -ForegroundColor Yellow
