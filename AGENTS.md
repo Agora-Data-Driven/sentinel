@@ -1933,6 +1933,19 @@ section · view) are a click away, deliberately not on the page. Four things to 
 - 🔴 **"—" is unknown, "0m" is zero — and here zero is a real answer.** Unlike the progress rollups,
   a person with no minutes has nothing recorded and shows 0m. The dash is reserved for the bridge
   failing, and `engine_error` is printed beside the table. `tests/test_time_spent.py` pins it.
+- **Two sources, merged at READ time, never in storage (2026-09-01, same day).** Engine minutes stay
+  in the engine's Firestore; hand-logged time is `models.TimeEntry` (`time_entries` — a NEW table, so
+  `create_all` lands it on prod; `b7e2f4a9c1d6` is the guarded migration). Every session row says
+  `source: engine | manual`. A manual entry may be filed under any dimension **including Physical**,
+  which has no engine programme at all.
+- 🔴 **An engine session can be DELETED or TRIMMED, never extended or moved** — the honesty edit ("I
+  was just moving the mouse"). `POST /api/development/time/engine-edit` turns it into one signed
+  `time-edit` POST that removes minute keys (`engine_bridge.post`). To ADD time you log a manual
+  entry, so a typed minute can never impersonate engine activity. A session that ended inside the
+  last `LIVE_GUARD_MINUTES` (5) today is refused with **409**: the engine keeps no tombstones, so the
+  next beat would simply re-stamp it.
+- **Writes are the person's own, or an admin's on their behalf** (`time_spent.may_write`). A team lead
+  can read a report's time (`can_view`) but not rewrite it. Every write clears the team cache.
 
 ### 🔴 The Coach FAB is not a second assistant — ONE DOOR PER PAGE
 

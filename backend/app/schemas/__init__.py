@@ -2,6 +2,8 @@
 routers so we keep tight control over which fields are exposed (esp. internal vs client-facing)."""
 from __future__ import annotations
 
+from datetime import date as _date
+
 import datetime as _dt
 from datetime import date
 from typing import Annotated, Any, Literal
@@ -300,6 +302,34 @@ class AreaUpdateIn(BaseModel):
 
     deadline: date | None = None
     other_info: str | None = None
+
+
+class TimeEntryIn(BaseModel):
+    """A hand-logged block of time against a dimension — what the engine cannot see."""
+    date: _date
+    start: str            # HH:MM, PH time
+    minutes: int
+    dimension: str        # spiritual | professional | philosophical | physical | coach | other
+    note: str | None = None
+    user_id: int | None = None   # an admin logging on somebody's behalf
+
+
+class TimeEntryUpdateIn(BaseModel):
+    date: _date | None = None
+    start: str | None = None
+    minutes: int | None = None
+    dimension: str | None = None
+    note: str | None = None
+
+
+class EngineSessionEditIn(BaseModel):
+    """Delete (no new_*) or TRIM one recorded engine session. Never extends — see time_spent."""
+    day: _date
+    start: str            # HH:MM
+    end: str              # HH:MM, exclusive
+    new_start: str | None = None
+    new_end: str | None = None
+    user_id: int | None = None
 
 
 class GrowthItemIn(BaseModel):

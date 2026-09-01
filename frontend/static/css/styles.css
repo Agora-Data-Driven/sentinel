@@ -1550,6 +1550,22 @@ a.day-item:hover { border-color:var(--green-line); box-shadow:var(--shadow-sm); 
 .ts-sess .w { color:var(--text); }
 .ts-sess .w small { color:var(--muted); font-size:11.5px; }
 .ts-dot { display:inline-block; width:8px; height:8px; border-radius:99px; background:var(--hue); margin-right:7px; vertical-align:middle; }
+/* Session rows carry their source and their actions: a manual row is tagged, an engine row still
+   inside the live guard is tagged too (it can't be edited yet). Actions are quiet until hover. */
+.ts-sess { grid-template-columns:100px 56px 1fr auto; }
+.ts-tag { display:inline-block; font-family:var(--mono); font-size:9px; letter-spacing:.1em; text-transform:uppercase;
+  font-weight:700; padding:1px 6px; border-radius:99px; border:1px solid var(--line); color:var(--sub); margin-left:6px; vertical-align:middle; }
+.ts-tag.manual { border-color:var(--hue); color:var(--hue); }
+.ts-tag.live { color:var(--green-strong); border-color:var(--green-strong); }
+.ts-acts { display:inline-flex; gap:2px; opacity:.45; transition:opacity .12s; }
+.ts-sess:hover .ts-acts, .ts-acts:focus-within { opacity:1; }
+.ts-acts button { appearance:none; border:none; background:none; cursor:pointer; color:var(--sub); font:inherit; font-size:12px;
+  padding:2px 6px; border-radius:6px; }
+.ts-acts button:hover { background:var(--hover); color:var(--text); }
+.ts-acts button.danger:hover { color:var(--danger, #c0392b); }
+.ts-note { display:block; color:var(--muted); font-size:12px; margin-top:1px; }
+.ts-toolbar { display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
+@media (max-width:720px){ .ts-sess { grid-template-columns:92px 48px 1fr auto; } }
 @media (max-width:720px){
   .ts-tiles { grid-template-columns:repeat(2,1fr) !important; }
   .ts-tile:nth-child(3) { border-left:none; }
