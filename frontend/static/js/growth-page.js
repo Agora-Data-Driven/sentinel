@@ -10,4 +10,12 @@ window.pageInit = async (S) => {
   const userId = new URLSearchParams(location.search).get("user");
   if (!userId) { location.replace("/dashboard"); return; }
   await GrowthPanel.mount(S, S.view(), { userId, mast: true });
+  // This person's time in the engine, under their hub — the same strip the Overview shows for
+  // your own. Read-only here (the manager's view), so the ledger above never re-renders over it.
+  if (window.TimeSpent) {
+    const host = document.createElement("div");
+    host.style.marginTop = "18px";
+    S.view().appendChild(host);
+    TimeSpent.mountMine(S, host, { userId }).catch(() => host.remove());
+  }
 };

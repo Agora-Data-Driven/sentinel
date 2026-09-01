@@ -66,6 +66,7 @@ from ..serializers import (
     skill_dict,
 )
 from ..services import atrium_watcher, development as dev_svc, team_growth as team_growth_svc
+from ..services import time_spent as time_spent_svc
 from ..utils.time import today_ph, utcnow
 
 router = APIRouter(prefix="/api/development", tags=["development"])
@@ -122,6 +123,59 @@ def team_growth(
     numbers to another, which no worker-facing route here does.
     """
     return team_growth_svc.team_rows(db, viewer, days=days, refresh=refresh)
+
+
+# --- Time in the engine -------------------------------------------------------
+# Minutes ACTIVELY spent in the Mastery Engine, per dimension, over Today / This week / 30 days.
+# The engine records the minutes (its /api/activity/beat); services/time_spent.py reads them back
+# and maps programmes onto dimensions. Only the totals are shown by default — the sessions behind
+# them are the /detail click-through.
+
+
+def _time_target(db: Session, viewer: User, user_id: int | None) -> User:
+    """Whose clock: your own, or — with the same rule as the Development profile — a report's."""
+    if not user_id or user_id == viewer.id:
+        return viewer
+    target = db.get(User, user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    if not dev_svc.can_view(viewer, target):
+        raise HTTPException(status_code=403, detail="Not allowed to view this profile")
+    return target
+
+
+@router.get("/time")
+def my_time(
+    win: str = Query(time_spent_svc.DEFAULT_WINDOW, description="today | week | 30d"),
+    user_id: int | None = Query(None, description="Somebody else's clock (owner / admin / their lead)."),
+    viewer: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """One person's minutes per dimension over the window — the Overview's time strip."""
+    return time_spent_svc.summary(_time_target(db, viewer, user_id), win)
+
+
+@router.get("/time/detail")
+def my_time_detail(
+    win: str = Query(time_spent_svc.DEFAULT_WINDOW, description="today | week | 30d"),
+    user_id: int | None = Query(None),
+    viewer: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """The sessions behind the strip: start–end, section, view, per day."""
+    return time_spent_svc.detail(_time_target(db, viewer, user_id), win)
+
+
+@router.get("/team-time")
+def team_time(
+    win: str = Query(time_spent_svc.DEFAULT_WINDOW, description="today | week | 30d"),
+    refresh: bool = Query(False, description="Bypass the rollup cache and re-read the engine."),
+    viewer: User = Depends(require_cap(CAP_GROWTH_TEAM)),
+    db: Session = Depends(get_db),
+):
+    """Everyone's minutes in one payload, for the Overview's admin block. Same gate and the same
+    visibility scope as /team — a management surface that shows one person's time to another."""
+    return time_spent_svc.team(db, viewer, win, refresh=refresh)
 
 
 # --- Body metrics -----------------------------------------------------------

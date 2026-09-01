@@ -77,7 +77,8 @@ window.pageInit = async (S) => {
       <div class="section-label">${S.ICON.sparkle}Your growth</div>
       <span class="sub">Each ring is that tab's Mastery Engine score — open one to go straight in.</span>
     </div>
-    <div id="dash-rings"></div>`;
+    <div id="dash-rings"></div>
+    <div id="dash-time"></div>`;
 
   // --- 3 · my work -----------------------------------------------------------------------------
   // The Task Board left this page on 2026-08-03 (decision D7) — it has its own /tasks page and
@@ -99,6 +100,7 @@ window.pageInit = async (S) => {
         ${S.hasCap("system.run_daily") ? `<button class="btn sm ghost" id="run-daily" title="Recompute yesterday's attendance and send reminders now">${S.ICON.check}Run daily processing</button>` : ""}
       </div>
       <div id="dash-team"></div>
+      <div id="dash-team-time"></div>
       <div class="kpis" id="dash-kpis" style="margin:18px 0"></div>
       <div class="card pad" id="chart-attendance" style="margin-bottom:18px"></div>
       <div class="grid" id="dash-admin-lists" style="grid-template-columns:1fr 1fr"></div>`;
@@ -154,6 +156,12 @@ window.pageInit = async (S) => {
   if (window.GrowthPanel) {
     GrowthPanel.mount(S, S.qs("#dash-growth"), { ringsHost: S.qs("#dash-rings") })
       .catch((e) => S.toast(e.detail || "Couldn't load your growth", "err"));
+  }
+  // Time in the engine — minutes per dimension under the compass (timespent.js). Totals only;
+  // the lessons behind them are one click away. Fail-soft like the rings above it.
+  if (window.TimeSpent) {
+    TimeSpent.mountMine(S, S.qs("#dash-time"), {})
+      .catch(() => { S.qs("#dash-time").innerHTML = ""; });
   }
 
   // "My work": what is on me, what is late, what is waiting on my approval. The board itself lives
@@ -438,6 +446,14 @@ window.pageInit = async (S) => {
         .catch((e) => {
           S.qs("#dash-team").innerHTML =
             `<div class="empty card pad">${S.esc(e.detail || "Couldn't load team progress.")}</div>`;
+        });
+    }
+    // Team time — everyone's minutes in the engine over the same window as the strip above.
+    if (window.TimeSpent) {
+      TimeSpent.mountTeam(S, S.qs("#dash-team-time"), {})
+        .catch((e) => {
+          S.qs("#dash-team-time").innerHTML =
+            `<div class="empty card pad">${S.esc(e.detail || "Couldn't load team time.")}</div>`;
         });
     }
 
