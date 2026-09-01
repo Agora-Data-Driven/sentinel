@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..constants import GROWTH_DIMENSIONS
+from ..models import TimeEntry
 from ..database import get_db
 from ..models import (
     BodyMetric,
@@ -34,6 +35,9 @@ from ..schemas import (
     AtriumImportAllIn,
     AtriumImportIn,
     BodyMetricIn,
+    EngineSessionEditIn,
+    TimeEntryIn,
+    TimeEntryUpdateIn,
     GoalIn,
     GoalUpdateIn,
     GrowthItemIn,
@@ -152,7 +156,7 @@ def my_time(
     db: Session = Depends(get_db),
 ):
     """One person's minutes per dimension over the window — the Overview's time strip."""
-    return time_spent_svc.summary(_time_target(db, viewer, user_id), win)
+    return time_spent_svc.summary(db, _time_target(db, viewer, user_id), win)
 
 
 @router.get("/time/detail")
@@ -163,7 +167,7 @@ def my_time_detail(
     db: Session = Depends(get_db),
 ):
     """The sessions behind the strip: start–end, section, view, per day."""
-    return time_spent_svc.detail(_time_target(db, viewer, user_id), win)
+    return time_spent_svc.detail(db, _time_target(db, viewer, user_id), win)
 
 
 @router.get("/team-time")
@@ -176,6 +180,55 @@ def team_time(
     """Everyone's minutes in one payload, for the Overview's admin block. Same gate and the same
     visibility scope as /team — a management surface that shows one person's time to another."""
     return time_spent_svc.team(db, viewer, win, refresh=refresh)
+
+
+def _time_writer(db: Session, viewer: User, user_id: int | None) -> User:
+    """Whose time may be changed: your own, or — as an admin — somebody's on their behalf. A team lead
+    may READ a report's time (can_view) but not rewrite it: honesty edits are the person's own."""
+    target = _time_target(db, viewer, user_id)
+    if not time_spent_svc.may_write(viewer, target):
+        raise HTTPException(status_code=403, detail="Only the person or an admin can change their time")
+    return target
+
+
+@router.post("/time/entries")
+def add_time_entry(payload: TimeEntryIn, viewer: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Log time the engine could not see — any dimension, Physical included."""
+    target = _time_writer(db, viewer, payload.user_id)
+    return time_spent_svc.add_entry(db, target, viewer, day=payload.date, start=payload.start,
+                                    minutes=payload.minutes, dimension=payload.dimension, note=payload.note)
+
+
+def _entry_or_404(db: Session, viewer: User, entry_id: int) -> TimeEntry:
+    entry = db.get(TimeEntry, entry_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Not found")
+    _time_writer(db, viewer, entry.user_id)
+    return entry
+
+
+@router.patch("/time/entries/{entry_id}")
+def update_time_entry(entry_id: int, payload: TimeEntryUpdateIn,
+                      viewer: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    entry = _entry_or_404(db, viewer, entry_id)
+    return time_spent_svc.update_entry(db, entry, day=payload.date, start=payload.start, minutes=payload.minutes,
+                                       dimension=payload.dimension, note=payload.note)
+
+
+@router.delete("/time/entries/{entry_id}")
+def delete_time_entry(entry_id: int, viewer: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    time_spent_svc.delete_entry(db, _entry_or_404(db, viewer, entry_id))
+    return {"ok": True}
+
+
+@router.post("/time/engine-edit")
+def edit_engine_time(payload: EngineSessionEditIn, viewer: User = Depends(get_current_user),
+                     db: Session = Depends(get_db)):
+    """Delete or trim one RECORDED engine session — the honesty edit ("I was only moving the mouse").
+    Removal only: the engine's minutes can be shortened, never extended or moved (add a manual entry)."""
+    target = _time_writer(db, viewer, payload.user_id)
+    return time_spent_svc.edit_engine_session(target, day=payload.day, start=payload.start, end=payload.end,
+                                              new_start=payload.new_start, new_end=payload.new_end)
 
 
 # --- Body metrics -----------------------------------------------------------

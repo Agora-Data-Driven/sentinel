@@ -41,6 +41,7 @@ from .leave import LeaveBalance, LeaveRequest, LeaveType
 from .notification import Notification
 from .payroll import PayrollEntry
 from .system import AuditLog, RoleCapability, SystemSetting, UserCapability
+from .time_entry import TimeEntry
 from .task import (AtriumApproval, RecurringService, ServiceTemplate, Task, TaskComment,
                    TaskHistory, TaskRequest, TaskSupporter, TaskVocabItem)
 from .user import QRToken, ShiftTemplate, Team, User, UserTeam
@@ -91,4 +92,5 @@ __all__ = [
     "RoleCapability",
     "SystemSetting",
     "UserCapability",
+    "TimeEntry",
 ]

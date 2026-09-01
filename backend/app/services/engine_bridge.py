@@ -7,7 +7,8 @@ re-implement the signing that `routers/meta.py` had inline.
 
 Purposes in use: `enrollment-progress` (one person's rings), `team-progress` (the whole roster's
 rollup + attempt window, behind the admin team panel), `time-spent` / `time-detail` (minutes actively
-spent in the engine — the Overview's time strip and the admin team-time table, `services/time_spent.py`).
+spent in the engine — the Overview's time strip and the admin team-time table, `services/time_spent.py`),
+`time-edit` (the one WRITE: remove recorded minutes — the learner's honesty edit; `post()` below).
 
 EVERYTHING here is best-effort and fail-SOFT AT THE TRANSPORT: an unset secret, a missing URL, a
 timeout, a non-200 or a malformed body all return (status, {}) rather than raising. But callers
@@ -56,6 +57,36 @@ def _headers(purpose: str) -> dict | None:
 def enabled() -> bool:
     """True when both the shared secret and the engine URL are configured."""
     return bool((settings.platform_sso_secret or "").strip() and base_url())
+
+
+def post(purpose: str, path: str, body: dict, timeout: int | None = None) -> tuple[int, dict, str]:
+    """One signed POST with a JSON body. Same contract as `call`: (status_code, parsed_json, error),
+    status 0 when the request never left, never raises. Used for the engine's few WRITES."""
+    headers = _headers(purpose)
+    base = base_url()
+    if not headers:
+        return 0, {}, "the shared platform key is not configured"
+    if not base:
+        return 0, {}, "the Mastery Engine URL is not configured"
+    req = urllib.request.Request(
+        base + path, data=json.dumps(body).encode("utf-8"),
+        headers={**headers, "Content-Type": "application/json"}, method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=(timeout or READ_TIMEOUT)) as resp:
+            raw = resp.read().decode("utf-8", "replace")
+            return resp.status, (json.loads(raw) if raw else {}), ""
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            detail = (json.loads(exc.read().decode("utf-8", "replace")) or {}).get("error", "")
+        except Exception:
+            detail = ""
+        log.warning("engine %s post failed: HTTP %s %s", purpose, exc.code, detail)
+        return exc.code, {}, f"the Mastery Engine answered {exc.code}" + (f" ({detail})" if detail else "")
+    except (urllib.error.URLError, ValueError, TimeoutError, OSError) as exc:
+        log.warning("engine %s post failed: %s", purpose, exc)
+        return 0, {}, f"couldn't reach the Mastery Engine ({str(exc)[:80]})"
 
 
 def call(purpose: str, path: str, params: dict | None = None,
