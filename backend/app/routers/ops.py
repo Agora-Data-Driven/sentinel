@@ -37,7 +37,9 @@ router = APIRouter(prefix="/api/ops", tags=["ops"])
 
 
 @router.get("/meta")
-def meta():
+def meta(user: User = Depends(get_current_user)):
+    """Vocabulary for the UI. Session-gated like every other endpoint — it leaks nothing sensitive,
+    but an unauthenticated read here would be the one exception on the whole API."""
     return {
         "hold_kinds": HOLD_KINDS,
         "stages": [{"key": k, "label": STAGE_LABELS[k]} for k in WORKER_STAGES],
