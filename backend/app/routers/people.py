@@ -15,6 +15,7 @@ from ..constants import (
     ROLE_LABELS,
     ROLE_TEAM_LEAD,
     ROLE_SUPER_ADMIN,
+    WORKER_STAGES,
 )
 from ..database import get_db
 from ..models import (
@@ -261,6 +262,12 @@ def update_person(user_id: int, payload: PersonUpdateIn, actor: User = Depends(r
     data = payload.model_dump(exclude_unset=True)
     if "role" in data and data["role"] not in ALL_ROLES:
         raise HTTPException(status_code=400, detail="Invalid role")
+    # Worker stage (2026-09-02): readiness, not authority — `None` clears it. Anyone who may edit a
+    # record may set it; it changes what the board SAYS about a person, never what they may do.
+    if "stage" in data and data["stage"] not in (None, "", *WORKER_STAGES):
+        raise HTTPException(status_code=400, detail="Invalid stage")
+    if data.get("stage") == "":
+        data["stage"] = None
     _guard_role_write(db, actor, u, data)
     # Password is set separately (hashed), and never echoed in the audit log.
     new_password = data.pop("password", None)

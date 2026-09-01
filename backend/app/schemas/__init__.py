@@ -428,6 +428,8 @@ class TaskCreateIn(BaseModel):
     # SUPPORT — many, none accountable (models.TaskSupporter). Naming anyone but yourself here is
     # DELEGATION and is refused for a role that may not delegate, exactly like `assigned_to_id`.
     support_ids: list[int] = Field(default_factory=list)
+    # Estimated effort in minutes — optional; blank takes the service template's default (2026-09-02).
+    estimate_minutes: int | None = Field(default=None, ge=0, le=24 * 60 * 10)
     priority: str = "Medium"
     status: str = "To Do"
     due_date: date | None = None
@@ -512,6 +514,7 @@ class TaskUpdateIn(BaseModel):
     # omits the field silently CLEAR the support list, which is the kind of quiet data loss the
     # breakdown's owner-diff guard exists to prevent.
     support_ids: list[int] | None = None
+    estimate_minutes: int | None = Field(default=None, ge=0, le=24 * 60 * 10)
     priority: str | None = None   # honored only for roles that can_prioritize; ignored otherwise
     # planned | added (constants.ORIGIN_*). A CORRECTION to what task_origin.classify derived at
     # create time — honored only for `can_reassign`, dropped otherwise, and never offered on create
@@ -549,8 +552,15 @@ class TaskStatusIn(BaseModel):
 
 
 class TaskParkIn(BaseModel):
-    """Why the work is paused. 🔒 Internal — never crosses to the client (task_bridge.SAFE)."""
+    """Why the work is paused. 🔒 Internal — never crosses to the client (task_bridge.SAFE).
+
+    `kind` is the structured half (constants.HOLD_KINDS) the AM's and COO's "blocked on the client vs
+    blocked on us" split counts; `blocked_by_task_id` names the one card this waits on when the kind
+    is `task`. Both optional so the older park dialog (reason only) still works.
+    """
     reason: str = ""
+    kind: str | None = None
+    blocked_by_task_id: int | None = None
 
 
 class TaskReviewIn(BaseModel):
@@ -596,6 +606,7 @@ class PersonCreateIn(BaseModel):
     phone: str | None = None
     hired_date: date | None = None
     shift_template_id: int | None = None
+    stage: str | None = None      # constants.WORKER_STAGES — readiness, not authority
     password: str | None = None  # optional initial password
 
 
@@ -636,6 +647,7 @@ class PersonUpdateIn(BaseModel):
     phone: str | None = None
     hired_date: date | None = None
     shift_template_id: int | None = None
+    stage: str | None = None      # constants.WORKER_STAGES — readiness, not authority
     is_active: bool | None = None
     password: str | None = None  # admin set/reset (blank/None = leave unchanged)
 
@@ -677,3 +689,24 @@ class PayrollAdjustIn(BaseModel):
 class PayrollFinalizeIn(BaseModel):
     period: str
     finalized: bool = True
+
+
+# --- Operating system (2026-09-02) -------------------------------------------
+class AccountManagerIn(BaseModel):
+    """Who owns this client at Agora. `None` clears it."""
+    account_manager_id: int | None = None
+
+
+class CertificationIn(BaseModel):
+    key: str = Field(min_length=2, max_length=60)
+    label: str = Field(min_length=1, max_length=120)
+    granted_at: date | None = None       # defaults to today
+    expires_at: date | None = None
+    evidence_url: str | None = Field(default=None, max_length=500)
+    note: str | None = None
+
+
+class AiDraftIn(BaseModel):
+    """Plain words → proposed tasks. `client_id` grounds the roster; optional."""
+    text: str = Field(min_length=3, max_length=4000)
+    client_id: int | None = None

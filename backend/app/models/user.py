@@ -98,6 +98,12 @@ class User(Base):
     # Per-employee shift override (a Shift Template). Blank = use the department's shift.
     shift_template_id: Mapped[int | None] = mapped_column(ForeignKey("shift_templates.id"), nullable=True)
     hired_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # Worker STAGE (constants.WORKER_STAGES) — readiness, not authority. `role` says what somebody
+    # may do in Sentinel; `stage` says how much live client responsibility they have earned
+    # (Shadow → Contributor → Workstream Owner → Client Owner). NULL = never set; the UI prints
+    # nothing rather than guessing. Surfaced on cards and at assignment (a Shadow/Contributor lead
+    # gets "reviewer required"); not enforced in v1.
+    stage: Mapped[str | None] = mapped_column(String(24), nullable=True)
     # Monthly base salary (Super Admin only — never exposed via public serializers).
     monthly_salary: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

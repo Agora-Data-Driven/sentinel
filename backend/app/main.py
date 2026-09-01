@@ -38,6 +38,7 @@ from .routers import (
     manage,
     meta,
     notifications,
+    ops,
     payroll,
     people,
     permissions,
@@ -197,6 +198,15 @@ def _ensure_columns() -> None:
         # WP 3.4 — which adoption run created the row. What makes importing live client cards
         # reversible; NULL for everything a human raised.
         ("tasks", "adoption_batch", "VARCHAR(40)"),
+        # Operating-system release (2026-09-02). Migration c9e4a7b2d6f1 carries the same columns for
+        # migrated DBs; this is the path they take to PRODUCTION (deploys don't run alembic).
+        ("tasks", "hold_kind", "VARCHAR(24)"),
+        ("tasks", "blocked_by_task_id", "INTEGER"),
+        ("tasks", "estimate_minutes", "INTEGER"),
+        ("users", "stage", "VARCHAR(24)"),
+        ("clients", "account_manager_id", "INTEGER"),
+        ("service_templates", "estimate_minutes", "INTEGER"),
+        ("service_templates", "required_certification", "VARCHAR(60)"),
     ]
     try:
         insp = inspect(engine)
@@ -511,7 +521,7 @@ def _startup_safeguards() -> None:
 # `dev` is registered UNCONDITIONALLY and gates itself per request (routers/dev.py): making the
 # route's existence depend on a setting's value at import time is how an endpoint ends up "gone"
 # in one worker and live in another.
-for r in (auth, attendance, gym, tasks, people, leave, notifications, reports, admin, meta, manage, payroll, permissions, cron, stream, internal, development, dev):
+for r in (auth, attendance, gym, tasks, people, leave, notifications, reports, admin, meta, manage, payroll, permissions, cron, stream, internal, development, ops, dev):
     app.include_router(r.router)
 
 
@@ -695,6 +705,10 @@ _PAGES = {
     # The Task Board got its own page back on 2026-08-03 (decision D7). It was embedded in the
     # dashboard from 2026-07-26 until then; `/dashboard?open=<id>` still forwards here, see below.
     "/tasks": "tasks.html",
+    # Operating-system release (2026-09-02): the calendar projection and the Clients page. The
+    # role-shaped landing (Today / My accounts / Operations) is the existing /dashboard page.
+    "/calendar": "calendar.html",
+    "/clients": "clients.html",
     "/kiosk": "kiosk.html",
     "/scanner": "scanner.html",
 }

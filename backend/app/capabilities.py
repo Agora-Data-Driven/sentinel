@@ -453,6 +453,56 @@ CAPABILITIES: tuple[Capability, ...] = (
         default=_SA_ONLY,
         locked=True,
     ),
+    # ---------------- Operating system (2026-09-02) ----------------
+    # The role-shaped landing pages and the account-level surfaces of the operating-system release
+    # (docs/SENTINEL_OPERATING_SYSTEM.md). Reads name the viewer seat explicitly, as every other
+    # monitoring surface does (D8); the two writes are management acts.
+    Capability(
+        key="ops.view",
+        label="See the Operations page",
+        group="Operating system",
+        description=(
+            "The COO's exception list — red clients, overdue and blocked work, overloaded people, "
+            "review backlog, stalled learners — and the capacity table behind it."
+        ),
+        default=_at_least(ROLE_ADMIN) | {ROLE_VIEWER},
+        write=False,
+    ),
+    Capability(
+        key="clients.view",
+        label="See the Clients page",
+        group="Operating system",
+        description=(
+            "Every account's health (red / amber / green with the reason), its open, late, blocked "
+            "and in-review work, and the drill-down into one client's work by specialist."
+        ),
+        default=_AM_PLUS | {ROLE_VIEWER},
+        write=False,
+    ),
+    Capability(
+        key="clients.assign_am",
+        label="Name a client's account manager",
+        group="Operating system",
+        description="Set or change which account manager owns a client.",
+        default=_AM_PLUS,
+    ),
+    Capability(
+        key="ai.draft",
+        label="Draft tasks with AI",
+        group="Operating system",
+        description=(
+            "Turn a plain-language client commitment into PROPOSED tasks. Nothing is created until "
+            "the person confirms — the proposals then go through New Task's own rules."
+        ),
+        default=frozenset(MANAGER_ROLES),
+    ),
+    Capability(
+        key="certifications.manage",
+        label="Grant and revoke certifications",
+        group="Operating system",
+        description="Record that a person holds a credential a service template can require.",
+        default=_at_least(ROLE_TEAM_LEAD),
+    ),
 )
 
 BY_KEY: dict[str, Capability] = {c.key: c for c in CAPABILITIES}
@@ -515,6 +565,11 @@ CAP_MANAGE_CONSOLE = "manage.console"
 CAP_SYSTEM_RUN_DAILY = "system.run_daily"
 CAP_PERMISSIONS_VIEW = "permissions.view"
 CAP_PERMISSIONS_MANAGE = "permissions.manage"
+CAP_OPS_VIEW = "ops.view"
+CAP_CLIENTS_VIEW = "clients.view"
+CAP_CLIENTS_ASSIGN_AM = "clients.assign_am"
+CAP_AI_DRAFT = "ai.draft"
+CAP_CERTIFICATIONS_MANAGE = "certifications.manage"
 
 
 def default_caps(role: str) -> frozenset[str]:

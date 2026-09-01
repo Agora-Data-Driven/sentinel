@@ -72,6 +72,18 @@ window.pageInit = async (S) => {
       </div>
     </div>`;
 
+  // --- 1b · THE ROLE-SHAPED LANDING (2026-09-02) ------------------------------------------------
+  // One URL, three shapes (docs/SENTINEL_OPERATING_SYSTEM.md §E.1). A specialist / lead opens on
+  // TODAY (today.js: work, waiting, time, training); an account manager on MY ACCOUNTS
+  // (accounts.js: needs-your-action, health, commitments, people); an admin / the viewer seat on
+  // OPERATIONS (ops.js: exceptions, stats, client health, capacity). Each is a mountable component,
+  // fail-soft, mounted into this host AFTER the page paints so the greeting never waits on it. The
+  // growth compass stays on the page for everyone — below the work, which is what the owner asked
+  // for — and the admin block keeps its place at the foot.
+  const landing = ["account_manager"].includes(u.role) ? "accounts"
+    : ["admin", "super_admin", "viewer"].includes(u.role) ? "ops" : "today";
+  html += `<div id="dash-landing" style="margin-bottom:26px"></div>`;
+
   // --- 2 · your growth (the compass) ----------------------------------------------------------
   html += `<div class="row between sect-head">
       <div class="section-label">${S.ICON.sparkle}Your growth</div>
@@ -84,6 +96,9 @@ window.pageInit = async (S) => {
   // The Task Board left this page on 2026-08-03 (decision D7) — it has its own /tasks page and
   // sidebar item again. What stays is a "my work" strip: the three questions someone opens the
   // Overview to answer, each linking INTO the board rather than duplicating it.
+  // Since 2026-09-02 the TODAY landing above carries a specialist's whole work list, so the strip is
+  // only drawn for the two landings that do not (My accounts, Operations) — the AM's and the COO's
+  // own cards still need a door.
   html += `<div id="dash-mywork"></div>`;
 
   // --- 4 · the growth ledger ------------------------------------------------------------------
@@ -164,11 +179,23 @@ window.pageInit = async (S) => {
       .catch(() => { S.qs("#dash-time").innerHTML = ""; });
   }
 
+  // The role-shaped landing (see the html comment above). Each mount is fail-soft on its own; a
+  // failure there leaves the rest of the Overview exactly as it was.
+  {
+    const host = S.qs("#dash-landing");
+    const Page = landing === "accounts" ? window.AccountsPage : landing === "ops" ? window.OpsPage : window.TodayPage;
+    if (host && Page) {
+      Page.mount(S, host).catch((e) => {
+        host.innerHTML = `<div class="notice warn"><b>Couldn't load this section.</b> ${S.esc(e.detail || e.message || "")}</div>`;
+      });
+    }
+  }
+
   // "My work": what is on me, what is late, what is waiting on my approval. The board itself lives
   // at /tasks (decision D7) — this strip links INTO it rather than duplicating it. Rendered after
   // the page paints so the greeting never waits on it, and it fails SILENTLY: a task-list hiccup
   // must not put an error toast over someone's morning attendance card.
-  renderMyWork();
+  if (landing !== "today") renderMyWork();
   async function renderMyWork() {
     // "Today" in Manila as an ISO date (en-CA -> YYYY-MM-DD), so "overdue" matches the SERVER's
     // Asia/Manila business rule rather than the viewer's timezone. Same one-liner taskboard.js uses;

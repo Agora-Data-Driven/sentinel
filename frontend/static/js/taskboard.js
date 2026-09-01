@@ -1872,6 +1872,12 @@ window.TaskBoard = {
   // "Today" in Manila as an ISO date (en-CA → YYYY-MM-DD), so due-date colouring matches the
   // server's Asia/Manila business rule instead of the viewer's local timezone.
   const PH_TODAY = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
+  // Minutes → "1h 30m" / "45m" for the record's Time fact (sessions + estimate).
+  function fmtMins(m) {
+    m = Math.max(0, Math.round(+m || 0));
+    return m >= 60 ? `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m` : `${m}m`;
+  }
+
   function dueClass(due) {
     if (!due) return "";
     if (due < PH_TODAY) return "over";
@@ -2375,6 +2381,12 @@ window.TaskBoard = {
       // Filled in by renderBreakdown, which owns every count of the breakdown there is.
       ["Progress", `<span id="d-bd-count"></span>`, ""],
       ["Priority", prioritySelect, t.priority === "Urgent" ? "bad" : ""],
+      // TIME (2026-09-02): recorded Start Work sessions against the estimate. Sentinel rows only — an
+      // Atrium card has neither. `session_minutes` is the server's sum; the running session ticks in
+      // the footer, not here, so this stays a fact and not a clock.
+      ...(isAtrium ? [] : [["Time",
+        `${fmtMins(t.session_minutes || 0)}${t.estimate_minutes ? ` <span class="muted">/ ~${fmtMins(t.estimate_minutes)}</span>` : ""}`,
+        (t.estimate_minutes && (t.session_minutes || 0) > t.estimate_minutes) ? "warn" : ""]]),
     ].map((f) => `<div><div class="k">${f[0]}</div><div class="v ${f[2]}">${f[1]}</div></div>`).join("");
     // 🔴 THE THREE PANES ARE ALL IN THE DOM, toggled with [hidden] — never re-rendered on a tab
     // click. The breakdown alone wires eight handlers per row (and re-wires itself after every
@@ -2494,7 +2506,18 @@ window.TaskBoard = {
     // bare status PATCH.
     //
     // Only the buttons this STATE offers stay inline; the rest go behind More.
+    // START WORK / PAUSE (2026-09-02, services/task_sessions). The one running session is the
+    // server's: `running` is true when it is on THIS card. Offered to whoever may edit the card and
+    // only while the card is live work — not done, not filed, not parked (Resume comes first).
+    const running = (t.sessions || []).find((s) => s.running && s.user_id === S.user.id);
+    const mayWork = !isAtrium && !readOnly && t.mine !== undefined ? (t.can_edit !== false) : (!isAtrium && !readOnly);
+    const workBtn = (!isAtrium && !readOnly && !done && !t.archived && !isParked(t) && mayWork)
+      ? (running
+        ? `<button class="btn ghost" id="d-pause">${S.ICON.clock}Pause</button><span class="tb-timer" id="d-timer" data-started="${S.esc(running.started_at)}"></span>`
+        : `<button class="btn success" id="d-start">${S.ICON.check}Start Work</button>`)
+      : "";
     const inlineActs = (isAtrium || readOnly) ? "" : [
+      workBtn,
       // Resume shows while a hold is on, whatever column the card is in, or a card parked and then
       // dragged straight to done could never be un-parked.
       t.on_hold ? `<button class="btn ghost" id="d-resume">Resume</button>` : "",
@@ -2577,13 +2600,10 @@ window.TaskBoard = {
       if (to === t.status) return;
       const reset = () => { if (sel) sel.value = t.status; };
       if (!isAtrium && STAGE_OF[to] === "blocked") {
-        return askReason({
-          title: "Park this task?",
+        return askPark({
           hint: `It moves to the ${S.esc(to)} column and comes back to <strong>${S.esc(t.status)}</strong> when you resume it.`,
-          label: "Why is it paused? (internal — the client never sees this)",
-          confirm: "Park it",
           onCancel: reset,
-          onSubmit: (reason) => act("park", { reason }, "Parked"),
+          onSubmit: (body) => act("park", body, "Parked"),
         });
       }
       try {
@@ -2929,6 +2949,34 @@ window.TaskBoard = {
     // parked stage (see moveTo above).
     if (S.qs("#d-resume")) S.qs("#d-resume").onclick = () =>
       act("resume", {}, "Back on the board");
+    // Start Work / Pause (2026-09-02). Both re-read the topbar strip, and tell any Today page that
+    // is listening (today.js) to re-read its time card.
+    const afterSession = () => { if (S.refreshWorkStrip) S.refreshWorkStrip(); document.dispatchEvent(new CustomEvent("sentinel:session")); };
+    if (S.qs("#d-start")) S.qs("#d-start").onclick = async () => {
+      try {
+        const r = await S.api(`/api/tasks/${id}/sessions/start`, { method: "POST" });
+        S.toast(r.moved ? "Started — moved to In Progress" : "Started", "ok");
+        afterSession(); m.close(); load(); openDetail(id);
+      } catch (err) { S.toast(err.detail || "Couldn't start", "err"); }
+    };
+    if (S.qs("#d-pause")) S.qs("#d-pause").onclick = async () => {
+      try {
+        await S.api(`/api/tasks/${id}/sessions/pause`, { method: "POST" });
+        S.toast("Paused — the time is saved on the card", "ok");
+        afterSession(); m.close(); load(); openDetail(id);
+      } catch (err) { S.toast(err.detail || "Couldn't pause", "err"); }
+    };
+    const timerEl = S.qs("#d-timer", m.root);
+    if (timerEl) {
+      const started = Date.parse(timerEl.dataset.started);
+      const tick = () => {
+        if (!document.body.contains(timerEl)) { clearInterval(iv); return; }
+        const s = Math.max(0, Math.floor((Date.now() - started) / 1000));
+        timerEl.textContent = (s >= 3600 ? Math.floor(s / 3600) + ":" : "") + String(Math.floor((s % 3600) / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
+      };
+      tick();
+      const iv = setInterval(tick, 1000);
+    }
     if (S.qs("#d-submit")) S.qs("#d-submit").onclick = () =>
       act("review/submit", {}, "Sent for review — your lead has been notified");
     if (S.qs("#d-approve")) S.qs("#d-approve").onclick = () =>
@@ -2973,6 +3021,41 @@ window.TaskBoard = {
   // `onCancel` fires on EVERY way out that is not the confirm button — Cancel, ✕, Esc, backdrop —
   // which is what a caller needs when the prompt was opened BY a control that has already changed
   // (the record's Move select): abandoning the prompt has to put that control back.
+  // Park asks WHY in two halves (2026-09-02): a structured kind (constants.HOLD_KINDS — what the AM's
+  // and COO's "waiting on the client vs waiting on us" split counts) and one line of prose. Both are
+  // internal; the client sees the stage and nothing else. `kind` defaults to "client" because that is
+  // the commonest reason work stops, and a wrong default is visible in the chips rather than silent.
+  const HOLD_KINDS = {
+    client: "Waiting on client", access: "Waiting for access", asset: "Waiting for an asset",
+    am_decision: "Waiting for AM decision", reviewer: "Waiting for reviewer",
+    task: "Waiting on another task", other: "Other",
+  };
+  function askPark({ hint, onSubmit, onCancel }) {
+    let submitted = false, kind = "client";
+    const rm = S.modal({
+      onClose: () => { if (!submitted && onCancel) onCancel(); },
+      title: "Park this task?",
+      body: `<div class="stack" style="gap:12px">
+        <div class="form-hint">${hint}</div>
+        <label class="field"><span>Why is it waiting? (internal — the client never sees this)</span>
+          <div class="hold-kinds" id="pk-kinds">${Object.entries(HOLD_KINDS).map(([k, v]) =>
+            `<button type="button" class="choice ${k === kind ? "on" : ""}" data-k="${k}">${S.esc(v)}</button>`).join("")}</div></label>
+        <label class="field"><span>One line for whoever picks this up</span><textarea id="pk-text" rows="2" placeholder="Who or what is it on?"></textarea></label>
+      </div>`,
+      footer: `<button class="btn ghost" id="pk-cancel">Cancel</button><button class="btn primary" id="pk-ok">Park it</button>`,
+    });
+    S.qs("#pk-cancel", rm.root).onclick = rm.close;
+    S.qsa("#pk-kinds .choice", rm.root).forEach((b) => b.onclick = () => {
+      kind = b.dataset.k;
+      S.qsa("#pk-kinds .choice", rm.root).forEach((x) => x.classList.toggle("on", x === b));
+    });
+    S.qs("#pk-ok", rm.root).onclick = () => {
+      submitted = true;
+      rm.close();
+      onSubmit({ reason: S.qs("#pk-text", rm.root).value.trim(), kind });
+    };
+  }
+
   function askReason({ title, hint, label, confirm, require: needsText, onSubmit, onCancel }) {
     let submitted = false;
     const rm = S.modal({

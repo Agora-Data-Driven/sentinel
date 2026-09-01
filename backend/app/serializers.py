@@ -8,9 +8,10 @@ from __future__ import annotations
 import json
 from datetime import date, datetime
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .constants import ROLE_LABELS
+from .constants import HOLD_KINDS, ROLE_LABELS
 from .models import (
     AttendanceRequest,
     BodyMetric,
@@ -83,6 +84,8 @@ def user_public(u: User | None) -> dict | None:
         "team_id": u.team_id,
         "initials": u.initials,
         "profile_pic_url": u.profile_pic_url,
+        # Worker stage (constants.WORKER_STAGES) — readiness, not authority. NULL until set.
+        "stage": getattr(u, "stage", None),
     }
 
 
@@ -164,6 +167,8 @@ def client_dict(c: Client) -> dict:
         # False = Atrium stopped listing this client. Never deleted (that would NULL `Task.client_id`
         # on every past task and blank its reporting) — just out of the pickers.
         "is_active": bool(getattr(c, "is_active", True)),
+        # Who at Agora owns the account (2026-09-02) — a staffing fact, so it lives here, not in Atrium.
+        "account_manager_id": getattr(c, "account_manager_id", None),
     }
 
 
@@ -407,6 +412,11 @@ def task_card(t: Task, db: Session, viewer: User | None = None,
         # already reports, so the board's pill renders identically whoever owns the row.
         "open_changes": getattr(t, "client_changes_open", 0) or 0,
         "completed_at": _iso(getattr(t, "completed_at", None)),
+        # Operating-system release (2026-09-02). All three internal, like every other planning field
+        # here: the estimate is how the AGENCY sizes the work, the hold kind is why WE are waiting.
+        "estimate_minutes": getattr(t, "estimate_minutes", None),
+        "hold_kind": getattr(t, "hold_kind", None),
+        "blocked_by_task_id": getattr(t, "blocked_by_task_id", None),
     }
 
 
@@ -448,9 +458,26 @@ def task_detail(t: Task, db: Session) -> dict:
             "history": [history_dict(h, db) for h in sorted(t.history, key=lambda h: h.id, reverse=True)],
             "created_at": _iso(t.created_at),
             "updated_at": _iso(t.updated_at),
+            # Work sessions (services/task_sessions, 2026-09-02): the drawer's Time pane. Internal —
+            # how long we took is not what the client bought, so it is not in `task_bridge.SAFE`.
+            "sessions": _sessions(t, db),
+            "session_minutes": sum(s["minutes"] for s in _sessions(t, db)),
+            "hold_kind_label": HOLD_KINDS.get(getattr(t, "hold_kind", None) or "") if getattr(t, "on_hold", False) else None,
         }
     )
     return d
+
+
+def _sessions(t: Task, db: Session) -> list[dict]:
+    from .services import task_sessions
+    rows = task_sessions.sessions_for_task(db, t.id)
+    users = {u.id: u for u in db.execute(select(User).where(User.id.in_({s.user_id for s in rows} or [-1]))).scalars()}
+    out = []
+    for s in rows:
+        d = task_sessions.session_dict(s, t)
+        d["user"] = user_public(users.get(s.user_id))
+        out.append(d)
+    return out
 
 
 def atrium_payload(t: Task, db: Session) -> dict:
