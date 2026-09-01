@@ -1910,6 +1910,30 @@ KPI tiles, the clock-in chart and the late/handover lists. State is URL-backed
   overlays each person onto it. Cached 120 s in-process; `?refresh=1` bypasses. Never loop
   `enrollment-progress` per person to rebuild this — that is ~540 doc reads each.
 
+### 🟡 Time in the engine — minutes per dimension, Today / This week / 30 days (2026-09-01)
+
+The Overview shows, under the compass, how many minutes the person ACTIVELY spent in the Mastery
+Engine per dimension (Professional · Philosophical · Spiritual · Coach), and the admin block shows
+the same four numbers for everyone (`timespent.js` → `/api/development/time`, `/time/detail`,
+`/team-time`; `services/time_spent.py`). Totals only — the sessions behind them (start–end ·
+section · view) are a click away, deliberately not on the page. Four things to know:
+
+- **The engine records the minutes, Sentinel only reads them.** A minute counts when the engine
+  frame is on screen and something happened in the last three minutes — an answer, a card, a
+  message, the learner speaking, the assistant speaking or writing back. Mouse movement is NOT a
+  signal (a hands-free conversation has none). Several open frames (Professional tab + a growth
+  tab + the Coach FAB) count a minute once. The rule lives in the engine's `activityTracker`
+  (`public/app.js`) and `/api/activity/beat`; change it THERE, never by re-deriving here.
+- **Windows are PH DATES sent to the engine** (`from`/`to`), which stamps minutes in Asia/Manila
+  too — so "today" is the same day on both sides. `today` is the default; the choice is shared by
+  both mounts and remembered in localStorage.
+- **Programmes → dimensions the way the compass does:** career → Professional, the pinned growth
+  programmes (`team_growth.DIM_PROGRAMS`) → their tab, NO programme → Coach, any other growth
+  programme → "Other" (shown only when it has minutes).
+- 🔴 **"—" is unknown, "0m" is zero — and here zero is a real answer.** Unlike the progress rollups,
+  a person with no minutes has nothing recorded and shows 0m. The dash is reserved for the bridge
+  failing, and `engine_error` is printed beside the table. `tests/test_time_spent.py` pins it.
+
 ### 🔴 The Coach FAB is not a second assistant — ONE DOOR PER PAGE
 
 Added 2026-08-10. The FAB frames the Mastery Engine at `?embed=assistant`, which is that app's own

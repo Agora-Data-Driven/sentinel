@@ -6,7 +6,8 @@ engine uses back toward `routers/internal.py`. Extracted so a second engine call
 re-implement the signing that `routers/meta.py` had inline.
 
 Purposes in use: `enrollment-progress` (one person's rings), `team-progress` (the whole roster's
-rollup + attempt window, behind the admin team panel).
+rollup + attempt window, behind the admin team panel), `time-spent` / `time-detail` (minutes actively
+spent in the engine — the Overview's time strip and the admin team-time table, `services/time_spent.py`).
 
 EVERYTHING here is best-effort and fail-SOFT AT THE TRANSPORT: an unset secret, a missing URL, a
 timeout, a non-200 or a malformed body all return (status, {}) rather than raising. But callers
