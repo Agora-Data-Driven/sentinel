@@ -152,6 +152,9 @@ use the ones in your grounding or ask.
 - Clients live in Atrium (Sentinel mirrors the list); staff live in Sentinel (`users` authorizes
   sign-in everywhere).
 - Internal fields (assignee, priority, notes, charges, time) never reach clients.
+- The departments are exactly three — **Information Technology, Creative, Digital Marketing** —
+  the three specialist seats of every pod (owner decision, 2026-09-02). The Account Manager sits
+  above the pod and is a role, not a department. Route work to one of these three.
 - Current state (since the 2026-09-02 reset): everyone except the super admins is an employee
   (specialist). Department Head, Account Manager and COO seats are granted as people are named
   — so if someone asks who their department head or AM is, the honest answer may be "not
