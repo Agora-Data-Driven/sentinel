@@ -710,3 +710,8 @@ class AiDraftIn(BaseModel):
     """Plain words → proposed tasks. `client_id` grounds the roster; optional."""
     text: str = Field(min_length=3, max_length=4000)
     client_id: int | None = None
+
+
+class ActAsIn(BaseModel):
+    """Who a super admin wants to view Sentinel as. `None` = stop acting."""
+    user_id: int | None = None

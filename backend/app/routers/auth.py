@@ -19,9 +19,10 @@ from .. import sso
 from ..config import settings
 from ..database import get_db
 from ..models import Team, User
-from ..schemas import ChangePasswordIn, DevLoginIn, LoginIn
-from ..security import create_access_token, get_current_user, user_from_sso
-from ..serializers import user_full
+from ..schemas import ActAsIn, ChangePasswordIn, DevLoginIn, LoginIn
+from ..security import create_access_token, get_current_user, get_real_user, impersonator, user_from_sso
+from ..serializers import user_full, user_public
+from ..services import audit
 from ..utils.passwords import hash_password, verify_password
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -180,9 +181,12 @@ def dev_login(payload: DevLoginIn, response: Response, db: Session = Depends(get
 
 
 @router.get("/me")
-def me(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def me(request: Request, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     from ..services import permissions as perms_svc
 
+    # While a super admin is ACTING, `user` is the target — the whole point — and the UI needs to
+    # know, loudly. `acting_as.real` is the actual person, so the banner can say who is really here.
+    real = impersonator(request)
     team = db.get(Team, user.team_id) if user.team_id else None
     # 🔴 `caps` is added HERE, not on `user_full`. That serializer is called once per person in the
     # People directory and once per assignee/supporter on the board, and resolving capabilities needs
@@ -195,13 +199,53 @@ def me(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     # 🔴 `caps_for_user`, NOT `caps_for(role)` — this must include the person's own exceptions
     # (models.UserCapability) or the UI hides features the API allows, which is the dead-button
     # failure of AGENTS.md §5 pointed the other way.
-    return {**user_full(user, team), "caps": sorted(perms_svc.caps_for_user(user))}
+    return {**user_full(user, team), "caps": sorted(perms_svc.caps_for_user(user)),
+            "acting_as": ({"active": True, "real": user_public(real)} if real else None)}
 
 
 @router.post("/logout")
 def logout(response: Response):
     response.delete_cookie(settings.cookie_name, path="/")
+    # Acting-as dies with the session — a fresh sign-in must never wake up as somebody else.
+    response.delete_cookie(settings.act_as_cookie_name, path="/")
     return {"ok": True}
+
+
+# --- "Act as user" (2026-09-02) — super admin only, audited both ways -------------------------------
+@router.post("/act-as")
+def act_as(payload: ActAsIn, response: Response, request: Request,
+           real: User = Depends(get_real_user), db: Session = Depends(get_db)):
+    """Start (or stop, with `user_id: null`) viewing Sentinel as another active user.
+
+    🔴 Gated on the REAL person (`get_real_user`), never `get_current_user` — while acting, the
+    current user IS the target, and an employee target must not be able to re-point the act.
+    Every start and stop lands in the audit log under the real super admin's name; while acting,
+    ordinary writes attribute to the target (that is what "as" means — same as the Mastery Engine),
+    which is why the audit bracket around them is not optional.
+    """
+    if real.role != "super_admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail="Only a super admin can act as another user.")
+    current = impersonator(request)
+    if payload.user_id in (None, real.id):
+        response.delete_cookie(settings.act_as_cookie_name, path="/")
+        if request.cookies.get(settings.act_as_cookie_name):
+            audit.record(db, actor_id=real.id, table_name="users",
+                         record_id=request.cookies.get(settings.act_as_cookie_name),
+                         action="act_as_stop", new=None)
+        return {"ok": True, "acting_as": None}
+    target = db.get(User, payload.user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="No such user")
+    if not target.is_active:
+        raise HTTPException(status_code=400, detail="That account is deactivated.")
+    response.set_cookie(
+        key=settings.act_as_cookie_name, value=str(target.id), httponly=True,
+        secure=settings.secure_cookies, samesite="lax", max_age=8 * 3600, path="/",
+    )
+    audit.record(db, actor_id=real.id, table_name="users", record_id=target.id,
+                 action="act_as_start", new={"target": target.email})
+    return {"ok": True, "acting_as": user_public(target)}
 
 
 # --- Google OAuth 2.0 ------------------------------------------------------

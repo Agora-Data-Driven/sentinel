@@ -1714,3 +1714,15 @@ a.day-item:hover { border-color:var(--green-line); box-shadow:var(--shadow-sm); 
 .hold-kinds .choice.on { background: var(--green-soft); border-color: var(--green); color: var(--green-strong); }
 @media (max-width: 1000px) { .os-two, .os-two.even { grid-template-columns: 1fr; } .work-strip { display: none; } }
 @media (max-width: 760px) { .os-cal { grid-template-columns: 1fr; } .os-cal-day { min-height: 0; } }
+
+/* ---------------- "Act as user" (2026-09-02) ----------------
+   The impersonation banner is LOUD on purpose — a super admin browsing as somebody else must never
+   forget it, because every action they take lands attributed to that person (the start/stop is in
+   the audit log). Sentinel-orange, the identity accent, not a status colour. */
+.actas-bar { display: flex; align-items: center; justify-content: center; gap: 12px;
+  background: var(--grad-sentinel); color: #fff; font-weight: 700; font-size: 13px;
+  padding: 7px 16px; position: sticky; top: 0; z-index: 60; }
+.actas-bar .svg-ic { width: 15px; height: 15px; }
+.actas-bar b { font-weight: 800; }
+.actas-bar .btn { background: rgba(255,255,255,.16); border-color: rgba(255,255,255,.45); color: #fff; padding: 3px 12px; font-size: 12px; }
+.actas-bar .btn:hover { background: rgba(255,255,255,.28); }

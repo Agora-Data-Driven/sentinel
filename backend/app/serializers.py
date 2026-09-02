@@ -420,9 +420,15 @@ def task_card(t: Task, db: Session, viewer: User | None = None,
     }
 
 
-def task_detail(t: Task, db: Session) -> dict:
-    """Full task incl. internal fields (Sentinel users are all internal staff)."""
-    d = task_card(t, db)
+def task_detail(t: Task, db: Session, viewer: User | None = None) -> dict:
+    """Full task incl. internal fields (Sentinel users are all internal staff).
+
+    `viewer` (2026-09-02) rides through to `task_card`, so the record carries the same
+    viewer-relative `mine` / `can_edit` the board's cards do — the drawer's Start Work button needs
+    it, or it renders on a colleague's card and can only 403. Optional and absent-never-faked, like
+    everywhere else: the write paths that re-serialize after a PATCH name no viewer and lose nothing.
+    """
+    d = task_card(t, db, viewer=viewer)
     am = db.get(User, t.account_manager_id) if t.account_manager_id else None
     team = db.get(Team, t.assigned_team_id) if t.assigned_team_id else None
     reviewer = db.get(User, t.reviewer_id) if getattr(t, "reviewer_id", None) else None

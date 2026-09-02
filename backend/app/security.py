@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from . import sso
 from .config import settings
-from .constants import ADMIN_ROLES, MANAGER_ROLES, ROLE_ACCOUNT_MANAGER, ROLE_RANK
+from .constants import ADMIN_ROLES, MANAGER_ROLES, ROLE_ACCOUNT_MANAGER, ROLE_RANK, ROLE_SUPER_ADMIN
 from .database import get_db
 from .models import User
 from .utils.time import utcnow
@@ -61,31 +61,93 @@ def user_from_sso(request: Request, db: Session) -> User | None:
     return user if (user and user.is_active) else None
 
 
-# --- Current-user dependencies --------------------------------------------
-def get_current_user(request: Request, db: Session = Depends(get_db)) -> User:
-    token = _extract_token(request)
-    uid = _decode(token) if token else None
-    if uid:
-        user = db.get(User, uid)
-        if not user or not user.is_active:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session")
+# --- "Act as user" (2026-09-02) --------------------------------------------
+# A SUPER ADMIN may browse Sentinel as any other active user — the whole app then answers with that
+# person's board, landing page, nav and capabilities, because every dependency below resolves to the
+# TARGET. Mirrors the Mastery Engine's act-as, including its one privacy rule: TIME is never written
+# while acting (see `forbid_while_acting` — a minute recorded for somebody who wasn't there is a
+# fabrication, which is exactly why the engine keys its minutes to the real identity too).
+#
+# Mechanics: the session cookie stays the REAL person's; a second cookie carries the target id and
+# is INERT unless the real session resolves to a super admin — re-checked here on every request, so
+# a forged or stale cookie grants nothing (and a super admin gains nothing by forging it: acting is
+# only ever a NARROWING, since super_admin already holds every capability). The real person rides
+# along on `request.state.impersonator` for the few places that must know (auth's /me, the audit
+# rows, the time guards).
+
+def _apply_act_as(request: Request, db: Session, user: User) -> User:
+    if user.role != ROLE_SUPER_ADMIN:
         return user
-    # No Sentinel session — accept a portal login instead, so arriving from the portal (or being
-    # embedded beside it) just works without a second sign-in.
-    user = user_from_sso(request, db)
-    if not user:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
-    return user
+    raw = request.cookies.get(settings.act_as_cookie_name)
+    if not raw:
+        return user
+    try:
+        target_id = int(raw)
+    except (TypeError, ValueError):
+        return user
+    if target_id == user.id:
+        return user
+    target = db.get(User, target_id)
+    # A deactivated or deleted target silently stops the act — the super admin is simply themselves
+    # again, which is the safe direction. (Refusing the request would lock them out of the very
+    # pages they'd use to stop acting.)
+    if not target or not target.is_active:
+        return user
+    request.state.impersonator = user
+    return target
 
 
-def get_current_user_optional(request: Request, db: Session = Depends(get_db)) -> User | None:
+def impersonator(request: Request) -> User | None:
+    """The REAL super admin behind this request, when it is running as somebody else."""
+    return getattr(request.state, "impersonator", None)
+
+
+def forbid_while_acting(request: Request, what: str = "record time") -> None:
+    """403 an act that must never be performed FOR somebody. Applied to the writes that fabricate a
+    person's presence or effort: attendance punches, task-timer sessions, manual time entries and
+    engine-session edits. Everything else stays open — acting exists so a super admin can see and
+    fix a person's board, and the act-as start/stop is in the audit log."""
+    real = impersonator(request)
+    if real is not None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"You're viewing Sentinel as somebody else — you can't {what} for them. "
+                   "Stop acting as them first (the banner's Stop button).")
+
+
+def _resolve_real(request: Request, db: Session) -> User | None:
     token = _extract_token(request)
     uid = _decode(token) if token else None
     if uid:
         user = db.get(User, uid)
         if user and user.is_active:
             return user
+        return None
+    # No Sentinel session — accept a portal login instead, so arriving from the portal (or being
+    # embedded beside it) just works without a second sign-in.
     return user_from_sso(request, db)
+
+
+# --- Current-user dependencies --------------------------------------------
+def get_current_user(request: Request, db: Session = Depends(get_db)) -> User:
+    user = _resolve_real(request, db)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+    return _apply_act_as(request, db, user)
+
+
+def get_real_user(request: Request, db: Session = Depends(get_db)) -> User:
+    """The signed-in person, act-as IGNORED. Only auth's own routes should want this — everything
+    else takes `get_current_user` so an acting super admin sees exactly what the target sees."""
+    user = _resolve_real(request, db)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+    return user
+
+
+def get_current_user_optional(request: Request, db: Session = Depends(get_db)) -> User | None:
+    user = _resolve_real(request, db)
+    return _apply_act_as(request, db, user) if user else None
 
 
 # --- RBAC guards -----------------------------------------------------------

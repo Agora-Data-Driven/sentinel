@@ -10,7 +10,7 @@ import json
 import logging
 from datetime import timedelta
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -46,7 +46,7 @@ from ..capabilities import (
     CAP_TASKS_RECURRING,
     CAP_TASKS_REQUESTS,
 )
-from ..security import get_current_user, is_manager, require_cap
+from ..security import forbid_while_acting, get_current_user, is_manager, require_cap
 from ..serializers import (CardPrefetch, atrium_payload, comment_dict, task_card, task_detail,
                            user_public)
 from ..services import atrium_tasks
@@ -812,8 +812,9 @@ def active_session(user: User = Depends(get_current_user), db: Session = Depends
 
 
 @router.post("/sessions/pause")
-def pause_session(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def pause_session(request: Request, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Stop whatever is running. Idempotent — pausing nothing is fine."""
+    forbid_while_acting(request, "pause their timer")
     closed = task_sessions.close_open(db, user.id, source="start_work")
     db.commit()
     tasks = {t.id: t for t in db.execute(select(Task).where(Task.id.in_([s.task_id for s in closed] or [-1]))).scalars()}
@@ -821,7 +822,7 @@ def pause_session(user: User = Depends(get_current_user), db: Session = Depends(
 
 
 @router.post("/{task_id}/sessions/start")
-def start_session(task_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def start_session(task_id: str, request: Request, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """START WORK. Opens a session on this card (closing any other running one) and, when the card is
     still in To Do or Revision Needed, moves it to In Progress through the ordinary move path — the
     same `_apply_status` every other move affordance uses, so the history, the projection and the
@@ -829,6 +830,9 @@ def start_session(task_id: str, user: User = Depends(get_current_user), db: Sess
 
     `can_edit`, like ticking a step: working a card is editing the work. A viewer never reaches this.
     """
+    # 🔴 TIME IS NEVER WRITTEN WHILE ACTING-AS (the Mastery Engine's own rule): a session started
+    # "as" somebody records minutes they did not spend.
+    forbid_while_acting(request, "start their timer")
     task = _own_row(db, task_id, user, task_perms.can_edit, "worked on")
     stage = task_config.stage_for(db, task.status)
     if stage == "completed":
@@ -852,8 +856,9 @@ def start_session(task_id: str, user: User = Depends(get_current_user), db: Sess
 
 
 @router.post("/{task_id}/sessions/pause")
-def pause_task_session(task_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def pause_task_session(task_id: str, request: Request, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """PAUSE this card's running session (a no-op if it is not the one running)."""
+    forbid_while_acting(request, "pause their timer")
     task = _own_row(db, task_id, user, task_perms.can_edit, "paused")
     closed = task_sessions.close_for_task(db, task, user)
     db.commit()
@@ -1074,7 +1079,7 @@ def get_task(task_id: str, user: User = Depends(get_current_user), db: Session =
         raise HTTPException(status_code=404, detail=_NOT_FOUND)
     if not task_perms.can_view(user, task):
         raise HTTPException(status_code=403, detail=_FORBIDDEN)
-    return task_detail(task, db)
+    return task_detail(task, db, viewer=user)
 
 
 def _publish_after_response(task_id: int, actor_id: int) -> None:

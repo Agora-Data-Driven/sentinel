@@ -40,7 +40,7 @@ from ..capabilities import (
     CAP_ATTENDANCE_EDIT_RECORDS,
     CAP_ATTENDANCE_RECORDS,
 )
-from ..security import get_current_user, get_current_user_optional, require_cap
+from ..security import forbid_while_acting, get_current_user, get_current_user_optional, require_cap
 from ..services import permissions as perms_svc
 from ..serializers import attendance_request_dict, summary_dict, user_public
 from ..services import attendance as att
@@ -197,6 +197,7 @@ def event(payload: EventIn, db: Session = Depends(get_db)):
 
 @router.post("/self-event")
 def self_event(
+    request: Request,
     payload: SelfEventIn,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -205,6 +206,8 @@ def self_event(
     punch endpoints, this needs no QR token and no ``kiosk_guard``: an authenticated session
     already proves who you are, and you can only ever punch your own record. Stored with
     ``device="web"`` so records/reports can tell self-punches from kiosk and scanner scans."""
+    # 🔴 Never while acting-as: a punch recorded "as" somebody fabricates their attendance.
+    forbid_while_acting(request, "clock in or out")
     if payload.action not in ATTENDANCE_ACTIONS:
         raise HTTPException(status_code=400, detail="Invalid action")
     return _record_event(
