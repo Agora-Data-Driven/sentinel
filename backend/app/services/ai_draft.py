@@ -58,7 +58,7 @@ each department. Rules:
 - assignee must be one of the given people ids, chosen in this order: the person already holding
   this client's work in that department; else someone in that department who is not on leave and
   not heavy. If nobody fits, use null.
-- reviewer: a team lead or account manager id when the assignee's stage is shadow or contributor,
+- reviewer: a department head (team lead role) or account manager id when the assignee's stage is shadow or contributor,
   else null.
 - due_date ISO YYYY-MM-DD, never in the past; infer from words like "before Thursday's meeting".
 - estimate_minutes: a realistic whole number (30–480).

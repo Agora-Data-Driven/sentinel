@@ -404,6 +404,11 @@ super_admin › admin › account_manager › team_lead › employee / intern
                                                     viewer  (OFF the ladder — see below)
 ```
 
+**`team_lead`'s user-facing LABEL is "Department Head"** (owner decision 2026-09-02 — one
+term everywhere; the hub docs' org chart says Department Head, and Sentinel now agrees). The
+KEY stays `team_lead` in code, tests and this file; only labels, refusal messages and the
+living docs use the new term.
+
 🔴 **`viewer` is a read-only seat, not a rung** (added 2026-08-03, decision D8). It **sees everything
 and writes nothing**, which no point on a linear ladder can express — so:
 

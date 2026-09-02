@@ -1172,7 +1172,7 @@ def create_task(payload: TaskCreateIn, background: BackgroundTasks,
         if assigned_to_id is not None and assigned_to_id != user.id:
             raise HTTPException(
                 status_code=403,
-                detail="Only a team lead or manager can assign a task to somebody else. "
+                detail="Only a department head or manager can assign a task to somebody else. "
                        "Pick a department instead — its leads will triage it.")
         if assigned_to_id is None:
             assigned_to_id = None if payload.assigned_team_id else user.id
@@ -1183,7 +1183,7 @@ def create_task(payload: TaskCreateIn, background: BackgroundTasks,
     if payload.support_ids and not may_delegate and set(payload.support_ids) - {user.id}:
         raise HTTPException(
             status_code=403,
-            detail="Only a team lead or manager can put somebody else on a task. "
+            detail="Only a department head or manager can put somebody else on a task. "
                    "You can add yourself as support.")
     # Priority is honored from a manager (AM/admin/super) or a team lead; others default to Medium.
     # 🔴 Deliberately NOT `may_delegate`: priority is not delegation, and a lead filing work for
@@ -1352,7 +1352,7 @@ def update_task(task_id: str, payload: TaskUpdateIn, user: User = Depends(get_cu
         raise HTTPException(status_code=403, detail="Only managers can share a task to Atrium")
     for fld in ("assigned_to_id", "assigned_team_id"):
         if fld in data and data[fld] != getattr(task, fld) and not task_perms.can_reassign(user, task):
-            raise HTTPException(status_code=403, detail="Only a team lead or manager can reassign a task")
+            raise HTTPException(status_code=403, detail="Only a department head or manager can reassign a task")
     # 🔴 SUPPORT IS DELEGATION when it involves anybody but you (models.TaskSupporter). Popped out of
     # `data` here and applied AFTER the field loop, because `Task.support_ids` is a read-only property
     # over a relationship — leaving it in would `setattr` onto a property with no setter and 500.
@@ -1362,7 +1362,7 @@ def update_task(task_id: str, payload: TaskUpdateIn, user: User = Depends(get_cu
             and not task_perms.can_reassign(user, task):
         raise HTTPException(
             status_code=403,
-            detail="Only a team lead or manager can put somebody else on a task. "
+            detail="Only a department head or manager can put somebody else on a task. "
                    "You can add or remove yourself.")
     if "priority" in data and not (task_perms.can_prioritize(user, task) and data["priority"] in task_config.priorities(db)):
         data.pop("priority")
@@ -1407,7 +1407,7 @@ def update_task(task_id: str, payload: TaskUpdateIn, user: User = Depends(get_cu
                 maintasks_svc.foreign_owner_changes(before, after, user.id):
             raise HTTPException(
                 status_code=403,
-                detail="Only a team lead or manager can assign a step to someone else.")
+                detail="Only a department head or manager can assign a step to someone else.")
         # TICKING SOMEBODY ELSE'S STEP is its own decision (2026-08-05) — see
         # `task_perms.can_tick_step`. Everything else about a step (its text, whether it exists at
         # all) stays open to whoever can edit the card; only the claim "this is done" is scoped,
@@ -1660,7 +1660,7 @@ def bulk_update(payload: TaskBulkIn, user: User = Depends(get_current_user), db:
                 updated.append(tid)
         elif op == "priority":
             if not task_perms.can_prioritize(user, task):
-                skip(tid, "Only a team lead or manager can set priority")
+                skip(tid, "Only a department head or manager can set priority")
             elif task.priority == value:
                 skip(tid, "Already there")
             else:
@@ -1684,7 +1684,7 @@ def bulk_update(payload: TaskBulkIn, user: User = Depends(get_current_user), db:
             # the API rather than the UI. The guard belongs here either way.)
             may_claim = value == user.id and task.assigned_to_id is None
             if not task_perms.can_reassign(user, task) and not may_claim:
-                skip(tid, "Only a team lead or manager can assign someone else")
+                skip(tid, "Only a department head or manager can assign someone else")
             elif task.assigned_to_id == value:
                 skip(tid, "Already there")
             else:
@@ -1713,7 +1713,7 @@ def set_priority(task_id: str, payload: TaskPriorityIn, user: User = Depends(get
     a_key, a_task = atrium_tasks.split_id(str(task_id))
     if a_key:
         if not task_perms.can_manage_atrium(user):
-            raise HTTPException(status_code=403, detail="Only a team lead or manager can set task priority")
+            raise HTTPException(status_code=403, detail="Only a department head or manager can set task priority")
         if payload.priority not in task_config.priorities(db):
             raise HTTPException(status_code=400, detail="Invalid priority")
         envelope, err = atrium_tasks.edit_task(a_key, a_task, {"priority": payload.priority},
@@ -1726,7 +1726,7 @@ def set_priority(task_id: str, payload: TaskPriorityIn, user: User = Depends(get
         raise HTTPException(status_code=404, detail=_NOT_FOUND)
     # Priority is a management decision: team lead (own team) + AM / admin / super_admin.
     if not task_perms.can_prioritize(user, task):
-        raise HTTPException(status_code=403, detail="Only a team lead or manager can set task priority")
+        raise HTTPException(status_code=403, detail="Only a department head or manager can set task priority")
     if payload.priority not in task_config.priorities(db):
         raise HTTPException(status_code=400, detail="Invalid priority")
     old = task.priority

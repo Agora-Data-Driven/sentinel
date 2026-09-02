@@ -72,7 +72,7 @@ window.pageInit = async (S) => {
         // their shift and their payroll row with it. Ticking a box here widens what they SEE (that
         // department's board, queue, notifications and rollups) and nothing else; a team lead leads
         // every department ticked here, an employee reads them exactly as they read their own.
-        { k: "team_ids", label: "Also works with (extra departments — they see and, if they're a team lead, lead these too)", type: "multi", optsKey: "teams", coerce: "intList", omitValueOf: "team_id" },
+        { k: "team_ids", label: "Also works with (extra departments — they see and, if they're a department head, lead these too)", type: "multi", optsKey: "teams", coerce: "intList", omitValueOf: "team_id" },
         { k: "shift_template_id", label: "Shift (override; blank = use department's)", type: "select", optsKey: "shiftTemplates", allowEmpty: true, coerce: "intOrNull" },
         { k: "phone", label: "Phone", type: "text" },
         { k: "hired_date", label: "Hired date", type: "date" },

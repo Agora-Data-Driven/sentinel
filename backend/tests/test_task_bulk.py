@@ -147,7 +147,7 @@ def test_an_employee_cannot_TAKE_a_card_somebody_already_owns(client, auth, make
 
     body = _bulk(client, [theirs.id], "assignee", me.id).json()
     assert body["updated"] == []
-    assert "team lead or manager" in body["skipped"][0]["reason"]
+    assert "department head or manager" in body["skipped"][0]["reason"]
     assert db.get(Task, theirs.id).assigned_to_id == owner.id
 
     # The queue case still works: routed to my team, owned by nobody -> mine to pick up.
