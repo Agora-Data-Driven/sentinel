@@ -59,7 +59,9 @@ ROLE_LABELS = {
     ROLE_SUPER_ADMIN: "Super Admin",
     ROLE_ADMIN: "Admin",
     ROLE_ACCOUNT_MANAGER: "Account Manager",
-    ROLE_TEAM_LEAD: "Team Lead",
+    # 🔴 The KEY stays `team_lead` forever (keys never change); the LABEL follows the org
+    # chart — "Department Head" since 2026-09-02 (owner decision: one term everywhere).
+    ROLE_TEAM_LEAD: "Department Head",
     ROLE_EMPLOYEE: "Employee",
     ROLE_INTERN: "Intern",
     ROLE_VIEWER: "Viewer (read-only)",

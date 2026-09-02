@@ -22,7 +22,7 @@ card. Time is captured by pressing **Start Work**. Waiting is recorded by **Park
 3. **Set everyone's stage.** People → edit each person → Stage: `Shadow` (learning, always
    reviewed), `Contributor` (does real work, reviewer required on live client work),
    `Workstream Owner` (owns a recurring workstream), `Client Owner` (trusted end-to-end).
-   Suggested starting point: interns = Shadow, employees = Contributor, team leads = Workstream
+   Suggested starting point: interns = Shadow, employees = Contributor, department heads = Workstream
    Owner or Client Owner. This drives the "reviewer required" warnings — nothing is blocked by it.
 4. **Decide the daily pass.** The morning-brief notification and auto-generated recurring tasks
    only run once `POST /api/cron/daily` is scheduled (Cloud Scheduler). It also writes attendance
@@ -53,7 +53,7 @@ card. Time is captured by pressing **Start Work**. Waiting is recorded by **Park
 
 ## Part 2 — The daily routine
 
-### Specialist (employee / intern / team lead doing delivery work)
+### Specialist (employee / intern / department head doing delivery work)
 
 **Start of day (about 2 minutes)**
 1. **Clock in** — the button at the top of Today (or the kiosk).
@@ -108,7 +108,7 @@ card. Time is captured by pressing **Start Work**. Waiting is recorded by **Park
      reason.
 3. **Scan My accounts.** The Health column says *why* in words. Red rows first, always.
 4. **Check Commitments (today & tomorrow)** — make sure the work behind each is actually moving.
-5. **Glance at People on my accounts.** Anyone **Heavy** = a conversation with their team lead
+5. **Glance at People on my accounts.** Anyone **Heavy** = a conversation with their department head
    today.
 
 **After any client meeting or message (about 1 minute per commitment)**

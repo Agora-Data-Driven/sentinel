@@ -163,7 +163,7 @@ def test_an_employee_cannot_put_a_colleague_on_a_task(client, auth, db, cast):
     auth(lead)
     r = client.patch(f"/api/tasks/{t.id}", json={"support_ids": [helper.id]})
     assert r.status_code == 403
-    assert "team lead or manager" in r.json()["detail"]
+    assert "department head or manager" in r.json()["detail"]
     db.refresh(t)
     assert t.support_ids == []
 

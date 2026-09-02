@@ -248,7 +248,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         group="Task board",
         description=(
             "Delete somebody else's card. The only irreversible act here, so it keeps a tighter "
-            "scope than the rest: a team lead only within their own department. Anyone may always "
+            "scope than the rest: a department head only within their own department. Anyone may always "
             "delete a card they raised themselves."
         ),
         default=frozenset(MANAGER_ROLES),
@@ -364,7 +364,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         key="reports.overdue",
         label="Overdue tasks report",
         group="Reports",
-        description="Work past its due date. A team lead sees their own departments' rows only.",
+        description="Work past its due date. A department head sees their own departments' rows only.",
         default=frozenset(_at_least(ROLE_ADMIN) | {ROLE_TEAM_LEAD}),
         write=False,
     ),

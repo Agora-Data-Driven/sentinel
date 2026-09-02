@@ -30,7 +30,7 @@ card doesn't exist.
   ledger. The day strip has self clock-in/out.
 - **Task Board** (`/tasks`) — the kanban: To Do → In Progress → Revision Needed → Parked →
   Completed. Views: Board, By Employee, Monitor (workload/throughput rollup, managers). Cards are
-  Sentinel rows; client-owned Atrium cards also appear (team lead and up) and edits write back to
+  Sentinel rows; client-owned Atrium cards also appear (department head and up) and edits write back to
   Atrium. "✦ Plan with AI" opens the AI planner; "New Task" is the manual form.
 - **Projects** (`/projects`) — named outcomes with dates (e.g. "Phase One — Replicable Pod",
   target Oct 1). A project holds a goal, an owner, **milestones** (checkable statements of done —
@@ -48,7 +48,7 @@ card doesn't exist.
   split, PRs, target goals). The growth journal holds titled entries per dimension.
 - **Time & Leave** — attendance record, leave requests/balances, the approvals inbox
   (attendance corrections + leave, for managers), and the QR scanner station (super admin).
-- **People** (`/people`) — the staff directory and profiles (team lead+ see their people's
+- **People** (`/people`) — the staff directory and profiles (department head+ see their people's
   development).
 - **Admin** — Reports (six, CSV-exportable), Manage (departments, shifts, leave types, service
   templates, task vocabulary; the client list is a read-only mirror of Atrium), Permissions (the
@@ -59,11 +59,11 @@ card doesn't exist.
 Authority ladder: **super_admin › admin › account_manager › team_lead › employee/intern**, plus a
 read-only **viewer** seat. In company terms: Super Admin = platform owners (Ian, Zhen);
 Admin = COO-level operations; Account Manager owns client relationships and total outcomes;
-Team Lead = a department head (craft, QA, reviews, their people); employees/interns = specialists.
+Department Head = a department head (craft, QA, reviews, their people); employees/interns = specialists.
 
 - A specialist sees their own work, their team's unclaimed queue, and their department read-only;
   they self-assign or route work to a department queue, and cannot set priority or approve reviews.
-- A team lead assigns/reviews/prioritizes anything they can see, approves attendance/leave for
+- A department head assigns/reviews/prioritizes anything they can see, approves attendance/leave for
   their team, and grants certifications.
 - An AM works estate-wide across clients; admin/super admin see everything.
 - Fine-grained exceptions are granted per role or per person in Admin → Permissions (capabilities).
@@ -76,7 +76,7 @@ Workstream Owner → Client Owner. Shadow/Contributor work needs a reviewer on l
 1. **Create** — best via ✦ Plan with AI: describe what was agreed in plain words; the AI proposes
    1–5 tasks with suggested assignee (who already holds this client's work, checked against leave,
    load, stage, certifications), due date, estimate, reviewer; the human edits and confirms. Or the
-   New Task form. Naming anyone but yourself (lead, support, or a step) is delegation — team lead
+   New Task form. Naming anyone but yourself (lead, support, or a step) is delegation — department head
    and up. A card can belong to a client, a project, a campaign, and a department.
 2. **Work** — the assignee presses **Start Work** (moves to In Progress, starts the task timer;
    time only ever comes from the timer, never typed). **Pause** stops it; starting another card
@@ -84,7 +84,7 @@ Workstream Owner → Client Owner. Shadow/Contributor work needs a reviewer on l
 3. **Stuck?** — **Park** it with a structured reason: *waiting on the client* (ages against the
    client's health) or on-us kinds (*access, asset, reviewer, AM decision, another task, other*).
    Parking remembers the column to resume into.
-4. **Finish** — attach the deliverable, **Submit for review**. A reviewer (team lead+/AM) approves
+4. **Finish** — attach the deliverable, **Submit for review**. A reviewer (department head+/AM) approves
    or requests changes with written feedback. **Only approved work can enter Completed** — the one
    enforced gate. Finished work is later archived to Past work.
 5. Cards inside: a two-level breakdown (main tasks = phases, each with steps; steps can have
@@ -152,3 +152,7 @@ use the ones in your grounding or ask.
 - Clients live in Atrium (Sentinel mirrors the list); staff live in Sentinel (`users` authorizes
   sign-in everywhere).
 - Internal fields (assignee, priority, notes, charges, time) never reach clients.
+- Current state (since the 2026-09-02 reset): everyone except the super admins is an employee
+  (specialist). Department Head, Account Manager and COO seats are granted as people are named
+  — so if someone asks who their department head or AM is, the honest answer may be "not
+  assigned yet".

@@ -4,7 +4,7 @@
 window.pageInit = async (S) => {
   const view = S.view();
   if (!S.can("team_lead")) {
-    view.innerHTML = `<div class="empty card pad" style="margin-top:30px">Approvals are for team leads and above.</div>`;
+    view.innerHTML = `<div class="empty card pad" style="margin-top:30px">Approvals are for department heads and above.</div>`;
     return;
   }
 

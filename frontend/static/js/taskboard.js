@@ -2705,7 +2705,7 @@ window.TaskBoard = {
       // as giving it to them, and the server refuses both.
       const locked = !mayDelegateStep && !!current && current !== S.user.id;
       const title = locked
-        ? `${ownerName(current)} owns this — only a team lead or manager can change that`
+        ? `${ownerName(current)} owns this — only a department head or manager can change that`
         : (mayDelegateStep ? "" : "You can take this on yourself, or hand it back");
       return `<select class="bd-assignee" data-act="${act}" data-mid="${mid}"${sid ? ` data-sid="${sid}"` : ""}
         ${locked ? "disabled" : ""} title="${S.esc(title)}">
@@ -2729,7 +2729,7 @@ window.TaskBoard = {
       // click apart made them read as two different settings that might disagree. One name.
       return `<div class="row bd-route" style="gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 10px">
         <span class="sub" style="font-size:12px">Department</span>
-        <select id="bd-team" ${canReassign(t) ? "" : "disabled"} title="${canReassign(t) ? "Send this task to a department" : "Only a team lead or manager can re-route work"}">
+        <select id="bd-team" ${canReassign(t) ? "" : "disabled"} title="${canReassign(t) ? "Send this task to a department" : "Only a department head or manager can re-route work"}">
           <option value="">Nobody yet</option>
           ${teams.map((tm) => `<option value="${tm.id}" ${tm.id === t.assigned_team_id ? "selected" : ""}>${S.esc(tm.name)}</option>`).join("")}
         </select>
@@ -3363,8 +3363,8 @@ window.TaskBoard = {
     // 403; on create the person they picked was silently dropped and the card landed on them.
     const mayNamePerson = () => (existing ? canReassign(existing) : (canManage || isLead));
     const LEAD_LOCKED = existing
-      ? "Only an account manager, or a team lead, can change who leads this."
-      : "Pick a department instead: its leads are notified and triage it. Naming a person is a lead or manager call.";
+      ? "Only an account manager, or a department head, can change who leads this."
+      : "Pick a department instead: its leads are notified and triage it. Naming a person is a department-head or manager call.";
     // The Support multi-select's options. Mirrors the server's rule (routers/tasks.py
     // `_support_delegates`): a delegator may pick anyone; everyone else may only toggle THEMSELVES.
     // 🔴 A colleague already on the card renders `selected disabled` rather than being left out. Both

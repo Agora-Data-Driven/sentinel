@@ -1,6 +1,6 @@
 # Sentinel Task SOP — how work gets created, shaped and finished
 
-**For:** everyone (COO · Account Managers · Team Leads · Specialists) · **From:** 2026-09-02 (the clean-board reset)
+**For:** everyone (COO · Account Managers · Department Heads · Specialists) · **From:** 2026-09-02 (the clean-board reset)
 **One sentence:** every piece of client or internal work lives as **one card with one accountable lead**, created **AI-first** by the person who made the commitment, and finished **through review** — nothing else counts as done.
 
 ---
@@ -72,7 +72,7 @@ You just left a client call, or agreed something in a meeting. **Do not open a b
 - **Lead (assignee)** — exactly ONE. The accountable neck. "Who owns this?" always has a one-name answer.
 - **Support** — any number of helpers. They see and can edit the card, it counts on their workload, but accountability stays with the lead. **Two people building one deliverable together = 1 lead + 1 support**, never two cards for the same thing.
 - **Step owners** — inside the breakdown, each phase/step can be owned by someone. This is how a card crosses departments in sequence *within one deliverable*: Earl owns "Analyze", Leo owns "Write findings". A step named to you puts the card on your board and shows "N steps on you".
-- Naming anyone but yourself — as lead, support or on a step — is **delegation**: team lead and up. Specialists can always claim unowned work, add themselves, or route to a department queue.
+- Naming anyone but yourself — as lead, support or on a step — is **delegation**: department head and up. Specialists can always claim unowned work, add themselves, or route to a department queue.
 
 ---
 
@@ -92,7 +92,7 @@ Open the card → **Work** tab:
 1. Clock in → **Today** shows your work in priority order.
 2. Open the top card → **Start Work** (this moves it to In Progress and starts your task timer — time is measured by the button, never typed).
 3. Finished, or switching? **Pause** (starting another card pauses this one automatically; clock-out closes everything).
-4. Deliverable ready → attach/link the output → **Submit for review**. Your reviewer (team lead or the card's AM) approves or requests changes with written feedback. **Only approved work enters Completed** — this is the one enforced gate on the board.
+4. Deliverable ready → attach/link the output → **Submit for review**. Your reviewer (department head or the card's AM) approves or requests changes with written feedback. **Only approved work enters Completed** — this is the one enforced gate on the board.
 5. Stuck? **Park it with the real reason** (§6) the moment you're stuck — not at 6pm.
 
 ## 6. Parking (blockers) — say WHY, structurally
@@ -117,17 +117,17 @@ Plus one plain sentence ("Sent the access request to Dana 9/2, waiting on IT con
 
 ---
 
-## 8. Roles — who does what (and the super admin vs team lead question, answered)
+## 8. Roles — who does what (and the super admin vs department head question, answered)
 
 | | Creates tasks | Assigns people | Sets priority | Reviews | Projects | Sees |
 |---|---|---|---|---|---|---|
 | **Specialist** | own + routes to queues | self only | — | — | — | own work + own department |
-| **Team Lead** (= Department Head) | yes | within what they can see | yes | **yes** | view | their department(s) |
+| **Department Head** (= Department Head) | yes | within what they can see | yes | **yes** | view | their department(s) |
 | **Account Manager** | yes (AI-first) | anywhere | yes | yes | **manage** | all clients + board |
 | **Admin / COO** | yes | anywhere | yes | yes | manage | everything operational |
 | **Super Admin** (CEO/owner) | yes | anywhere | yes | yes | manage | everything + platform |
 
-**Do we need both Super Admin and Team Lead? Yes — they are different jobs, not different sizes of the same job.** A Team Lead is a *department head*: they own craft, QA and their people's work — inside their department. A Super Admin owns the *platform*: payroll, permissions, roles, deleting people, acting as users, the Manage console. Merging them would hand every department head payroll and the power to grant themselves anything (the permission system locks role-setting to Super Admin for exactly this reason). What CAN look similar day-to-day (both approve reviews, both assign) is deliberate overlap of *capabilities*, and capabilities are tunable per role or per person in **Admin → Permissions** without touching the role ladder. Keep: **Super Admin = Ian + Zhen only. Team Lead = each department head. They coexist.**
+**Do we need both Super Admin and Department Head? Yes — they are different jobs, not different sizes of the same job.** A Department Head owns capability: craft, QA and their people's work — inside their department. A Super Admin owns the *platform*: payroll, permissions, roles, deleting people, acting as users, the Manage console. Merging them would hand every department head payroll and the power to grant themselves anything (the permission system locks role-setting to Super Admin for exactly this reason). What CAN look similar day-to-day (both approve reviews, both assign) is deliberate overlap of *capabilities*, and capabilities are tunable per role or per person in **Admin → Permissions** without touching the role ladder. Keep: **Super Admin stays the platform-owner seat; Department Head is granted per department as each head is named — after the reset there are none yet.**
 
 ---
 
