@@ -1,0 +1,322 @@
+<title>Sentinel Go-Live Briefing</title>
+<meta name="description" content="How Agora starts running on Sentinel today — the live board's real state, this morning's cleanup, the day-one checklist and the daily loop per role">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400..800&display=swap">
+<style>
+:root{
+  --green:#54B948;--green-d:#3A9A2F;--green-strong:#2F8A2C;--green-soft:#E9F5E7;--green-line:#CFE8CB;
+  --sentinel:#FF6B35;--sentinel-2:#F2820C;--violet:#9484FB;--violet-d:#5C4BD0;--violet-bg:#F1EFFE;
+  --ink:#0D1117;--text:#2B333C;--sub:#5B6673;--muted:#6B7480;
+  --line:#E7EAEE;--line-soft:#EEF0F3;--canvas:#F6F7F9;--card:#FFFFFF;--sunken:#F1F3F5;
+  --ok:#54B948;--warn:#F59E0B;--danger:#EF4444;--info:#3B82F6;
+  --warn-t:#B45309;--danger-t:#B91C1C;--warn-bg:#FFFBEB;--danger-bg:#FEF2F2;--ok-bg:#E9F7E6;
+  --radius:16px;--pill:999px;color-scheme:light;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --ink:#F1F5F2;--text:#DCE3DD;--sub:#9AA6A0;--muted:#859189;--line:rgba(255,255,255,.09);--line-soft:rgba(255,255,255,.05);
+  --canvas:#0B0F0D;--card:#121A16;--sunken:#0F1613;--green:#5FBE54;--green-strong:#6BCB4E;--green-soft:rgba(95,190,84,.14);--green-line:rgba(95,190,84,.28);
+  --violet-bg:rgba(148,132,251,.16);--warn-t:#FBBF24;--danger-t:#FCA5A5;--warn-bg:rgba(245,158,11,.12);--danger-bg:rgba(239,68,68,.12);--ok-bg:rgba(95,190,84,.14);color-scheme:dark}}
+:root[data-theme="dark"]{
+  --ink:#F1F5F2;--text:#DCE3DD;--sub:#9AA6A0;--muted:#859189;--line:rgba(255,255,255,.09);--line-soft:rgba(255,255,255,.05);
+  --canvas:#0B0F0D;--card:#121A16;--sunken:#0F1613;--green:#5FBE54;--green-strong:#6BCB4E;--green-soft:rgba(95,190,84,.14);--green-line:rgba(95,190,84,.28);
+  --violet-bg:rgba(148,132,251,.16);--warn-t:#FBBF24;--danger-t:#FCA5A5;--warn-bg:rgba(245,158,11,.12);--danger-bg:rgba(239,68,68,.12);--ok-bg:rgba(95,190,84,.14);color-scheme:dark}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{font-family:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--canvas);color:var(--text);font-size:16px;line-height:1.55}
+.deck{max-width:1060px;margin:0 auto;padding:0 24px}
+.slide{min-height:92vh;display:none;flex-direction:column;justify-content:center;padding:56px 0}
+.slide.on{display:flex}
+.kick{font-size:12px;letter-spacing:.16em;text-transform:uppercase;font-weight:800;color:var(--sentinel-2);margin-bottom:14px}
+h1{font-size:44px;line-height:1.12;letter-spacing:-.02em;color:var(--ink);margin:0 0 18px;font-weight:800;text-wrap:balance}
+h2{font-size:32px;line-height:1.15;letter-spacing:-.015em;color:var(--ink);margin:0 0 22px;font-weight:800;text-wrap:balance}
+h3{font-size:15px;color:var(--ink);margin:0 0 10px;font-weight:700}
+p{margin:8px 0;max-width:70ch}
+.lead{font-size:19px;color:var(--sub);max-width:62ch}
+.lead b,p b,li b{color:var(--ink);font-weight:700}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:20px 24px}
+.grid{display:grid;gap:14px}
+.g2{grid-template-columns:1fr 1fr}.g3{grid-template-columns:repeat(3,1fr)}
+@media (max-width:860px){.g2,.g3{grid-template-columns:1fr}h1{font-size:34px}h2{font-size:26px}}
+.stat .n{font-size:40px;font-weight:800;color:var(--ink);line-height:1;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.stat .n.bad{color:var(--danger-t)}.stat .n.ok{color:var(--green-strong)}.stat .n.warn{color:var(--warn-t)}
+.stat .k{font-size:13px;color:var(--sub);margin-top:8px}
+ol.steps{margin:12px 0 0;padding:0;counter-reset:s;list-style:none}
+ol.steps li{position:relative;padding:10px 0 10px 46px;border-top:1px solid var(--line-soft);counter-increment:s}
+ol.steps li:first-child{border-top:none}
+ol.steps li::before{content:counter(s);position:absolute;left:0;top:9px;width:28px;height:28px;border-radius:50%;background:var(--green-soft);color:var(--green-strong);font-weight:800;font-size:13px;display:grid;place-items:center}
+ol.steps li b{color:var(--ink)}
+ol.steps li .who{display:block;font-size:12.5px;color:var(--muted)}
+ul.flat{margin:10px 0 0;padding-left:20px}
+ul.flat li{margin:6px 0}
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:700;border-radius:var(--pill);padding:3px 10px;background:var(--sunken);color:var(--sub);white-space:nowrap;vertical-align:2px}
+.pill.red{background:var(--danger-bg);color:var(--danger-t)}.pill.amber{background:var(--warn-bg);color:var(--warn-t)}.pill.green{background:var(--ok-bg);color:var(--green-strong)}.pill.violet{background:var(--violet-bg);color:var(--violet-d)}
+.dot{width:9px;height:9px;border-radius:50%;display:inline-block;flex:none}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th{text-align:left;font-size:11.5px;color:var(--muted);font-weight:600;padding:8px 12px;border-bottom:1px solid var(--line)}
+td{padding:8px 12px;border-top:1px solid var(--line-soft);vertical-align:top}
+td.n{text-align:right;font-variant-numeric:tabular-nums;font-weight:600;color:var(--ink)}
+th.n{text-align:right}
+td.n.zero{color:var(--muted);font-weight:400}
+td.n.bad{color:var(--danger-t)}td.n.warn{color:var(--warn-t)}
+.health{display:inline-flex;align-items:center;gap:7px;font-weight:700;font-size:13px}
+.h-red{color:var(--danger-t)}.h-red .dot{background:var(--danger)}
+.h-amber{color:var(--warn-t)}.h-amber .dot{background:var(--warn)}
+.h-green{color:var(--green-strong)}.h-green .dot{background:var(--ok)}
+.note{border-left:3px solid var(--warn);background:var(--warn-bg);padding:12px 16px;border-radius:0 12px 12px 0;font-size:14.5px;margin-top:16px}
+.note.danger{border-color:var(--danger);background:var(--danger-bg)}
+.note.ok{border-color:var(--green);background:var(--ok-bg)}
+.note b{color:var(--ink)}
+.tag{font-size:11px;letter-spacing:.1em;text-transform:uppercase;font-weight:800;color:var(--muted);margin-bottom:6px}
+.loop{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:14px;font-weight:700;color:var(--ink);font-size:15px}
+.loop span{background:var(--card);border:1px solid var(--line);border-radius:var(--pill);padding:8px 16px}
+.loop i{color:var(--muted);font-style:normal}
+.nav{position:fixed;bottom:0;left:0;right:0;display:flex;align-items:center;gap:14px;justify-content:center;padding:12px;background:linear-gradient(transparent,var(--canvas) 40%);z-index:10}
+.nav button{border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:var(--pill);padding:8px 18px;font:inherit;font-weight:700;font-size:13px;cursor:pointer}
+.nav button:hover{border-color:var(--green)}
+.dots{display:flex;gap:6px}
+.dots i{width:8px;height:8px;border-radius:50%;background:var(--line);cursor:pointer}
+.dots i.on{background:var(--green)}
+.pageno{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;min-width:44px;text-align:center}
+kbd{font:600 11px Inter;border:1px solid var(--line);border-radius:6px;padding:1px 6px;background:var(--card);color:var(--sub)}
+a{color:var(--green-strong);font-weight:600;text-decoration:none}
+.brandline{height:3px;background:linear-gradient(90deg,#6BCB4E,#54B948 55%,#3A9A2F);border-radius:3px;width:72px;margin-bottom:26px}
+@media print{.slide{display:flex!important;min-height:0;page-break-after:always;padding:32px 0}.nav{display:none}body{background:#fff}}
+</style>
+
+<div class="deck">
+
+<!-- 1 · title -->
+<section class="slide on">
+  <div class="brandline"></div>
+  <div class="kick">Sentinel · go-live briefing · Wed, Sep 2 2026</div>
+  <h1>Sentinel is live.<br>Here's how we run on it — starting today.</h1>
+  <p class="lead">The operating-system release shipped overnight and your real board is already in it.
+  This deck covers four things: <b>what's in there right now</b>, <b>what was cleaned this morning</b>,
+  <b>the setup each of us does today</b>, and <b>the daily loop</b> for specialists, account managers
+  and the COO.</p>
+  <p class="lead" style="margin-top:14px">Everything here is on your live board at
+  <b>sentinel.agoradatadriven.com</b> · full SOP: <b>docs/SENTINEL_SOP.md</b> · use <kbd>←</kbd> <kbd>→</kbd> to move.</p>
+</section>
+
+<!-- 2 · what shipped -->
+<section class="slide">
+  <div class="kick">What shipped overnight</div>
+  <h2>One login, three cockpits — and time that records itself</h2>
+  <div class="grid g3">
+    <div class="card"><div class="tag">Specialists</div><h3>Today</h3><p>Your work in one sorted list, what you're waiting on, your time (attendance · task · training), your assigned learning. Open the top card, press <b>Start Work</b>.</p></div>
+    <div class="card"><div class="tag">Account managers</div><h3>My accounts</h3><p>What needs <b>your</b> action first, every account's health with the reason in words, this week's commitments — and <b>✦ Draft with AI</b>: say what was agreed, confirm the proposed tasks.</p></div>
+    <div class="card"><div class="tag">COO</div><h3>Operations</h3><p>An exception list — one problem, one owner, one button per line. If it's not on the list, it's running normally. Client health and capacity tables behind it.</p></div>
+  </div>
+  <div class="grid g3" style="margin-top:14px">
+    <div class="card"><h3>Start Work / Pause</h3><p>A timer on every card. One running card per person, visible in the top bar everywhere. Forgotten timers cap at 4h and get flagged — never silently trusted.</p></div>
+    <div class="card"><h3>Park says <i>why</i></h3><p>Waiting on client / access / asset / AM decision / reviewer / another task. The AM and COO screens count "on the client" vs "on us" from it.</p></div>
+    <div class="card"><h3>Clients + Calendar</h3><p>New pages. Health is a printed rule (red / amber / green). The calendar is a projection of due dates, recurring deliverables and leave — nothing to keep in sync.</p></div>
+  </div>
+</section>
+
+<!-- 3 · state of the board -->
+<section class="slide">
+  <div class="kick">Audited this morning, on the live board</div>
+  <h2>The state of the board</h2>
+  <div class="grid g3">
+    <div class="card stat"><div class="n">40</div><div class="k">open cards across 11 clients, held by 6 people</div></div>
+    <div class="card stat"><div class="n bad">9</div><div class="k">overdue — the oldest due date is <b>Aug 5</b></div></div>
+    <div class="card stat"><div class="n bad">6</div><div class="k">clients red · 1 amber · 4 green (by the printed rule)</div></div>
+  </div>
+  <div class="grid g3" style="margin-top:14px">
+    <div class="card stat"><div class="n warn">~30</div><div class="k">open cards with <b>no due date</b> — they can never be late and never hit the calendar</div></div>
+    <div class="card stat"><div class="n warn">~14</div><div class="k">open cards with <b>no lead</b> — on nobody's Today page (most on one client)</div></div>
+    <div class="card stat"><div class="n warn">3</div><div class="k">cards waiting for review — specialists who can't finish</div></div>
+  </div>
+  <p class="lead" style="margin-top:18px">None of this is a Sentinel problem — it's the honest picture
+  of a board kept half-heartedly. The new screens simply make it visible. That's the point.</p>
+</section>
+
+<!-- 4 · cleaned vs reset -->
+<section class="slide">
+  <div class="kick">Delete everything, or align?</div>
+  <h2>We aligned. Nothing of value was deleted.</h2>
+  <p class="lead">A full reset would have erased client history (throughput, health, the cards clients
+  see on their own Atrium boards) to fix what was really three kinds of mess. So the mess was fixed
+  instead — this already happened this morning:</p>
+  <ol class="steps">
+    <li><b>16 finished cards filed to Past work.</b> Completed is a working column, not a graveyard — delivered work from July/August (Melo Yelo fixes, RHE emails, Bidbrain stories, Stratos reels…) is archived. It still counts as shipped; it just stops burying the board.</li>
+    <li><b>The parked card now says why.</b> "Spoke Booking System Build &amp; Launch" (Melo Yelo) → <span class="pill amber">Waiting for AM decision</span> — "For Greg and Rob's approval." The two client-owned parked campaigns stay as they are (their cards live in Atrium).</li>
+    <li><b>One junk row deleted</b> (a card literally titled "test", no client, no work).</li>
+  </ol>
+  <div class="note"><b>What was deliberately NOT touched:</b> every open card, every due date, every
+  assignment, all client-owned (Atrium) cards, and all history. Re-dating and re-owning work is a
+  judgment call — that's the day-one triage on the next slides, done by the people who own the work.</div>
+</section>
+
+<!-- 5 · client health table -->
+<section class="slide">
+  <div class="kick">The Clients page, right now</div>
+  <h2>Six accounts are red — each for a stated reason</h2>
+  <div class="card" style="padding:8px 4px">
+  <table>
+    <thead><tr><th>Client</th><th>Health</th><th class="n">Open</th><th class="n">Overdue</th><th class="n">Reviews</th><th>Why (verbatim from the page)</th></tr></thead>
+    <tbody>
+      <tr><td><b>Agora Data Driven</b></td><td><span class="health h-red"><i class="dot"></i>Red</span></td><td class="n">3</td><td class="n bad">3</td><td class="n zero">0</td><td>3 overdue</td></tr>
+      <tr><td><b>Rooming House Expert</b></td><td><span class="health h-red"><i class="dot"></i>Red</span></td><td class="n">4</td><td class="n bad">2</td><td class="n zero">0</td><td>2 overdue</td></tr>
+      <tr><td><b>Honey Tribe</b></td><td><span class="health h-red"><i class="dot"></i>Red</span></td><td class="n">4</td><td class="n bad">1</td><td class="n zero">0</td><td>1 overdue</td></tr>
+      <tr><td><b>Bidbrain AI</b></td><td><span class="health h-red"><i class="dot"></i>Red</span></td><td class="n">1</td><td class="n bad">1</td><td class="n zero">0</td><td>1 overdue</td></tr>
+      <tr><td><b>Melo Yelo</b></td><td><span class="health h-red"><i class="dot"></i>Red</span></td><td class="n">3</td><td class="n zero">0</td><td class="n warn">1</td><td>1 review waiting &gt; 24h</td></tr>
+      <tr><td><b>Riverdance RV</b></td><td><span class="health h-red"><i class="dot"></i>Red</span></td><td class="n">1</td><td class="n zero">0</td><td class="n warn">1</td><td>1 review waiting &gt; 24h</td></tr>
+      <tr><td><b>Super Cash Flow</b></td><td><span class="health h-amber"><i class="dot"></i>Amber</span></td><td class="n">1</td><td class="n zero">0</td><td class="n zero">0</td><td>1 untouched 14 days</td></tr>
+      <tr><td>ASL Logistics · Sabbath · The Contract Shop · The Covenant</td><td><span class="health h-green"><i class="dot"></i>Green</span></td><td class="n zero">0*</td><td class="n zero">0</td><td class="n zero">0</td><td>on track — *TCS's open cards live in Atrium and are unassigned (next slide)</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p style="margin-top:14px;color:var(--sub)">The rule, printed on the page: <b>red</b> = overdue, blocked on us &gt;2 days, or a review waiting &gt;24h · <b>amber</b> = due today, waiting on the client, or untouched 14 days · else <b>green</b>. After today's triage, red will mean <i>red</i>.</p>
+</section>
+
+<!-- 6 · day-one: owner -->
+<section class="slide">
+  <div class="kick">Today's setup · 1 of 2</div>
+  <h2>Ian / Super Admin — about 15 minutes</h2>
+  <ol class="steps">
+    <li><b>Change the bootstrap admin password.</b><span class="who">The install account still carries the default password — the boot log warns about it on every start. This is a live door into a super-admin seat. People → that account → set a real password. Do this first.</span></li>
+    <li><b>Name an account manager on all 11 clients.</b><span class="who">Clients → open each → "Name an AM". Until then the AM landing shows every account and red clients have no owner on the Operations list.</span></li>
+    <li><b>Set everyone's stage.</b><span class="who">People → edit → Stage. Suggested start: interns = Shadow · employees = Contributor · team leads = Workstream Owner / Client Owner. Drives the "reviewer required" warnings; blocks nothing.</span></li>
+    <li><b>Decide the daily pass.</b><span class="who">The 7:30 AM brief + auto-minted recurring cards need the daily cron scheduled. It also writes attendance summaries and reminders estate-wide — switch it on deliberately, watching the first run. Until then, Operations shows the same list on demand.</span></li>
+  </ol>
+</section>
+
+<!-- 7 · day-one: leads + AMs -->
+<section class="slide">
+  <div class="kick">Today's setup · 2 of 2</div>
+  <h2>Leads + AMs together — about 30 minutes, once</h2>
+  <ol class="steps">
+    <li><b>Triage the 9 overdue cards.</b><span class="who">Agora ×3 (Samuel) · RHE ×2 (Paulo) · Honey Tribe SEO audit (Paulo) · Bidbrain Feature 431 (unowned) · TCS ×2 (client cards, unowned). For each: finish it, re-date it to a date you mean, or park it with the real reason.</span></li>
+    <li><b>Put a lead on every unowned card.</b><span class="who">~14 open cards have nobody — almost all The Contract Shop's Atrium cards (Market Intelligence, Organic Social, Content Gap…). Open each → Edit → Lead.</span></li>
+    <li><b>Date the ~30 undated open cards.</b><span class="who">A card with no due date can't be late, can't hit the calendar, can't back a commitment. Date it or explicitly call it backlog on the card.</span></li>
+    <li><b>Clear the 3 waiting reviews.</b><span class="who">RHE LEADS | Meta CRM Integration (Justine) · Weekly Growth Brief (Nico) · Green Angles | Refresh Creatives (Ehjay). Approve or request changes today — and keep reviews under 24h from now on.</span></li>
+    <li><b>Turn the rituals into Recurring services.</b><span class="who">RHE "Weekly blog + Newsletter (Thursday)", the weekly Meta reports, weekly optimizations — Sentinel should mint these each period. AM+ via the recurring API today (ask and it's minutes); they generate on the daily pass or a manual run.</span></li>
+  </ol>
+</section>
+
+<!-- 8 · specialist loop -->
+<section class="slide">
+  <div class="kick">The daily loop · specialists</div>
+  <h2>Clock in → Today → Start Work</h2>
+  <div class="loop"><span>Clock in</span><i>→</i><span>Read <b>Today</b> top-down</span><i>→</i><span><b>Start Work</b> on card 1</span><i>→</i><span>Tick steps</span><i>→</i><span><b>Submit</b> or <b>Park</b> (why)</span><i>→</i><span>Next card</span><i>→</i><span>Clock out</span></div>
+  <div class="grid g2" style="margin-top:22px">
+    <div class="card"><h3>The five habits</h3><ul class="flat">
+      <li><b>One card at a time.</b> The green strip at the top is your running timer; switching cards pauses the old one.</li>
+      <li><b>New work = new card, immediately.</b> One line: <i>Campaign | Action | Detail</i>.</li>
+      <li><b>The checklist is what "done" means.</b> Paste the deliverable link on the card.</li>
+      <li><b>Stuck? Park with the reason</b> — on the client, an asset, an AM decision… then move on. Parked-with-a-reason is normal; silent idle is the only failure.</li>
+      <li><b>Before clocking out:</b> every card honest (working / parked / submitted), and if the Tomorrow line is empty, tell your lead now.</li>
+    </ul></div>
+    <div class="card"><h3>What you get back</h3><ul class="flat">
+      <li>Nobody asks "what are you working on?" — it's on the screen.</li>
+      <li>Waiting on someone stops looking like slacking — the card says exactly who it's on.</li>
+      <li>Your Time today panel proves your day (client / training / internal) without a timesheet.</li>
+      <li>Training minutes flow in automatically from the Mastery Engine.</li>
+    </ul></div>
+  </div>
+</section>
+
+<!-- 9 · AM loop -->
+<section class="slide">
+  <div class="kick">The daily loop · account managers</div>
+  <h2>Clear your queue, then turn promises into cards</h2>
+  <div class="loop"><span><b>Needs your action</b> first</span><i>→</i><span>Scan account health</span><i>→</i><span>Check commitments</span><i>→</i><span>Client says something</span><i>→</i><span><b>✦ Draft with AI</b></span><i>→</i><span>Edit → <b>Create</b></span></div>
+  <div class="grid g2" style="margin-top:22px">
+    <div class="card"><h3>Morning (5 min)</h3><ul class="flat">
+      <li><b>Needs your action</b> = specialists who can't move: reviews to approve, decisions parked on you, client asks to accept/decline.</li>
+      <li>Health column says <i>why</i> in words. Red rows first, always.</li>
+      <li>Anyone <b>Heavy</b> on your accounts = a conversation with their lead today.</li>
+    </ul></div>
+    <div class="card"><h3>After any client meeting (~1 min/promise)</h3><ul class="flat">
+      <li>Open the client → <b>Draft with AI</b> → type what was agreed in plain words.</li>
+      <li>Each proposal suggests the person already holding that client's work, a date, an estimate, a reviewer — and warns about leave, load and stage.</li>
+      <li>Edit what's wrong, untick what's not needed, <b>Create</b>. Nothing exists until you press it.</li>
+      <li>Before the next meeting, the client page <i>is</i> the agenda.</li>
+    </ul></div>
+  </div>
+  <p style="margin-top:14px;color:var(--sub)"><b>Escalate to a department head only for exceptions:</b> absence, overload, missing certification, changes requested twice, impossible deadline. Normal work flows AM → specialist directly.</p>
+</section>
+
+<!-- 10 · COO loop -->
+<section class="slide">
+  <div class="kick">The daily loop · COO</div>
+  <h2>If it's not on the exception list, leave it alone</h2>
+  <div class="loop"><span>Open <b>Operations</b></span><i>→</i><span>Work the list top-down</span><i>→</i><span>Each line: one owner, one button</span><i>→</i><span>Same line 2 days running → intervene</span><i>→</i><span>Monday: trends</span></div>
+  <div class="grid g2" style="margin-top:22px">
+    <div class="card"><h3>What the list raises, automatically</h3><ul class="flat">
+      <li>Red clients (with the reason) → the AM</li>
+      <li>People carrying more than the team → the lead</li>
+      <li>On leave with due work, no cover → name cover</li>
+      <li>Client silent for days → the AM chases</li>
+      <li>Reviews waiting &gt;24h → the reviewer</li>
+      <li>Changes requested twice on one person → training, not blame</li>
+      <li>Not trained in 14 days → the lead</li>
+    </ul></div>
+    <div class="card"><h3>Monday, 30 minutes</h3><ul class="flat">
+      <li><b>Delivery:</b> Monitor + Throughput — on-time rate, days-to-finish, per person and per client. Trend, not number.</li>
+      <li><b>Capacity:</b> hours + the time mix. Big "unallocated" = work off the cards.</li>
+      <li><b>Quality:</b> first-pass approval rate; a repeating miss becomes a template checklist step.</li>
+      <li><b>Fix the system, not the incident</b> — recurring exceptions become templates, recurrences, certifications, stages, staffing.</li>
+    </ul></div>
+  </div>
+</section>
+
+<!-- 11 · week one + honest notes -->
+<section class="slide">
+  <div class="kick">Week one</div>
+  <h2>What "working" looks like by Friday</h2>
+  <ol class="steps">
+    <li><b>Zero silent blockers.</b> Every parked card names a kind and a who.</li>
+    <li><b>Reds are real.</b> Overdue means a promise is actually late — because dates got triaged today.</li>
+    <li><b>Time appears.</b> Start Work becomes reflex; the capacity table's "Week" column fills with real hours instead of dashes.</li>
+    <li><b>Reviews under 24h.</b> The exception list stays quiet on reviews.</li>
+    <li><b>Nobody asks "what's happening with X?"</b> — the client page answers it.</li>
+  </ol>
+  <div class="note danger" style="margin-top:22px"><b>Do today, before anything else:</b> change the bootstrap admin password. It's the one real security item on this list.</div>
+  <div class="note" style="margin-top:10px"><b>Honest edges (known, small):</b> the daily 7:30 brief and auto-recurring cards wait on the cron decision · estimates are set by the AI drafter today (a field on the task form is a small follow-up) · recurring services are API-managed until the Manage pane grows a tab · "bi-weekly" cadence isn't supported yet (weekly/monthly are).</div>
+  <div class="note ok" style="margin-top:10px"><b>Where everything lives:</b> the full SOP is <b>docs/SENTINEL_SOP.md</b> (also published as a page) · the design rationale is <b>docs/SENTINEL_OPERATING_SYSTEM.md</b> · this deck prints cleanly for the meeting.</div>
+</section>
+
+</div>
+
+<div class="nav">
+  <button id="prev" aria-label="Previous slide">← Back</button>
+  <div class="dots" id="dots" role="tablist" aria-label="Slides"></div>
+  <span class="pageno" id="pageno"></span>
+  <button id="next" aria-label="Next slide">Next →</button>
+</div>
+
+<script>
+(() => {
+  const slides = [...document.querySelectorAll(".slide")];
+  const dots = document.getElementById("dots");
+  slides.forEach((s, i) => {
+    const d = document.createElement("i");
+    d.title = "Slide " + (i + 1);
+    d.onclick = () => show(i);
+    dots.appendChild(d);
+  });
+  let cur = 0;
+  try { cur = Math.min(slides.length - 1, +(localStorage.getItem("go-live-slide") || 0)); } catch (e) {}
+  function show(i) {
+    cur = Math.max(0, Math.min(slides.length - 1, i));
+    slides.forEach((s, j) => s.classList.toggle("on", j === cur));
+    [...dots.children].forEach((d, j) => d.classList.toggle("on", j === cur));
+    document.getElementById("pageno").textContent = (cur + 1) + " / " + slides.length;
+    try { localStorage.setItem("go-live-slide", String(cur)); } catch (e) {}
+    window.scrollTo(0, 0);
+  }
+  document.getElementById("prev").onclick = () => show(cur - 1);
+  document.getElementById("next").onclick = () => show(cur + 1);
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowRight" || e.key === " " || e.key === "PageDown") { e.preventDefault(); show(cur + 1); }
+    if (e.key === "ArrowLeft" || e.key === "PageUp") { e.preventDefault(); show(cur - 1); }
+    if (e.key === "Home") show(0);
+    if (e.key === "End") show(slides.length - 1);
+  });
+  show(cur);
+})();
+</script>
