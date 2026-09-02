@@ -2027,6 +2027,33 @@ logout clears it. UI: the loud orange `.actas-bar` with Stop, the topbar eye but
 entry (`openActAsPicker` in app.js), `/api/auth/me` ships `acting_as.real`. Pinned by
 `tests/test_act_as.py`.
 
+**Projects — the thin project layer (2026-09-02, the go-live reset day).** Named outcomes with
+dates ("Phase One — a replicable pod by October 1"), because the owner could see every card and no
+initiative. `models/project.py` (two tables — create_all lands them on prod; `tasks.project_id`
+rides `_ensure_columns` + migration d4c7e9a2f5b8), `services/projects.py` (rollups DERIVED from
+milestones + linked tasks; health is a printed rule like `client_health`), `routers/projects.py`
+(🔴 milestone routes declared ABOVE `/{project_id}` — the gym `/routines` registration-order
+lesson), page `/projects` (`projects.js`), caps `projects.view` (managers + viewer) /
+`projects.manage` (AM+). Rules: a MILESTONE is a checkable claim, not a task (no assignee, no
+board card — forcing that merge is how PM tools grow two boards); milestone done is a stamped
+transition (done_at/done_by, audited); deleting a project UNLINKS its tasks, never deletes them;
+`task_card` publishes `project_id` only (the name would be a per-card read — query budget),
+`task_detail` resolves `{id,name}`. 🔴 Keep it thin: no per-project statuses, Gantt or staffing —
+the owner's instruction was "do not overcomplicate it". The board takes `?project_id=` and the
+form's Project row renders only for `projects.view` holders. Pinned by `tests/test_projects.py`.
+
+**The AI planner is the SHARED create flow (`OpsUI.openAiPlanner`, 2026-09-02).** One modal —
+Task Board header ("✦ Plan with AI"), a project page, and the client drill-down's older inline
+box — for the owner's AI-first design: plain words → `/api/ops/ai/draft-tasks` proposals →
+**title, assignee and due date editable per proposal** → each kept one POSTed to `/api/tasks`
+(every rule intact; `depends_on` becomes a park on the created card). Proposing never writes.
+
+**The go-live reset (owner decision, 2026-09-02).** Every Sentinel task row was deleted in prod
+(a full JSON export was taken first) and the board restarted clean; Atrium's client cards and ALL
+Mastery Engine progress were deliberately untouched. `operations.MEASUREMENT_BASELINE` starts the
+measurement clock that day: the stalled-learner exception stays silent until its window fits
+entirely after the baseline, so nobody is flagged for a fortnight that predates the system.
+
 **What did not change:** no new statuses (review and hold are flags on the five stages — D13); no pod
 entity (client AM + card holders express it); estimates are optional and template-defaulted
 (`estimate_minutes`), and the Monitor's relative band stays the truthful capacity default; the daily

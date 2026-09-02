@@ -867,6 +867,10 @@ window.TaskBoard = {
           <button type="button" data-view="employee" role="tab">By Employee</button>
           <button type="button" data-view="monitor" role="tab">Monitor</button>
         </div>` : ""}
+        ${/* The AI-FIRST door (owner decision, 2026-09-02): describe what was agreed, the AI
+              proposes tasks + assignees, the human overrides and confirms. New Task stays the
+              always-working fallback beside it. */""}
+        ${canCreate && S.hasCap("ai.draft") && window.OpsUI ? `<button class="btn" id="plan-ai" title="Describe what was agreed — AI proposes the tasks, you approve">✦ Plan with AI</button>` : ""}
         ${canCreate ? `<button class="btn primary" id="new-task">${S.ICON.plus}New Task</button>` : ""}
         ${/* Everything that is a DESTINATION rather than a filter. Each of these was a permanent
               button in the header, and each is opened a few times a week at most. The dot on the
@@ -1020,6 +1024,8 @@ window.TaskBoard = {
   S.qs("#f-campaign").onchange = (e) => { campaign = e.target.value; render(); };
   if (S.qs("#f-assignee")) S.qs("#f-assignee").onchange = (e) => { filters.assignee_id = e.target.value; load(); };
   if (canCreate) S.qs("#new-task").onclick = () => taskForm(null);
+  const planBtn = S.qs("#plan-ai");
+  if (planBtn) planBtn.onclick = () => window.OpsUI.openAiPlanner(S, { onDone: () => load() });
   S.qs("#past-work").onclick = () => showPastWork();
   S.qs("#filed-by-me").onclick = () => showFiledByMe();
 
@@ -2408,6 +2414,7 @@ window.TaskBoard = {
                 also what stops a pre-2026-08-04 task echoing its own title back into this row: those
                 rows really do hold `campaign === title` and were deliberately never backfilled. */
             campaignOf(t) ? `<dt>Campaign</dt><dd>${S.esc(campaignOf(t))}</dd>` : ""}
+          ${t.project ? `<dt>Project</dt><dd><a href="/projects?project=${t.project.id}">${S.esc(t.project.name)}</a></dd>` : ""}
           ${/* 🔴 Shown ONLY when classified. A task raised before this column existed, and every
                 Atrium card (no Sentinel creator to judge), genuinely has no answer — and printing
                 "Planned" on those would be the on-time-rate-as-0 mistake in another field. */
@@ -3410,6 +3417,10 @@ window.TaskBoard = {
         <div class="tf-rows">
           <div class="tf-row"><div class="k">${S.ICON.building}Client</div>
             <div class="v"><select id="t-client"><option value="">No client — internal work</option>${clients.map((c) => `<option value="${c.id}" ${c.id === e.client_id ? "selected" : ""}>${S.esc(c.name)}</option>`).join("")}</select></div></div>
+          ${/* Project membership (2026-09-02) — options load async from /api/projects; the row
+                only renders for roles holding projects.view, so nobody gets a dead picker. */""}
+          ${S.hasCap("projects.view") ? `<div class="tf-row"><div class="k">${S.ICON.target}Project</div>
+            <div class="v"><select id="t-project" data-cur="${e.project_id || ""}"><option value="">No project</option></select></div></div>` : ""}
           ${!existing && canManage ? `<div class="tf-row tall" id="t-share-wrap"${e.client_id ? "" : " hidden"}>
             <div class="k">${S.ICON.eye}Client sees it</div>
             <div class="v"><label class="tf-check"><input type="checkbox" id="t-share" checked> From day one, not once it is finished</label>
@@ -3688,6 +3699,15 @@ window.TaskBoard = {
     S.qs("#t-save").onclick = save;
     // A shortcut is easy to fire twice, and on CREATE a second POST is a duplicate card rather than
     // a repeated edit — so the in-flight guard is not optional now that there are two ways to submit.
+    // Project options, filled async — active projects plus whichever one the card already
+    // carries (so editing an archived project's card never silently unlinks it).
+    const projSel = S.qs("#t-project");
+    if (projSel) S.api("/api/projects").then((d) => {
+      const cur = projSel.dataset.cur;
+      projSel.innerHTML = `<option value="">No project</option>` + (d.projects || [])
+        .filter((p) => p.status === "active" || String(p.id) === cur)
+        .map((p) => `<option value="${p.id}" ${String(p.id) === cur ? "selected" : ""}>${S.esc(p.name)}</option>`).join("");
+    }).catch(() => { const r = projSel.closest(".tf-row"); if (r) r.hidden = true; });
     let saving = false;
     async function save() {
       if (saving) return;
@@ -3698,6 +3718,7 @@ window.TaskBoard = {
       const name = val("t-name") || "Untitled task";
       const payload = {
         title: name, campaign: val("t-campaign"), client_id: numOrNull("t-client"),
+        ...(S.qs("#t-project") ? { project_id: numOrNull("t-project") } : {}),
         assigned_team_id: numOrNull("t-team"), assigned_to_id: numOrNull("t-assignee"),
         content_type: val("t-ctype"), due_date: val("t-due") || null,
         start_date: val("t-start") || null,

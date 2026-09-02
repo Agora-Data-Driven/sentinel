@@ -23,7 +23,8 @@ from ..constants import (
     label_for_department,
 )
 from ..database import get_db
-from ..models import (AtriumApproval, Client, RecurringService, Task, TaskComment, TaskHistory,
+from ..models import (
+    Project,AtriumApproval, Client, RecurringService, Task, TaskComment, TaskHistory,
                       TaskRequest, TaskSupporter, Team, User)
 from ..schemas import (
     CommentIn,
@@ -277,6 +278,7 @@ def list_tasks(
                                                 "'Unassigned' choice in the assignee filter)."),
     status: str | None = Query(None),
     priority: str | None = Query(None),
+    project_id: int | None = Query(None),
     archived: bool = Query(False, description="Past work instead of the live board: filed tasks "
                                               "ONLY. The board never mixes the two."),
     user: User = Depends(get_current_user),
@@ -302,6 +304,8 @@ def list_tasks(
         q = q.where(Task.status == status)
     if priority:
         q = q.where(Task.priority == priority)
+    if project_id:
+        q = q.where(Task.project_id == project_id)
     tasks = [t for t in db.execute(q).scalars().all() if task_perms.can_view(user, t)]
     # 🔴 THREE queries for the whole board instead of ~3.7 PER CARD. See `CardPrefetch` — the two
     # dominant costs it removes (a lazy comment count, and a weak identity map that made `db.get`
@@ -1208,10 +1212,16 @@ def create_task(payload: TaskCreateIn, background: BackgroundTasks,
     estimate = payload.estimate_minutes
     if estimate is None and tpl is not None:
         estimate = getattr(tpl, "estimate_minutes", None)
+    # Project membership: an unknown project is a 400, not a silently dropped field - the
+    # form offered real options, so a bad id is a stale client, and dropping it would file
+    # the card outside the outcome the AM watched themselves put it in.
+    if payload.project_id is not None and not db.get(Project, payload.project_id):
+        raise HTTPException(status_code=400, detail="That project doesn't exist.")
     task = Task(
         title=payload.title,
         description=description,
         client_id=payload.client_id,
+        project_id=payload.project_id,
         campaign=payload.campaign,
         content_type=content_type,
         account_manager_id=user.id if is_am else None,
@@ -1332,6 +1342,8 @@ def update_task(task_id: str, payload: TaskUpdateIn, user: User = Depends(get_cu
     data = payload.model_dump(exclude_unset=True)
     for fld in atrium_tasks.ONLY_ATRIUM:      # inert on a Sentinel row — it has no such columns
         data.pop(fld, None)
+    if data.get("project_id") is not None and not db.get(Project, data["project_id"]):
+        raise HTTPException(status_code=400, detail="That project doesn't exist.")
     # Field-level guards — everything else (title, dates, breakdown, notes) is free to whoever can edit:
     #  • atrium_visible (client bridge) -> managers only, mirrors /send-to-atrium
     #  • reassigning to someone else    -> team lead+ (delegation), employees can't reassign
@@ -1505,6 +1517,14 @@ def delete_task(task_id: str, user: User = Depends(get_current_user), db: Sessio
     _broadcast("deleted", task, user.id)  # while the row is still valid
     # comments + history cascade via the relationship; Atrium approvals have no cascade, so clear them.
     db.query(AtriumApproval).filter(AtriumApproval.task_id == task.id).delete()
+    # Work sessions have a bare FK too (models/work.py) — found 2026-09-02: any card that ever had
+    # Start Work pressed could not be deleted on Postgres (FK violation → 500). The time is part of
+    # the deleted record; nothing rolls it up once the task is gone.
+    from ..models import TaskSession
+    db.query(TaskSession).filter(TaskSession.task_id == task.id).delete()
+    # And a card someone else is parked "waiting on" must not block the delete — clear the pointer;
+    # those cards stay parked with their prose reason, they just no longer name a dead id.
+    db.query(Task).filter(Task.blocked_by_task_id == task.id).update({"blocked_by_task_id": None})
     db.delete(task)
     db.commit()
     audit.record(db, actor_id=user.id, table_name="tasks", record_id=task.id, action="delete",

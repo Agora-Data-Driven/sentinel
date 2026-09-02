@@ -497,6 +497,24 @@ CAPABILITIES: tuple[Capability, ...] = (
         default=frozenset(MANAGER_ROLES),
     ),
     Capability(
+        key="projects.view",
+        label="See the Projects page",
+        group="Operating system",
+        description=(
+            "Named outcomes with dates (Phase One first): milestones, linked work, health. "
+            "A management surface - the roles that read rollups, plus the viewer seat."
+        ),
+        default=frozenset(MANAGER_ROLES | {ROLE_VIEWER}),
+        write=False,
+    ),
+    Capability(
+        key="projects.manage",
+        label="Create and edit projects",
+        group="Operating system",
+        description="Create projects, edit them, add milestones and tick them done.",
+        default=_AM_PLUS,
+    ),
+    Capability(
         key="certifications.manage",
         label="Grant and revoke certifications",
         group="Operating system",
@@ -570,6 +588,8 @@ CAP_CLIENTS_VIEW = "clients.view"
 CAP_CLIENTS_ASSIGN_AM = "clients.assign_am"
 CAP_AI_DRAFT = "ai.draft"
 CAP_CERTIFICATIONS_MANAGE = "certifications.manage"
+CAP_PROJECTS_VIEW = "projects.view"
+CAP_PROJECTS_MANAGE = "projects.manage"
 
 
 def default_caps(role: str) -> frozenset[str]:
