@@ -2510,8 +2510,11 @@ window.TaskBoard = {
     // server's: `running` is true when it is on THIS card. Offered to whoever may edit the card and
     // only while the card is live work — not done, not filed, not parked (Resume comes first).
     const running = (t.sessions || []).find((s) => s.running && s.user_id === S.user.id);
-    const mayWork = !isAtrium && !readOnly && t.mine !== undefined ? (t.can_edit !== false) : (!isAtrium && !readOnly);
-    const workBtn = (!isAtrium && !readOnly && !done && !t.archived && !isParked(t) && mayWork)
+    const mayWork = t.mine !== undefined ? (t.can_edit !== false) : true;
+    // 🔴 Hidden entirely while ACTING AS someone — the server refuses time writes for them
+    // (security.forbid_while_acting), and a button that can only 403 is the dead-button failure.
+    const workBtn = (!isAtrium && !readOnly && !done && !t.archived && !isParked(t) && mayWork
+        && !(S.user && S.user.acting_as))
       ? (running
         ? `<button class="btn ghost" id="d-pause">${S.ICON.clock}Pause</button><span class="tb-timer" id="d-timer" data-started="${S.esc(running.started_at)}"></span>`
         : `<button class="btn success" id="d-start">${S.ICON.check}Start Work</button>`)

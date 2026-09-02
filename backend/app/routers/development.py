@@ -6,7 +6,7 @@ internal HMAC endpoint (see routers/internal.py).
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -55,7 +55,7 @@ from ..schemas import (
     SkillUpdateIn,
 )
 from ..capabilities import CAP_GROWTH_TEAM, CAP_READING_CANON
-from ..security import get_current_user, require_cap
+from ..security import forbid_while_acting, get_current_user, require_cap
 from ..serializers import (
     achievement_dict,
     body_metric_dict,
@@ -192,8 +192,11 @@ def _time_writer(db: Session, viewer: User, user_id: int | None) -> User:
 
 
 @router.post("/time/entries")
-def add_time_entry(payload: TimeEntryIn, viewer: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def add_time_entry(payload: TimeEntryIn, request: Request, viewer: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Log time the engine could not see — any dimension, Physical included."""
+    # 🔴 Never while acting-as (the Mastery Engine's own rule): typed minutes for somebody else are
+    # an admin correction, and corrections are made as YOURSELF, on the record.
+    forbid_while_acting(request, "log time")
     target = _time_writer(db, viewer, payload.user_id)
     return time_spent_svc.add_entry(db, target, viewer, day=payload.date, start=payload.start,
                                     minutes=payload.minutes, dimension=payload.dimension, note=payload.note)
@@ -208,24 +211,27 @@ def _entry_or_404(db: Session, viewer: User, entry_id: int) -> TimeEntry:
 
 
 @router.patch("/time/entries/{entry_id}")
-def update_time_entry(entry_id: int, payload: TimeEntryUpdateIn,
+def update_time_entry(entry_id: int, payload: TimeEntryUpdateIn, request: Request,
                       viewer: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    forbid_while_acting(request, "edit their time")
     entry = _entry_or_404(db, viewer, entry_id)
     return time_spent_svc.update_entry(db, entry, day=payload.date, start=payload.start, minutes=payload.minutes,
                                        dimension=payload.dimension, note=payload.note)
 
 
 @router.delete("/time/entries/{entry_id}")
-def delete_time_entry(entry_id: int, viewer: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def delete_time_entry(entry_id: int, request: Request, viewer: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    forbid_while_acting(request, "delete their time")
     time_spent_svc.delete_entry(db, _entry_or_404(db, viewer, entry_id))
     return {"ok": True}
 
 
 @router.post("/time/engine-edit")
-def edit_engine_time(payload: EngineSessionEditIn, viewer: User = Depends(get_current_user),
+def edit_engine_time(payload: EngineSessionEditIn, request: Request, viewer: User = Depends(get_current_user),
                      db: Session = Depends(get_db)):
     """Delete or trim one RECORDED engine session — the honesty edit ("I was only moving the mouse").
     Removal only: the engine's minutes can be shortened, never extended or moved (add a manual entry)."""
+    forbid_while_acting(request, "edit their engine time")
     target = _time_writer(db, viewer, payload.user_id)
     return time_spent_svc.edit_engine_session(target, day=payload.day, start=payload.start, end=payload.end,
                                               new_start=payload.new_start, new_end=payload.new_end)

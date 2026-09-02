@@ -775,6 +775,10 @@
             <button type="button" data-set-theme="light" title="Light mode" aria-label="Light mode">${ICON.sun}</button>
             <button type="button" data-set-theme="dark" title="Dark mode" aria-label="Dark mode">${ICON.moon}</button>
           </div>
+          ${/* Act as user — super admins only (the server enforces it; this just avoids a dead
+                button). While acting, the loud banner carries Stop, so no button is needed here. */""}
+          ${USER && USER.role === "super_admin" && !USER.acting_as
+            ? `<button class="iconbtn" id="actas-open" title="Act as user" aria-label="Act as user">${ICON.eye}</button>` : ""}
           <div style="position:relative">
             <button class="iconbtn" id="bell" aria-label="Notifications">${ICON.bell}<span class="bdot" id="bell-count" style="display:none"></span></button>
             <div class="notif-panel" id="notif-panel"></div>
@@ -799,6 +803,7 @@
     // Hub siblings render as tabs in the context bar under the topbar (flat rail, no accordions).
     renderContextBar(path);
     qs("#logout").onclick = doLogout;
+    const actBtn = qs("#actas-open"); if (actBtn) actBtn.onclick = openActAsPicker;
     // Light/dark toggle (setTheme is shared with the command palette)
     qsa("#theme-toggle button").forEach((b) => b.onclick = () => setTheme(b.dataset.setTheme));
     setTheme(document.documentElement.getAttribute("data-theme") || "light");
@@ -809,9 +814,60 @@
     initCommandPalette();
     mountAssistant();
     refreshWorkStrip();
+    renderActAsBanner();
     // A minute is the strip's own unit, so a minute is the poll — another tab's Start Work shows up
     // here within one. Cheap: one indexed SELECT on the person's open sessions.
     setInterval(refreshWorkStrip, 60000);
+  }
+
+  // ---------------- "Act as user" (2026-09-02) ----------------
+  // A SUPER ADMIN can browse Sentinel as any active user — the server swaps the current user on
+  // every request (security._apply_act_as), so the landing page, board, nav and capabilities are all
+  // genuinely the target's. The banner is deliberately loud: while it shows, every action lands as
+  // that person, and TIME writes (punches, timers, entries) are refused by the server.
+  function renderActAsBanner() {
+    const acting = USER && USER.acting_as;
+    if (!acting) return;
+    const bar = document.createElement("div");
+    bar.className = "actas-bar";
+    bar.innerHTML = `${ICON.eye || ICON.users}
+      <span>Viewing Sentinel as <b>${esc(USER.name)}</b> (${esc(USER.role_label || USER.role)}) —
+      signed in as ${esc(acting.real ? acting.real.name : "a super admin")}. Actions are recorded; time can't be logged for them.</span>
+      <button type="button" class="btn sm" id="actas-stop">Stop</button>`;
+    document.body.insertBefore(bar, document.body.firstChild);
+    qs("#actas-stop", bar).onclick = stopActingAs;
+  }
+
+  async function stopActingAs() {
+    try {
+      await api("/api/auth/act-as", { method: "POST", body: { user_id: null } });
+      location.reload();
+    } catch (e) { toast(e.detail || "Couldn't stop", "err"); }
+  }
+
+  async function openActAsPicker() {
+    let people = [];
+    try { people = await api("/api/people"); } catch (e) { toast(e.detail || "Couldn't load people", "err"); return; }
+    const real = (USER.acting_as && USER.acting_as.real) || USER;
+    const rows = (Array.isArray(people) ? people : [])
+      .filter((p) => p.is_active !== false && p.id !== real.id)
+      .map((p) => `<button type="button" class="pick-row" data-id="${p.id}" style="display:flex;align-items:center;gap:10px;width:100%;text-align:left;border:none;background:none;padding:9px 6px;border-radius:10px;cursor:pointer">
+        ${avatar(p, "sm")}<span><strong>${esc(p.name)}</strong><br><span class="sub" style="font-size:12px">${esc(p.role_label || p.role)}${p.team_name ? " · " + esc(p.team_name) : ""}</span></span></button>`).join("");
+    const m = modal({
+      title: "Act as user",
+      body: `<div class="form-hint" style="margin-bottom:8px">Browse Sentinel exactly as this person — their Today page, board, nav and permissions. A banner shows while you do, the start and stop are audited, and time can't be recorded for them.</div>
+        <div class="pick-list">${rows || '<div class="empty">Nobody else to act as.</div>'}</div>`,
+    });
+    qsa(".pick-row", m.root).forEach((b) => {
+      b.onmouseenter = () => b.style.background = "var(--hover)";
+      b.onmouseleave = () => b.style.background = "";
+      b.onclick = async () => {
+        try {
+          await api("/api/auth/act-as", { method: "POST", body: { user_id: +b.dataset.id } });
+          location.reload();
+        } catch (e) { toast(e.detail || "Couldn't act as them", "err"); }
+      };
+    });
   }
 
   // ---------------- "Working on …" strip ----------------
@@ -831,12 +887,16 @@
       const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = s % 60;
       return (h ? h + ":" : "") + String(m).padStart(2, "0") + ":" + String(ss).padStart(2, "0");
     };
+    // While ACTING AS someone, the strip shows THEIR running card read-only — pausing their timer
+    // is a time write the server refuses (security.forbid_while_acting), so no button is offered.
+    const acting = USER && USER.acting_as;
     host.innerHTML = `<i class="ws-pulse"></i>
       <a class="ws-title" href="/tasks?open=${a.task_id}" title="${esc(a.task_title || "")}">${esc(a.task_title || "Working")}</a>
       <span class="ws-time" id="ws-time">${fmt()}</span>
-      <button type="button" class="btn sm" id="ws-pause">Pause</button>`;
+      ${acting ? "" : `<button type="button" class="btn sm" id="ws-pause">Pause</button>`}`;
     host.hidden = false;
     workTick = setInterval(() => { const t = qs("#ws-time"); if (t) t.textContent = fmt(); }, 1000);
+    if (acting) return;
     qs("#ws-pause").onclick = async () => {
       try {
         await api("/api/tasks/sessions/pause", { method: "POST" });
@@ -1396,6 +1456,10 @@
       const a = [
         { group: "Actions", icon: currentTheme() === "dark" ? "sun" : "moon", label: `Switch to ${currentTheme() === "dark" ? "light" : "dark"} mode`, hint: "Theme", run: () => { setTheme(currentTheme() === "dark" ? "light" : "dark"); return true; } },
         { group: "Actions", icon: "bell", label: "Mark all notifications read", hint: "", run: async () => { try { await api("/api/notifications/read-all", { method: "PATCH" }); toast("All caught up", "ok"); setBadge(0); } catch (e) {} } },
+        // Act as user — the SUPER ADMIN's door (the server refuses everyone else); Stop appears
+        // whenever an act is on, whatever role the acted user has, or there'd be no way back.
+        ...(USER && USER.acting_as ? [{ group: "Actions", icon: "eye", label: "Stop acting as " + USER.name, hint: "Act as", run: () => { stopActingAs(); return true; } }] : []),
+        ...(USER && !USER.acting_as && USER.role === "super_admin" ? [{ group: "Actions", icon: "eye", label: "Act as user…", hint: "Super admin", run: () => { openActAsPicker(); return true; } }] : []),
         { group: "Actions", icon: "gear", label: "Change password", hint: "Account", run: () => { openChangePassword(); } },
         { group: "Actions", icon: "logout", label: "Log out", hint: "Account", run: doLogout },
       ];

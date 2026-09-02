@@ -2013,6 +2013,20 @@ Workstream Owner → Client Owner) is readiness, orthogonal to `role`; `certific
 `service_templates.required_certification` produce warnings at drafting. Enforcement is a later,
 separate decision.
 
+**"Act as user" (2026-09-02, same day).** A SUPER ADMIN can browse Sentinel as any active user —
+the Mastery Engine's act-as, estate-wide. `security._apply_act_as` swaps the resolved user on EVERY
+dependency (the session cookie stays the real person's; `sentinel_act_as` carries the target id and
+is inert unless the real session is a super admin — re-checked per request, so forging it grants
+nothing and acting is only ever a narrowing). Rules that hold it together: the `/api/auth/act-as`
+gate reads **`get_real_user`** (an acted-as employee must not re-point the act); 🔴 **time is never
+written while acting** (`forbid_while_acting` on punches, timer sessions, manual entries,
+engine edits — the ME keys its minutes to the real identity for the same reason); start/stop are
+audited to the REAL person while ordinary writes attribute to the target (that is what "as" means —
+the audit bracket is why that's acceptable); a deactivated target silently dissolves the act;
+logout clears it. UI: the loud orange `.actas-bar` with Stop, the topbar eye button + palette
+entry (`openActAsPicker` in app.js), `/api/auth/me` ships `acting_as.real`. Pinned by
+`tests/test_act_as.py`.
+
 **What did not change:** no new statuses (review and hold are flags on the five stages — D13); no pod
 entity (client AM + card holders express it); estimates are optional and template-defaulted
 (`estimate_minutes`), and the Monitor's relative band stays the truthful capacity default; the daily

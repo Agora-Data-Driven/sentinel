@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 60 * 24 * 7  # one week
     cookie_name: str = "sentinel_session"
+    # "Act as user" (2026-09-02): the target user id a SUPER ADMIN is currently viewing Sentinel as.
+    # A plain id, deliberately unsigned — it is inert unless the REAL session resolves to a super
+    # admin (security._apply_act_as re-checks on every request), and a super admin gains nothing by
+    # forging it. Mirrors the Mastery Engine's act-as.
+    act_as_cookie_name: str = "sentinel_act_as"
     secure_cookies: bool = False  # set true behind https in prod
 
     dev_login_enabled: bool = True  # /api/auth/dev-login — pick a seeded user, no OAuth
