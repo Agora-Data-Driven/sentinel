@@ -8,6 +8,7 @@ backend/.env
 badges/
 deploy/
 *.md
+!docs/HOW-SENTINEL-WORKS.md
 .git
 .gitignore
 cookies*.txt

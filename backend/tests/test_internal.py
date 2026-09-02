@@ -97,3 +97,19 @@ def test_user_lookup_disabled_without_secret(client, make_user, monkeypatch):
     r = client.get("/api/internal/user-lookup", params={"email": "staff@agora.ph"},
                    headers=_sig("user-lookup", _now(), secret=""))
     assert r.status_code == 503
+
+
+# --- sentinel-guide: the AI Assistant's self-knowledge doc (2026-09-02) -----------------------
+def test_sentinel_guide_serves_the_doc(client):
+    r = client.get("/api/internal/sentinel-guide", headers=_sig("sentinel-guide", _now()))
+    assert r.status_code == 200
+    body = r.json()
+    assert body["found"] is True
+    assert "Sentinel" in body["guide"] and len(body["guide"]) > 2000
+    assert isinstance(body["updated"], int)
+
+
+def test_sentinel_guide_requires_the_signature(client):
+    assert client.get("/api/internal/sentinel-guide").status_code in (401, 403)
+    bad = _sig("wrong-purpose", _now())
+    assert client.get("/api/internal/sentinel-guide", headers=bad).status_code in (401, 403)

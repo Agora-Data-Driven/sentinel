@@ -974,8 +974,8 @@
 
     const fab = document.createElement("button");
     fab.id = "coach-fab";
-    fab.setAttribute("aria-label", "Open your coach");
-    fab.innerHTML = `${ICON.sparkle}<span>Coach</span>`;
+    fab.setAttribute("aria-label", "Open the AI assistant");
+    fab.innerHTML = `${ICON.sparkle}<span>AI Assistant</span>`;
     if (onEnginePage) fab.classList.add("on-engine-page");
     document.body.appendChild(fab);
 
@@ -983,8 +983,8 @@
     panel.id = "coach-panel";
     panel.innerHTML = `
       <div id="coach-head">
-        <div class="t">${ICON.sparkle}<div>Your Coach<small>Knows your growth: learning, training, goals</small></div></div>
-        <button type="button" class="x-close" id="coach-x" aria-label="Close coach">${ICON.x}</button>
+        <div class="t">${ICON.sparkle}<div>AI Assistant<small>Knows Sentinel, your work and your growth</small></div></div>
+        <button type="button" class="x-close" id="coach-x" aria-label="Close assistant">${ICON.x}</button>
       </div>
       <div id="coach-frame-wrap" style="flex:1;display:flex"></div>`;
     document.body.appendChild(panel);
@@ -1031,6 +1031,22 @@
     const RESUME = ["headline", "resume_text", "resume_file_url"];
     const READ = ["status", "reflection", "rating"];
     const AREA = ["deadline", "other_info"];
+    // --- SENTINEL OPS (2026-09-02): the assistant can DO what the user can do -------------------
+    // Same contract as the profile ops above: fixed endpoints, whitelisted bodies, executed with
+    // the USER's own cookie + CSRF only AFTER their explicit Approve tap in the chat. So every
+    // permission rule (task_perms, capabilities, review gate, delegation) applies exactly as if
+    // they clicked the UI themselves - "the AI did it" is always also "the user approved it".
+    const TASKC = ["title", "description", "client_id", "project_id", "campaign", "content_type",
+      "service_key", "assigned_team_id", "assigned_to_id", "support_ids", "estimate_minutes",
+      "priority", "status", "due_date", "start_date", "labels", "maintasks", "deliverable_url",
+      "internal_notes", "client_facing_notes", "share_with_client"];
+    const TASKU = ["title", "description", "client_id", "project_id", "campaign", "content_type",
+      "assigned_team_id", "assigned_to_id", "support_ids", "estimate_minutes", "priority",
+      "due_date", "start_date", "labels", "maintasks", "deliverable_url", "internal_notes",
+      "client_facing_notes", "origin"];
+    const PROJ = ["name", "goal", "owner_id", "target_date", "status", "milestones"];
+    const MS = ["project_id", "title", "detail", "target_date"];
+    const MSU = ["title", "detail", "target_date", "done", "position"];
 
     function coachExecute(action) {
       const a = action || {}, args = a.args || {}, id = args.id;
@@ -1064,6 +1080,25 @@
         case "set_gym_week": return api(`${GYM}/plan/week`, { method: "POST", body: { week: args.week || {}, ...(args.cardio ? { cardio: args.cardio } : {}) } });
         case "set_gym_day": return api(`${GYM}/plan/day`, { method: "POST", body: pick(args, ["date", "day_type", "cardio"]) });
         case "clear_gym_day": return api(`${GYM}/plan/day/${args.date}`, { method: "DELETE" });
+        // --- Sentinel ops (see the whitelists above) ---------------------------------------
+        case "create_task": return api("/api/tasks", { method: "POST", body: pick(args, TASKC) });
+        case "update_task": return api(`/api/tasks/${id}`, { method: "PATCH", body: pick(args, TASKU) });
+        case "move_task": return api(`/api/tasks/${id}/status`, { method: "PATCH", body: pick(args, ["status"]) });
+        case "park_task": return api(`/api/tasks/${id}/park`, { method: "POST", body: pick(args, ["reason", "kind", "blocked_by_task_id"]) });
+        case "resume_task": return api(`/api/tasks/${id}/resume`, { method: "POST" });
+        case "delete_task": return api(`/api/tasks/${id}`, { method: "DELETE" });
+        case "comment_task": return api(`/api/tasks/${id}/comments`, { method: "POST", body: pick(args, ["body"]) });
+        case "submit_review": return api(`/api/tasks/${id}/review/submit`, { method: "POST" });
+        case "approve_review": return api(`/api/tasks/${id}/review/approve`, { method: "POST" });
+        case "request_changes": return api(`/api/tasks/${id}/review/request-changes`, { method: "POST", body: pick(args, ["note"]) });
+        case "start_work": return api(`/api/tasks/${id}/sessions/start`, { method: "POST" });
+        case "pause_work": return api("/api/tasks/sessions/pause", { method: "POST" });
+        case "clock": return api("/api/attendance/self-event", { method: "POST", body: pick(args, ["action"]) });
+        case "create_project": return api("/api/projects", { method: "POST", body: pick(args, PROJ) });
+        case "update_project": return api(`/api/projects/${id}`, { method: "PATCH", body: pick(args, PROJ) });
+        case "add_milestone": return api(`/api/projects/${args.project_id}/milestones`, { method: "POST", body: pick(args, MS) });
+        case "update_milestone": return api(`/api/projects/milestones/${id}`, { method: "PATCH", body: pick(args, MSU) });
+        case "set_account_manager": return api(`/api/ops/clients/${args.client_id}/account-manager`, { method: "PATCH", body: pick(args, ["account_manager_id"]) });
         default: return Promise.reject(new Error("Unknown action: " + a.op));
       }
     }
@@ -1077,10 +1112,12 @@
         await coachExecute(d.action);
         const label = (d.action && d.action.summary) || "Updated";
         reply(true, label);
-        toast("Coach: " + label, "ok");
+        toast("Assistant: " + label, "ok");
         // Refresh whichever page is showing (Development hub or Gym) so the change appears at once.
         if (window.SentinelReloadDevelopment) window.SentinelReloadDevelopment();
         if (window.SentinelReloadGym) window.SentinelReloadGym();
+        if (window.SentinelReloadBoard) window.SentinelReloadBoard();
+        try { refreshWorkStrip(); } catch (x) { /* strip not mounted */ }
       } catch (err) {
         reply(false, err.detail || err.message || "Couldn't apply that");
       }

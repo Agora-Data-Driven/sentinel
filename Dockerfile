@@ -12,6 +12,9 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 # App code: backend at /app, frontend at /frontend (sibling, matching local layout).
 COPY backend /app
 COPY frontend /frontend
+# The AI Assistant's Sentinel self-knowledge - served by /api/internal/sentinel-guide, so it
+# must ride in the image (the .dockerignore un-ignores it from the *.md rule).
+COPY docs/HOW-SENTINEL-WORKS.md /docs/HOW-SENTINEL-WORKS.md
 
 # Run as a non-root user.
 RUN chmod +x /app/entrypoint.sh && useradd -m sentinel && chown -R sentinel /app /frontend
