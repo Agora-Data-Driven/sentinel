@@ -397,3 +397,30 @@ def test_meta_lists_hold_kinds_and_stages(client, auth, worker):
     m = client.get("/api/ops/meta").json()
     assert m["hold_kinds"]["client"] == "Waiting on client"
     assert [s["key"] for s in m["stages"]] == C.WORKER_STAGES
+
+
+def test_a_worked_on_and_waited_on_card_can_still_be_deleted(client, db, auth, make_user, make_team):
+    """Found 2026-09-02, the go-live wipe: `task_sessions` carries a bare FK to tasks (no cascade),
+    so deleting any card that ever had Start Work pressed raised an FK violation on Postgres — and a
+    card another task was parked "waiting on" hit the same wall via `blocked_by_task_id`. The delete
+    route clears both."""
+    from app import constants as C
+    from app.models import Task, TaskSession
+
+    team = make_team(name="Ops")
+    boss = make_user(C.ROLE_SUPER_ADMIN, name="Boss")
+    worker = make_user(C.ROLE_EMPLOYEE, team_id=team.id, name="W")
+    auth(worker)
+    t1 = Task(title="Worked on", status=C.TASK_TODO, assigned_team_id=team.id, assigned_to_id=worker.id)
+    db.add(t1)
+    db.commit()
+    assert client.post(f"/api/tasks/{t1.id}/sessions/start").status_code == 200
+    auth(boss)
+    t2 = client.post("/api/tasks", json={"title": "Waits on it"}).json()
+    assert client.post(f"/api/tasks/{t2['id']}/park",
+                       json={"kind": "task", "blocked_by_task_id": t1.id, "reason": "x"}).status_code == 200
+    assert client.delete(f"/api/tasks/{t1.id}").json()["ok"]
+    assert db.query(TaskSession).filter(TaskSession.task_id == t1.id).count() == 0
+    left = db.get(Task, t2["id"])
+    db.refresh(left)
+    assert left.blocked_by_task_id is None

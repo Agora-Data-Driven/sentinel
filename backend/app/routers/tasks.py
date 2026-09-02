@@ -1517,6 +1517,14 @@ def delete_task(task_id: str, user: User = Depends(get_current_user), db: Sessio
     _broadcast("deleted", task, user.id)  # while the row is still valid
     # comments + history cascade via the relationship; Atrium approvals have no cascade, so clear them.
     db.query(AtriumApproval).filter(AtriumApproval.task_id == task.id).delete()
+    # Work sessions have a bare FK too (models/work.py) — found 2026-09-02: any card that ever had
+    # Start Work pressed could not be deleted on Postgres (FK violation → 500). The time is part of
+    # the deleted record; nothing rolls it up once the task is gone.
+    from ..models import TaskSession
+    db.query(TaskSession).filter(TaskSession.task_id == task.id).delete()
+    # And a card someone else is parked "waiting on" must not block the delete — clear the pointer;
+    # those cards stay parked with their prose reason, they just no longer name a dead id.
+    db.query(Task).filter(Task.blocked_by_task_id == task.id).update({"blocked_by_task_id": None})
     db.delete(task)
     db.commit()
     audit.record(db, actor_id=user.id, table_name="tasks", record_id=task.id, action="delete",
