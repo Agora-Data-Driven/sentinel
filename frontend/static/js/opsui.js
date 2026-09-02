@@ -1,9 +1,11 @@
 /* Shared drawing for the operating-system pages (2026-09-02): Today (today.js), the AM's landing
-   (accounts.js), Operations (ops.js), Clients (clients.js) and the Calendar (calendar.js).
+   (accounts.js), Operations (ops.js), Clients (clients.js), Projects (projects.js) and the
+   Calendar (calendar.js).
 
    One row shape for one task, everywhere — title with a priority dot, one grey meta line, a due chip
    — because the mockup review found the old strip unreadable precisely where every row carried five
-   competing signals. Everything here is READ-ONLY drawing; the writes stay in the pages and in the
+   competing signals. Everything here is READ-ONLY drawing plus ONE shared write flow (the AI
+   planner, which proposes and lets a human create); the other writes stay in the pages and in the
    board's own record (taskboard.js).
 
    🔴 Stage, never the status LABEL: statuses are renameable in Manage (D13), so every test here goes
@@ -122,6 +124,117 @@ window.OpsUI = (() => {
     });
   }
 
+  /* ---------------- The AI planner (2026-09-02) ----------------------------------------------
+     ONE shared flow for "describe what was agreed → AI proposes tasks → a human edits and creates",
+     reachable from the Task Board, a project page and (via the same endpoint) the client drill-down.
+     The owner's design, verbatim: "the AI is the one who creates the tasks and suggests assignees,
+     but the account manager can just override it."
+
+     Rules it inherits, not invents: /api/ops/ai/draft-tasks PROPOSES only; every kept proposal is
+     POSTed to /api/tasks where all the usual permission/label/origin rules apply; warnings (leave,
+     load, stage-needs-reviewer, certification) come computed from Sentinel's own facts. The
+     OVERRIDE is real: title and assignee are editable per proposal before anything is created. */
+  async function openAiPlanner(S, opts = {}) {
+    S_ = S;
+    const m = await meta(S);
+    // The client list: the ops rollup for those who can see it; the board's own picker data
+    // otherwise. Fail-soft — "no client" (internal work) is always a valid answer.
+    let clients = [];
+    try {
+      if (S.hasCap("clients.view")) clients = ((await S.api("/api/ops/clients")).clients || []).map((r) => r.client);
+      else clients = (await S.api("/api/clients").catch(() => [])) || [];
+    } catch (e) { /* internal-only planning still works */ }
+    let people = [];
+    try { people = (await S.api("/api/people")).filter((p) => p.is_active !== false); } catch (e) {}
+    const peopleOpts = (sel) => `<option value="">Department queue</option>` +
+      people.map((p) => `<option value="${p.id}" ${p.id === sel ? "selected" : ""}>${S.esc(p.name)}</option>`).join("");
+
+    const modal = S.modal({
+      title: "✦ Plan work with AI",
+      body: `<div class="os-ai">
+        ${m.ai_enabled ? "" : `<div class="notice warn"><b>AI drafting isn't switched on for this deployment.</b> The New Task form always works.</div>`}
+        <div class="tf-rows">
+          <div class="tf-row"><div class="k">Client</div><div class="v"><select id="pl-client">
+            <option value="">No client — internal work</option>
+            ${clients.map((c) => `<option value="${c.id}" ${String(c.id) === String(opts.client_id || "") ? "selected" : ""}>${S.esc(c.name)}</option>`).join("")}
+          </select></div></div>
+        </div>
+        <label style="display:block;margin-top:10px">What was agreed? Say it like you'd say it to a colleague.
+          <textarea id="pl-in" rows="3" placeholder="We promised the September Meta analysis before Thursday's meeting — analysis first, then three findings added to the report."></textarea></label>
+        <div class="row" style="gap:10px;align-items:center;margin-top:8px">
+          <button class="btn primary" id="pl-go" ${m.ai_enabled ? "" : "disabled"}>Draft tasks</button>
+          <span class="muted" style="font-size:13px">Suggested assignee = who already holds this client's work in that department, checked against stage, leave and load. You can override everything.</span>
+        </div>
+        <div id="pl-out"></div>
+      </div>`,
+    });
+    const root = modal.root;
+    S.qs("#pl-in", root).focus();
+
+    S.qs("#pl-go", root).onclick = async () => {
+      const text = S.qs("#pl-in", root).value.trim();
+      if (text.length < 3) { S.toast("Say what was agreed first", "err"); return; }
+      const out = S.qs("#pl-out", root);
+      const go = S.qs("#pl-go", root);
+      out.innerHTML = `<div class="os-empty">Reading the request, the open cards, who holds them, leave and load…</div>`;
+      go.disabled = true;
+      let d;
+      const clientId = +S.qs("#pl-client", root).value || null;
+      try { d = await S.api("/api/ops/ai/draft-tasks", { method: "POST", body: { text, client_id: clientId } }); }
+      catch (e) {
+        out.innerHTML = `<div class="notice warn"><b>AI unavailable — file it by hand.</b> ${S.esc(e.detail || "")}</div>`;
+        go.disabled = false; return;
+      }
+      go.disabled = false;
+      const props = d.proposals || [];
+      out.innerHTML = `<div class="card os-props">${props.map((p, i) => `
+        <div class="os-prop" data-i="${i}">
+          <div class="os-prop-main">
+            <input class="os-prop-title" value="${S.esc(p.title)}" aria-label="Task ${i + 1} title">
+            <div class="os-meta wrap">
+              <select class="os-prop-assignee" aria-label="Assignee">${peopleOpts(p.assigned_to_id)}</select>
+              · ${S.esc(p.department || "no department")} · due <input type="date" class="os-prop-due" value="${p.due_date || ""}">
+              ${p.estimate_minutes ? ` · ~${fmtMin(p.estimate_minutes)}` : ""}${p.reviewer ? ` · reviewer ${S.esc(p.reviewer.name)}` : ""}${p.depends_on ? ` · waits on task ${p.depends_on}` : ""}</div>
+            ${p.why ? `<div class="os-why-line">${S.esc(p.why)}</div>` : ""}
+            ${(p.warnings || []).map((w) => `<div class="os-warn-line">${S.esc(w)}</div>`).join("")}
+          </div>
+          <label class="os-prop-keep"><input type="checkbox" checked> keep</label>
+        </div>`).join("")}
+        <div class="os-prop-foot"><button class="btn primary" id="pl-create">Create the kept tasks</button><span class="muted" style="font-size:13px">Nothing exists until you press this. Same permissions and rules as New Task.</span></div>
+      </div>`;
+      S.qs("#pl-create", root).onclick = async () => {
+        const keep = [...out.querySelectorAll(".os-prop")].filter((el) => el.querySelector(".os-prop-keep input").checked);
+        if (!keep.length) { S.toast("Nothing kept", "err"); return; }
+        const created = {};   // proposal index → task id, for dependencies
+        let n = 0;
+        for (const el of keep) {
+          const p = props[+el.dataset.i];
+          const title = el.querySelector(".os-prop-title").value.trim() || p.title;
+          const assignee = +el.querySelector(".os-prop-assignee").value || null;
+          const due = el.querySelector(".os-prop-due").value || null;
+          try {
+            const t = await S.api("/api/tasks", { method: "POST", body: {
+              title, description: p.description, client_id: clientId,
+              assigned_team_id: p.assigned_team_id, assigned_to_id: assignee,
+              due_date: due, estimate_minutes: p.estimate_minutes,
+              project_id: opts.project_id || null, priority: "Medium",
+            } });
+            created[p.index] = t.id; n++;
+            // "Waits on task N": park it as waiting on another card so it is visibly not live yet.
+            if (p.depends_on && created[p.depends_on]) {
+              await S.api(`/api/tasks/${t.id}/park`, { method: "POST", body: { kind: "task", blocked_by_task_id: created[p.depends_on], reason: `Starts when task ${created[p.depends_on]} is approved.` } }).catch(() => {});
+            }
+          } catch (e) { S.toast(`“${title}”: ${e.detail || "couldn't create"}`, "err"); }
+        }
+        if (n) {
+          S.toast(`Created ${n} task${n === 1 ? "" : "s"}`, "ok");
+          modal.close();
+          if (opts.onDone) opts.onDone(); else location.reload();
+        }
+      };
+    };
+  }
+
   return { PH_TODAY, dayDiff, plural, meta, stageOf, isDone, isParked, prioRank, fmtMin, dueChip,
-           taskRow, list, head, healthPill, band, clientsTable, wireClientRows };
+           taskRow, list, head, healthPill, band, clientsTable, wireClientRows, openAiPlanner };
 })();

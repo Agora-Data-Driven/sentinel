@@ -369,6 +369,9 @@ def task_card(t: Task, db: Session, viewer: User | None = None,
         "labels": _loads(t.labels_json, []),
         "client_id": t.client_id,
         "client_name": client.name if client else None,
+        # Project MEMBERSHIP only - the name is resolved in `task_detail` (one row) and by the
+        # Projects page itself; resolving it per card would be a per-card read (query budget).
+        "project_id": getattr(t, "project_id", None),
         # 🔴 ON THE CARD, not just the drawer (2026-08-11). `campaign` is the optional grouping field
         # (docs/TASKBOARD_REBUILD.md §7), and per §4 of the task-placement guidelines it is the ONLY
         # thing that still connects work raised after a campaign launched: each of those is its own
@@ -420,6 +423,15 @@ def task_card(t: Task, db: Session, viewer: User | None = None,
     }
 
 
+def _project_ref(db: Session, project_id: int | None) -> dict | None:
+    """{id, name} for the drawer — detail-only (one row), never per card (query budget)."""
+    if not project_id:
+        return None
+    from .models import Project
+    p = db.get(Project, project_id)
+    return {"id": p.id, "name": p.name} if p else None
+
+
 def task_detail(t: Task, db: Session, viewer: User | None = None) -> dict:
     """Full task incl. internal fields (Sentinel users are all internal staff).
 
@@ -450,6 +462,7 @@ def task_detail(t: Task, db: Session, viewer: User | None = None) -> dict:
 
             "account_manager_id": t.account_manager_id,
             "account_manager": user_public(am),
+            "project": _project_ref(db, getattr(t, "project_id", None)),
             "assigned_team_name": team.name if team else None,
             # 🔴 `checklist` (the legacy flat list) was dropped from this payload 2026-08-04 (WP
             # 0.4). `maintasks` is the two-level breakdown every surface actually renders, and

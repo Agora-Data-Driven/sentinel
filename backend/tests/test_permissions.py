@@ -54,6 +54,9 @@ _ORIGINAL_GATES = [
     ("clients.assign_am", (C.ROLE_ACCOUNT_MANAGER, C.ROLE_ADMIN, C.ROLE_SUPER_ADMIN)),
     ("ai.draft", (C.ROLE_TEAM_LEAD, C.ROLE_ACCOUNT_MANAGER, C.ROLE_ADMIN, C.ROLE_SUPER_ADMIN)),
     ("certifications.manage", "min:team_lead"),
+    # The thin project layer (2026-09-02) - designed gates, like the operating-system rows above.
+    ("projects.view", (C.ROLE_TEAM_LEAD, C.ROLE_ACCOUNT_MANAGER, C.ROLE_ADMIN, C.ROLE_SUPER_ADMIN, C.ROLE_VIEWER)),
+    ("projects.manage", (C.ROLE_ACCOUNT_MANAGER, C.ROLE_ADMIN, C.ROLE_SUPER_ADMIN)),
 ]
 
 

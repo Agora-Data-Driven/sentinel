@@ -156,6 +156,9 @@
     // Operating-system release (2026-09-02). Clients follows its CAPABILITY (AM+ and the viewer seat
     // by default), the Calendar is everyone's — it is a projection of the board they already see.
     { href: "/clients", label: "Clients", icon: "building", cap: "clients.view" },
+    // Projects (2026-09-02): named outcomes with dates — a management surface, so it follows
+    // its capability (managers + the viewer seat by default).
+    { href: "/projects", label: "Projects", icon: "target", cap: "projects.view" },
     { href: "/tasks", label: "Task Board", icon: "board" },
     { href: "/calendar", label: "Calendar", icon: "calendar" },
     // The four Growth tabs mirror the Overview's four dimensions one-to-one:

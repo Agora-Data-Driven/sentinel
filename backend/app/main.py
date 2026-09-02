@@ -39,6 +39,7 @@ from .routers import (
     meta,
     notifications,
     ops,
+    projects,
     payroll,
     people,
     permissions,
@@ -207,6 +208,9 @@ def _ensure_columns() -> None:
         ("clients", "account_manager_id", "INTEGER"),
         ("service_templates", "estimate_minutes", "INTEGER"),
         ("service_templates", "required_certification", "VARCHAR(60)"),
+        # The thin project layer (2026-09-02): which named outcome a card belongs to. The two
+        # tables arrive via create_all; this row is the column's path to production.
+        ("tasks", "project_id", "INTEGER"),
     ]
     try:
         insp = inspect(engine)
@@ -521,7 +525,7 @@ def _startup_safeguards() -> None:
 # `dev` is registered UNCONDITIONALLY and gates itself per request (routers/dev.py): making the
 # route's existence depend on a setting's value at import time is how an endpoint ends up "gone"
 # in one worker and live in another.
-for r in (auth, attendance, gym, tasks, people, leave, notifications, reports, admin, meta, manage, payroll, permissions, cron, stream, internal, development, ops, dev):
+for r in (auth, attendance, gym, tasks, people, leave, notifications, reports, admin, meta, manage, payroll, permissions, cron, stream, internal, development, ops, projects, dev):
     app.include_router(r.router)
 
 
@@ -709,6 +713,7 @@ _PAGES = {
     # role-shaped landing (Today / My accounts / Operations) is the existing /dashboard page.
     "/calendar": "calendar.html",
     "/clients": "clients.html",
+    "/projects": "projects.html",
     "/kiosk": "kiosk.html",
     "/scanner": "scanner.html",
 }

@@ -428,6 +428,8 @@ class TaskCreateIn(BaseModel):
     # SUPPORT — many, none accountable (models.TaskSupporter). Naming anyone but yourself here is
     # DELEGATION and is refused for a role that may not delegate, exactly like `assigned_to_id`.
     support_ids: list[int] = Field(default_factory=list)
+    # The PROJECT this card belongs to (models/project.py) - optional membership in a named outcome.
+    project_id: int | None = None
     # Estimated effort in minutes — optional; blank takes the service template's default (2026-09-02).
     estimate_minutes: int | None = Field(default=None, ge=0, le=24 * 60 * 10)
     priority: str = "Medium"
@@ -514,6 +516,7 @@ class TaskUpdateIn(BaseModel):
     # omits the field silently CLEAR the support list, which is the kind of quiet data loss the
     # breakdown's owner-diff guard exists to prevent.
     support_ids: list[int] | None = None
+    project_id: int | None = None
     estimate_minutes: int | None = Field(default=None, ge=0, le=24 * 60 * 10)
     priority: str | None = None   # honored only for roles that can_prioritize; ignored otherwise
     # planned | added (constants.ORIGIN_*). A CORRECTION to what task_origin.classify derived at
@@ -710,6 +713,38 @@ class AiDraftIn(BaseModel):
     """Plain words → proposed tasks. `client_id` grounds the roster; optional."""
     text: str = Field(min_length=3, max_length=4000)
     client_id: int | None = None
+
+
+class MilestoneIn(BaseModel):
+    title: str
+    detail: str | None = None
+    target_date: date | None = None
+
+
+class MilestoneUpdateIn(BaseModel):
+    title: str | None = None
+    detail: str | None = None
+    target_date: date | None = None
+    done: bool | None = None
+    position: int | None = None
+
+
+class ProjectIn(BaseModel):
+    """A named outcome with a date (models/project.py). Milestones may ride along on create so
+    "Phase One" arrives whole instead of as nine clicks."""
+    name: str
+    goal: str | None = None
+    owner_id: int | None = None
+    target_date: date | None = None
+    milestones: list[MilestoneIn] = Field(default_factory=list)
+
+
+class ProjectUpdateIn(BaseModel):
+    name: str | None = None
+    goal: str | None = None
+    owner_id: int | None = None
+    target_date: date | None = None
+    status: str | None = None   # active | done | archived - validated in the router
 
 
 class ActAsIn(BaseModel):

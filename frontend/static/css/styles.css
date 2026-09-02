@@ -1726,3 +1726,47 @@ a.day-item:hover { border-color:var(--green-line); box-shadow:var(--shadow-sm); 
 .actas-bar b { font-weight: 800; }
 .actas-bar .btn { background: rgba(255,255,255,.16); border-color: rgba(255,255,255,.45); color: #fff; padding: 3px 12px; font-size: 12px; }
 .actas-bar .btn:hover { background: rgba(255,255,255,.28); }
+
+
+/* ---------------- Projects (2026-09-02) ----------------
+   Named outcomes with dates. Reuses the operating-system vocabulary (.os-row, .os-health,
+   .os-props); only the list card, the milestone checklist and the tiny progress bar are new. */
+.pr-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }
+.pr-card { display: flex; flex-direction: column; gap: 8px; text-decoration: none; color: var(--text); }
+.pr-card:hover { border-color: var(--accent); }
+.pr-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 16px; }
+.pr-goal { color: var(--muted); font-size: 13px; line-height: 1.45; }
+.pr-goal-card { color: var(--muted); line-height: 1.55; margin-bottom: 14px; }
+.pr-ms { display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--muted); }
+.pr-bar { flex: 1; height: 6px; border-radius: 999px; background: var(--hover); overflow: hidden; }
+.pr-bar i { display: block; height: 100%; border-radius: 999px; background: var(--accent); }
+.pr-next { font-size: 12.5px; color: var(--muted); }
+.pr-stats { display: flex; gap: 14px; font-size: 12.5px; color: var(--muted); }
+.pr-stats b { color: var(--text); }
+.pr-stats .bad b { color: var(--danger); }
+.pr-stats .warn b { color: var(--warning); }
+.pr-foot { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted);
+  border-top: 1px solid var(--border); padding-top: 8px; margin-top: auto; }
+.pr-mrow { display: flex; align-items: flex-start; gap: 10px; padding: 9px 6px;
+  border-bottom: 1px solid var(--border); cursor: pointer; }
+.pr-mrow:last-of-type { border-bottom: none; }
+.pr-mrow input[type="checkbox"] { margin-top: 3px; }
+.pr-mrow.done .pr-mtitle { color: var(--muted); text-decoration: line-through; }
+.pr-mtitle { flex: 1; line-height: 1.4; }
+.pr-mdetail { display: block; font-size: 12.5px; color: var(--muted); text-decoration: none; }
+.pr-mright { display: flex; align-items: center; gap: 8px; font-size: 12.5px; white-space: nowrap; }
+.pr-msadd { display: flex; gap: 8px; padding-top: 10px; }
+.pr-msadd input[type="text"], .pr-msadd input:not([type]) { flex: 1; }
+/* Planner overrides: the assignee/date inside a proposal row stay compact. */
+.os-prop-assignee { font-size: 12.5px; padding: 2px 6px; max-width: 180px; }
+.os-prop-due { font-size: 12.5px; padding: 2px 6px; }
+.crumb { font-size: 12.5px; color: var(--muted); }
+.crumb a { color: var(--muted); }
+
+/* Projects fixups: the global input sizing makes a bare checkbox stretch — pin the milestone row's
+   pieces explicitly so the row reads checkbox · title · date/remove, whatever the form defaults. */
+.pr-mrow input[type="checkbox"] { width: 16px; height: 16px; flex: 0 0 auto; margin: 3px 0 0; }
+.pr-mrow .pr-mtitle { flex: 1 1 auto; min-width: 0; }
+.pr-mrow .pr-mright { flex: 0 0 auto; }
+.pr-msadd #ms-title { flex: 1 1 auto; min-width: 0; }
+.pr-msadd input[type="date"] { flex: 0 0 auto; width: auto; }

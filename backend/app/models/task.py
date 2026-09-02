@@ -146,6 +146,11 @@ class Task(Base):
     internal_notes: Mapped[str | None] = mapped_column(Text, nullable=True)  # 🔒 internal
     client_facing_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # The PROJECT this card belongs to (models/project.py, 2026-09-02) — membership, nothing
+    # more: no field of the project rides on the card, and the rollup derives everything.
+    # Internal-only like every grouping field; never in task_bridge.SAFE.
+    project_id: Mapped[int | None] = mapped_column(ForeignKey("projects.id"), nullable=True, index=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 

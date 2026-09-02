@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Task Board · Sentinel</title>
+  <title>Projects · Sentinel</title>
   <link rel="icon" href="/static/favicon.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -11,15 +11,13 @@
   <link rel="stylesheet" href="/static/css/styles.css">
   <link rel="manifest" href="/manifest.json">
 </head>
-<body data-title="Task Board">
+<body data-title="Projects">
   <div id="view"></div>
-  <!-- taskboard.js is the mountable component (TaskBoard.mount); tasks.js is the page that mounts
-       it. It was embedded in the dashboard from 2026-07-26 until 2026-08-03, when it got its own
-       page back (decision D7) — /dashboard?open=<id> still forwards here for the notifications
-       minted in that window. -->
+  <!-- Named outcomes with dates (models/project.py). The list, and ?project=<id> for one outcome:
+       goal, milestone checklist, linked cards. Work is created via the shared AI planner
+       (OpsUI.openAiPlanner) or the board's New Task form — never a second editor here. -->
   <script src="/static/js/app.js"></script>
   <script src="/static/js/opsui.js"></script>
-  <script src="/static/js/taskboard.js"></script>
-  <script src="/static/js/tasks.js"></script>
+  <script src="/static/js/projects.js"></script>
 </body>
 </html>

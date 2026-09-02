@@ -27,6 +27,12 @@ REVIEW_STALE_HOURS = 24
 REPEAT_CHANGES_DAYS = 30
 STALLED_LEARNER_DAYS = 14
 COVER_LOOKAHEAD_DAYS = 2
+# The go-live reset (owner decision, 2026-09-02): the board was wiped and measurement starts
+# from THIS day. The stalled-learner flag reads a trailing window, so until the window fits
+# entirely after the baseline a quiet fortnight is a fact about the old era, not the new
+# system - no learner exception is raised before then. Engine PROGRESS was deliberately NOT
+# reset; only the measurement clock starts over.
+MEASUREMENT_BASELINE = __import__('datetime').date(2026, 9, 2)
 
 
 def _exc(sev: str, title: str, detail: str, owner: User | None, action: str, href: str, kind: str) -> dict:
@@ -169,7 +175,8 @@ def exceptions(db: Session, viewer: User) -> dict:
         # "nobody trained" — the same rule team_growth itself prints — so no learner exception is
         # raised at all while `engine_error` is set. Only the workforce is measured: the roles that
         # hold live client work, not admins or the account managers.
-        if not growth.get("engine_error"):
+        baseline_ready = (today - MEASUREMENT_BASELINE).days >= STALLED_LEARNER_DAYS
+        if not growth.get("engine_error") and baseline_ready:
             for r in growth.get("rows") or []:
                 if r.get("active_days") == 0 and r.get("attempts") == 0 and r.get("user"):
                     u = users.get(r["user"].get("id"))
