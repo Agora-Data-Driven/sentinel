@@ -1024,6 +1024,9 @@ window.TaskBoard = {
   S.qs("#f-campaign").onchange = (e) => { campaign = e.target.value; render(); };
   if (S.qs("#f-assignee")) S.qs("#f-assignee").onchange = (e) => { filters.assignee_id = e.target.value; load(); };
   if (canCreate) S.qs("#new-task").onclick = () => taskForm(null);
+  // The AI Assistant executes approved actions through app.js; this hook lets the board
+  // reflect a created/moved/parked card at once (guarded there - other pages have no board).
+  window.SentinelReloadBoard = () => load();
   const planBtn = S.qs("#plan-ai");
   if (planBtn) planBtn.onclick = () => window.OpsUI.openAiPlanner(S, { onDone: () => load() });
   S.qs("#past-work").onclick = () => showPastWork();

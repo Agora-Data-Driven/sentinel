@@ -2054,6 +2054,32 @@ Mastery Engine progress were deliberately untouched. `operations.MEASUREMENT_BAS
 measurement clock that day: the stalled-learner exception stays silent until its window fits
 entirely after the baseline, so nobody is flagged for a fortnight that predates the system.
 
+**The AI Assistant (renamed from "Coach", 2026-09-02) is SELF-AWARE and can ACT.** Three pieces:
+(1) **Naming** — the FAB and panel header say "AI Assistant" everywhere Sentinel shows them
+(`app.js mountAssistant`; the engine retitles its embedded header in `?embed=assistant` mode). The
+ids stay `#coach-*` and the postMessage types stay `agora-coach-action*` — renaming wire formats
+buys nothing and breaks both repos at once.
+(2) **Self-knowledge** — 🔴 [docs/HOW-SENTINEL-WORKS.md](docs/HOW-SENTINEL-WORKS.md) is injected
+into the assistant's prompt (served by `GET /api/internal/sentinel-guide`, purpose
+`sentinel-guide`; the engine fetches + caches it 10 min in its `lib/sentinel.js`). **Any change to
+a user-facing page, flow or rule MUST update that doc in the same change** — it ships in the
+image (`Dockerfile` copies it to `/docs`; `.dockerignore` un-ignores it from the `*.md` rule), so
+a deploy IS the knowledge update. Same pattern as the engine's own HOW-IT-WORKS.md.
+(3) **Actions** — `app.js coachExecute` now carries SENTINEL OPS (create/update/move/park/resume/
+delete/comment a task, reviews, start/pause work, clock, projects + milestones, set a client's
+AM): the assistant proposes an `agora-action`, the person taps Approve in the chat, and the op
+executes via the normal REST API **in the user's own session** — fixed endpoints, whitelisted
+bodies, so every permission rule applies exactly as if they clicked the UI. The prompt half
+(`assistantSentinelOps` + `sentinelGuideBlock`) lives in the engine's `lib/gemini.js`, wired in
+BOTH assistant paths (blocking + streaming — the engine's three-places rule). Approved actions
+call `window.SentinelReloadBoard` / `refreshWorkStrip` so the change appears at once.
+
+**Go-live reset, phase 2 (2026-09-02, owner's instruction).** All 61 remaining ATRIUM client
+cards were exported (`agora-devtools/backups/prod-atrium-card-backup-2026-09-02.json`) and deleted
+— Atrium soft-deletes each into its console Bin (30 days). The board is now fully empty. Every
+active non-super-admin was reset to `employee` (specialist) so AM/COO roles can be granted
+deliberately; supers kept: Agora Admin, Ian, Charles.
+
 **What did not change:** no new statuses (review and hold are flags on the five stages — D13); no pod
 entity (client AM + card holders express it); estimates are optional and template-defaulted
 (`estimate_minutes`), and the Monitor's relative band stays the truthful capacity default; the daily

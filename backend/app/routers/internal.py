@@ -316,6 +316,40 @@ def internal_holistic_profile(
     return {"found": True, "profile": dev_svc.holistic_digest(db, user)}
 
 
+@router.get("/sentinel-guide")
+def internal_sentinel_guide(
+    x_academy_ts: str | None = Header(default=None),
+    x_academy_sig: str | None = Header(default=None),
+):
+    """docs/HOW-SENTINEL-WORKS.md, verbatim — the AI Assistant's authoritative knowledge of how
+    Sentinel works (2026-09-02). The exact mirror of the Mastery Engine's own HOW-IT-WORKS.md
+    pattern: one doc humans also read, injected into the assistant's prompt, and because it is
+    served from the RUNNING code, every deploy updates the assistant's knowledge automatically —
+    that is the whole point, so 🔴 the doc must ride in the image (Dockerfile copies it to
+    /docs; .dockerignore un-ignores it from the *.md rule). No user data, so no email param;
+    HMAC-gated like everything else on this router. Cached on mtime."""
+    _verify(x_academy_ts, x_academy_sig, "sentinel-guide")
+    import pathlib
+    candidates = [
+        pathlib.Path(__file__).resolve().parents[3] / "docs" / "HOW-SENTINEL-WORKS.md",  # repo
+        pathlib.Path("/docs/HOW-SENTINEL-WORKS.md"),                                     # container
+    ]
+    for p in candidates:
+        try:
+            if p.is_file():
+                mtime = p.stat().st_mtime
+                cache = getattr(internal_sentinel_guide, "_cache", None)
+                if cache and cache[0] == (str(p), mtime):
+                    return cache[1]
+                out = {"found": True, "guide": p.read_text(encoding="utf-8"),
+                       "updated": int(mtime)}
+                internal_sentinel_guide._cache = ((str(p), mtime), out)
+                return out
+        except OSError:
+            continue
+    return {"found": False, "guide": None}
+
+
 @router.get("/growth-detail")
 def internal_growth_detail(
     email: str,
