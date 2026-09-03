@@ -1868,6 +1868,19 @@ Applying with `mode="replace"` also sets the session's `day_type` from the routi
 template over a whole day means the day IS a push day); `append` leaves the split alone. Sets arrive
 with `done: false` — a template holds sets to *do*, and pre-ticking them would log work never done.
 
+### 🔴 Deleting a person sweeps the MODEL METADATA — never a hand-kept table list (2026-09-03)
+
+`DELETE /api/people/{id}` used to name each dependent table by hand, so every table added after it was
+written — `body_metrics`, `growth_items`, `task_sessions`, `time_entries`, `certifications`,
+`mentor_transcripts`, `reading_progress` — was missed. Postgres refused the final row delete with a
+`ForeignKeyViolation`, the console said "Internal server error", and **nobody could be deleted**
+(found deleting Christian, 2026-09-03). The route now walks `Base.metadata` for every FK into `users`:
+a NOT NULL user column means the row is theirs (delete); a nullable one means they merely touched
+somebody else's record (set NULL). The two shapes metadata cannot see stay named in the route: a child
+table with no user FK of its own (`gym_exercises` → `gym_logs`) and the FK-less capability exceptions.
+**Adding a table that points at `users` needs nothing here** — that is the point. If your new table has
+a child with no user FK, add the child to the route. Pinned by `tests/test_people_delete.py`.
+
 ### 🟡 The Overview is ONE page assembled from components — `/growth` is not your growth hub
 
 Merged 2026-08-03. `/dashboard` (labelled **"Overview"**; the URL is unchanged because
