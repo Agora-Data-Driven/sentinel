@@ -6,7 +6,7 @@ from datetime import timedelta
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response
-from sqlalchemy import func, select
+from sqlalchemy import delete as sa_delete, func, select, update as sa_update
 from sqlalchemy.orm import Session
 
 from ..constants import (
@@ -17,7 +17,7 @@ from ..constants import (
     ROLE_SUPER_ADMIN,
     WORKER_STAGES,
 )
-from ..database import get_db
+from ..database import Base, get_db
 from ..models import (
     AttendanceEvent,
     AttendanceRequest,
@@ -420,9 +420,26 @@ def regenerate_qr(user_id: int, actor: User = Depends(require_cap(CAP_PEOPLE_BAD
 def delete_person(user_id: int, actor: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Permanently remove an employee and clean up their dependent records.
 
-    Super Admin only. Refuses to delete yourself. Attendance/gym/leave/notifications owned by the
-    user are deleted; task ownership + audit/history references are nulled out so nothing breaks.
-    (To keep history instead, edit the employee and set status = Inactive.)
+    Super Admin only. Refuses to delete yourself. Records the person OWNS (attendance, gym, leave,
+    growth, time, sessions, badges, notifications, their own comments) are deleted; references from
+    OTHER people's records (who reviewed a request, who created a task, who granted a certificate)
+    are nulled out so those records stay intact. (To keep history instead, edit the employee and set
+    status = Inactive.)
+
+    🔴 THE SWEEP IS DRIVEN BY THE MODEL METADATA, NOT A HAND-KEPT LIST (2026-09-03). Until this date
+    this route named each table by hand, and every table added since it was written — body metrics,
+    growth items, task sessions, time entries, certifications, mentor transcripts, reading progress —
+    was missing. Postgres then refused the final `DELETE FROM users` with a ForeignKeyViolation, the
+    console showed "Internal server error", and nobody could be deleted at all. Reading the FKs off
+    `Base.metadata` means a new table that points at `users` is covered the day it is added. The
+    rule per column is the same one the old list applied by hand:
+
+      • NOT NULL user FK  → the row is THEIRS → delete it;
+      • nullable user FK  → the row is somebody else's, they merely touched it → set it NULL.
+
+    Two things the metadata cannot know are still named here: a child table with no user FK of its
+    own (`gym_exercises` hangs off `gym_logs`), and the capability-exception rows, which have no FK
+    at all (`perms_svc.prune_orphans`). Pinned by `tests/test_people_delete.py`.
     """
     u = db.get(User, user_id)
     if not u:
@@ -431,35 +448,32 @@ def delete_person(user_id: int, actor: User = Depends(get_current_user), db: Ses
         raise HTTPException(status_code=400, detail="You can't delete your own account")
 
     name = u.name
-    # Owned records -> delete.
-    db.query(AttendanceEvent).filter(AttendanceEvent.user_id == u.id).delete(synchronize_session=False)
-    db.query(DailyAttendanceSummary).filter(DailyAttendanceSummary.user_id == u.id).delete(synchronize_session=False)
-    db.query(AttendanceRequest).filter(AttendanceRequest.user_id == u.id).delete(synchronize_session=False)
-    db.query(LeaveBalance).filter(LeaveBalance.user_id == u.id).delete(synchronize_session=False)
-    db.query(LeaveRequest).filter(LeaveRequest.user_id == u.id).delete(synchronize_session=False)
+    # Children of an owned table that carry no user FK themselves — the one shape the sweep below
+    # cannot derive. Delete them BEFORE the sweep removes their parent rows.
     gym_ids = [g.id for g in db.query(GymLog.id).filter(GymLog.user_id == u.id).all()]
     if gym_ids:
         db.query(GymExercise).filter(GymExercise.gym_log_id.in_(gym_ids)).delete(synchronize_session=False)
-    db.query(GymLog).filter(GymLog.user_id == u.id).delete(synchronize_session=False)
-    db.query(Notification).filter(Notification.user_id == u.id).delete(synchronize_session=False)
+    # Their own comments go with them (nullable FK, so the sweep would only anonymise these; the
+    # pre-2026-09-03 route deleted them and that behaviour is kept).
     db.query(TaskComment).filter(TaskComment.author_id == u.id).delete(synchronize_session=False)
-    db.query(QRToken).filter(QRToken.user_id == u.id).delete(synchronize_session=False)
-    # Additional department memberships (models.UserTeam). The relationship cascades on an ORM
-    # delete, but this route clears dependants with bulk statements — which bypass the ORM entirely
-    # — so it has to be named here like every other owned record above.
-    db.query(UserTeam).filter(UserTeam.user_id == u.id).delete(synchronize_session=False)
-    # Per-person capability exceptions (models.UserCapability). Named here for the same reason as
-    # UserTeam above, and for one more: that table has no FK and is keyed by user id, so a row left
-    # behind would silently hand a FUTURE person with a recycled id somebody else's permissions.
+    # Per-person capability exceptions (models.UserCapability): no FK, keyed by user id, and a row
+    # left behind would silently hand a FUTURE person with a recycled id somebody else's permissions.
     perms_svc.prune_orphans(db, u.id)
-    # References from other people's records -> null out (keep those records intact).
-    db.query(AttendanceRequest).filter(AttendanceRequest.reviewed_by_id == u.id).update({AttendanceRequest.reviewed_by_id: None}, synchronize_session=False)
-    db.query(LeaveRequest).filter(LeaveRequest.reviewed_by_id == u.id).update({LeaveRequest.reviewed_by_id: None}, synchronize_session=False)
-    db.query(TaskHistory).filter(TaskHistory.changed_by_id == u.id).update({TaskHistory.changed_by_id: None}, synchronize_session=False)
-    db.query(Task).filter(Task.assigned_to_id == u.id).update({Task.assigned_to_id: None}, synchronize_session=False)
-    db.query(Task).filter(Task.account_manager_id == u.id).update({Task.account_manager_id: None}, synchronize_session=False)
-    db.query(AuditLog).filter(AuditLog.actor_id == u.id).update({AuditLog.actor_id: None}, synchronize_session=False)
-    db.query(SystemSetting).filter(SystemSetting.updated_by_id == u.id).update({SystemSetting.updated_by_id: None}, synchronize_session=False)
+
+    # The sweep. Children before parents (reversed topological order) so a NOT NULL row is never
+    # deleted while something still points at it; the nullable case is an UPDATE and order-free.
+    users_table = User.__table__
+    for table in reversed(Base.metadata.sorted_tables):
+        if table is users_table:
+            continue
+        for fk in table.foreign_keys:
+            if fk.column.table is not users_table:
+                continue
+            col = fk.parent
+            if col.nullable:
+                db.execute(sa_update(table).where(col == u.id).values({col.name: None}))
+            else:
+                db.execute(sa_delete(table).where(col == u.id))
 
     db.delete(u)
     db.commit()
