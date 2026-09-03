@@ -1633,6 +1633,12 @@ a.day-item:hover { border-color:var(--green-line); box-shadow:var(--shadow-sm); 
 .os-tbl td.n.zero { color: var(--muted); font-weight: 400; }
 .os-tbl td.n.bad { color: var(--danger); }
 .os-tbl td.n.warn { color: var(--warn); }
+/* Capacity → "Now": the running card, with the same pulse the topbar's work strip wears. */
+.os-now { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.os-now .ws-pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--green); flex: none; animation: ws-pulse 1.6s infinite; }
+.os-now a { color: var(--ink); font-weight: 600; text-decoration: none; display: block; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.os-now a:hover { text-decoration: underline; }
+@media (prefers-reduced-motion: reduce) { .os-now .ws-pulse { animation: none; } }
 .os-tbl tr.click { cursor: pointer; }
 .os-tbl tr.click:hover td { background: var(--hover); }
 .os-health { display: inline-flex; align-items: center; gap: 7px; font-weight: 600; font-size: 13px; }

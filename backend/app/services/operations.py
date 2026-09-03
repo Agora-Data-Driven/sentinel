@@ -42,7 +42,10 @@ def _exc(sev: str, title: str, detail: str, owner: User | None, action: str, hre
 
 def capacity_rows(db: Session, viewer: User) -> list[dict]:
     """Per active person: open cards, overdue, estimated minutes on open cards, this week's session
-    minutes, the Monitor's relative band, and leave — the COO's capacity table."""
+    minutes, the Monitor's relative band, leave, and — since 2026-09-03 — the card they pressed
+    Start Work on and have not paused (`active_session`, `task_sessions.session_dict` shape, or
+    None). One query for the whole table, never one per person. People working right now sort
+    first: "who is on what" is the question the Overview is asked most."""
     today = today_ph()
     users = db.execute(select(User).where(User.is_active.is_(True), User.role != "viewer")
                        .order_by(User.name)).scalars().all()
@@ -54,10 +57,16 @@ def capacity_rows(db: Session, viewer: User) -> list[dict]:
     _, to = task_sessions.day_bounds_utc(today)
     week_minutes = task_sessions.minutes_by_user(db, [u.id for u in users], frm, to)
     leave = task_analytics.leave_context(db, [u.id for u in users], today)
+    running = task_sessions.active_by_user(db, [u.id for u in users])
+    task_by_id = {t.id: t for t in tasks}
     rows = []
     for u in users:
         mine = [t for t in open_ts if u.id in task_perms.assigned_user_ids(t)]
+        s = running.get(u.id)
+        # A session on an archived card is the one miss in `tasks`; read it rather than print no title.
+        s_task = (task_by_id.get(s.task_id) or db.get(Task, s.task_id)) if s else None
         rows.append({
+            "active_session": task_sessions.session_dict(s, s_task) if s else None,
             "user": user_public(u),
             "stage": getattr(u, "stage", None),
             "open_total": len(mine),
@@ -70,7 +79,8 @@ def capacity_rows(db: Session, viewer: User) -> list[dict]:
             "leave_days_ahead": (leave.get(u.id) or {}).get("leave_days_ahead", 0),
         })
     task_analytics.apply_load_bands(rows)
-    rows.sort(key=lambda r: (-r["open_total"], r["user"]["name"] if r["user"] else ""))
+    rows.sort(key=lambda r: (r["active_session"] is None, -r["open_total"],
+                             r["user"]["name"] if r["user"] else ""))
     return rows
 
 

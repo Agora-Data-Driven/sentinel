@@ -1890,6 +1890,14 @@ ledger → the admin block. Consequences worth knowing before you edit any of it
 - **The pace arithmetic lives in `growthmath.js`, not in either component.** The admin table
   renders the same numbers about the same people as a worker's own rings; two copies of
   `expected()` would let one surface drift from the other with nothing to say which is right.
+- 🔴 **The super admin has NO growth profile (owner decision, 2026-09-03).** The Agora super-admin
+  seat is an operator account, not an employee, so the staff growth surfaces are not drawn for it:
+  no rings, no "Time on growth", no pace band ("where you are vs where the calendar says"), no
+  per-dimension ledger, no Mentor library — on its Overview or via `/growth?user=`. The rule is
+  spelled ONCE, in `S.hasGrowthProfile` (app.js), and `dashboard.js` hangs sections 2 and 4 on it;
+  the server half is `team_growth.visible_users`, which leaves the seat out of Team progress and the
+  team time table (both rosters come from it). Branch on the predicate, never on
+  `role === "super_admin"` inline. The admin block itself stays — it is about everyone else.
 
 ### 🟡 The Overview's admin block has a PAGE-WIDE people filter — added 2026-08-03
 

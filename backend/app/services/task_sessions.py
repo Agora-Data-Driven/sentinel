@@ -54,6 +54,21 @@ def active_for(db: Session, user_id: int) -> TaskSession | None:
     ).scalars().first()
 
 
+def active_by_user(db: Session, user_ids: list[int]) -> dict[int, TaskSession]:
+    """Every running session across `user_ids`, keyed by person — ONE query for a whole table.
+
+    "One open session per person" is the module's rule, so the dict holds at most one row each; if
+    a stray duplicate ever exists the most recently started one wins, matching `active_for`."""
+    if not user_ids:
+        return {}
+    rows = db.execute(
+        select(TaskSession)
+        .where(TaskSession.user_id.in_(user_ids), TaskSession.ended_at.is_(None))
+        .order_by(TaskSession.started_at)
+    ).scalars().all()
+    return {s.user_id: s for s in rows}
+
+
 def _close(s: TaskSession, source: str, now: datetime, note: str | None = None) -> None:
     cap = _cap()
     elapsed = (now - s.started_at).total_seconds() / 60

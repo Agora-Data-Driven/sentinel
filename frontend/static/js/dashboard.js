@@ -85,7 +85,12 @@ window.pageInit = async (S) => {
   html += `<div id="dash-landing" style="margin-bottom:26px"></div>`;
 
   // --- 2 · your growth (the compass) ----------------------------------------------------------
-  html += `<div class="row between sect-head">
+  // 🔴 Not for the super admin (S.hasGrowthProfile, app.js — the rule is spelled there, once). That
+  // seat has no growth profile, so the rings, "Time on growth", the pace band and the Mentor library
+  // are simply not drawn for it: sections 2 and 4 both hang on this one flag. The admin block (5)
+  // stays — it is about everyone ELSE, and the super admin is not in its rosters either.
+  const growth = S.hasGrowthProfile(u);
+  if (growth) html += `<div class="row between sect-head">
       <div class="section-label">${S.ICON.sparkle}Your growth</div>
       <span class="sub">Each ring is that tab's Mastery Engine score — open one to go straight in.</span>
     </div>
@@ -101,8 +106,8 @@ window.pageInit = async (S) => {
   // own cards still need a door.
   html += `<div id="dash-mywork"></div>`;
 
-  // --- 4 · the growth ledger ------------------------------------------------------------------
-  html += `<div id="dash-growth" style="margin-top:26px"></div>`;
+  // --- 4 · the growth ledger (same flag as section 2 — see the note there) -------------------
+  if (growth) html += `<div id="dash-growth" style="margin-top:26px"></div>`;
 
   // --- 5 · across Agora (admins only) ---------------------------------------------------------
   // Team progress leads the block: it is both the collective view of everyone's growth AND the
@@ -168,13 +173,14 @@ window.pageInit = async (S) => {
   // Mount the growth hub across its two hosts — the compass above "my work", the ledger below it.
   // Fail-soft: growth is a section of this page, not the page, so a bad /api/development never
   // costs anyone the rest of their Overview.
-  if (window.GrowthPanel) {
+  // Both mounts are gated on the same `growth` flag as their hosts (the super admin has neither).
+  if (growth && window.GrowthPanel) {
     GrowthPanel.mount(S, S.qs("#dash-growth"), { ringsHost: S.qs("#dash-rings") })
       .catch((e) => S.toast(e.detail || "Couldn't load your growth", "err"));
   }
   // Time in the engine — minutes per dimension under the compass (timespent.js). Totals only;
   // the lessons behind them are one click away. Fail-soft like the rings above it.
-  if (window.TimeSpent) {
+  if (growth && window.TimeSpent) {
     TimeSpent.mountMine(S, S.qs("#dash-time"), {})
       .catch(() => { S.qs("#dash-time").innerHTML = ""; });
   }

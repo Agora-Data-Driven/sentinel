@@ -9,6 +9,10 @@
 window.pageInit = async (S) => {
   const userId = new URLSearchParams(location.search).get("user");
   if (!userId) { location.replace("/dashboard"); return; }
+  // The super admin has no growth profile (S.hasGrowthProfile, app.js) — its own Overview draws no
+  // growth surface, and the team rosters that link here leave it out, so this shell must not become
+  // the one place that still renders a hub for it.
+  if (String(userId) === String((S.user || {}).id) && !S.hasGrowthProfile(S.user)) { location.replace("/dashboard"); return; }
   await GrowthPanel.mount(S, S.view(), { userId, mast: true });
   // This person's time in the engine, under their hub — the same strip the Overview shows for
   // your own. Read-only here (the manager's view), so the ledger above never re-renders over it.

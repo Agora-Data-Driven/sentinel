@@ -289,6 +289,26 @@ def test_exceptions_name_a_red_client_and_require_the_capability(client, db, aut
     assert any(row["user"]["id"] == worker.id for row in body["capacity"])
 
 
+def test_capacity_shows_who_is_working_right_now(client, db, auth, admin, worker, task):
+    """The Overview's capacity table names the card each person pressed Start Work on (2026-09-03)."""
+    auth(worker)
+    assert client.post(f"/api/tasks/{task.id}/sessions/start").status_code == 200
+    auth(admin)
+    rows = client.get("/api/ops/exceptions").json()["capacity"]
+    row = next(r for r in rows if r["user"]["id"] == worker.id)
+    assert row["active_session"]["task_id"] == task.id
+    assert row["active_session"]["task_title"] == task.title
+    assert row["active_session"]["running"] is True
+    # Working people sort first, whatever their open count.
+    assert rows[0]["user"]["id"] == worker.id
+    assert all(r["active_session"] is None for r in rows if r["user"]["id"] != worker.id)
+    auth(worker)
+    client.post("/api/tasks/sessions/pause")
+    auth(admin)
+    rows = client.get("/api/ops/exceptions").json()["capacity"]
+    assert next(r for r in rows if r["user"]["id"] == worker.id)["active_session"] is None
+
+
 def test_a_stale_review_surfaces_as_an_exception(client, db, auth, admin, worker, task):
     task.review_state = C.REVIEW_PENDING
     db.commit()
