@@ -99,6 +99,17 @@ def test_inactive_staff_are_not_listed(client, make_user, auth, engine):
     assert "gone@test.ph" not in emails
 
 
+def test_the_super_admin_is_never_a_row(client, make_user, auth, engine):
+    """The super admin has no growth profile (AGENTS.md §5, 2026-09-03): the operator seat is left
+    out of Team progress and the team time table, whoever is looking."""
+    boss = make_user(C.ROLE_SUPER_ADMIN, email="boss@test.ph")
+    make_user(C.ROLE_EMPLOYEE, email="ana@test.ph")
+    auth(boss)
+    emails = {r["user"]["email"] for r in client.get("/api/development/team").json()["rows"]}
+    assert "ana@test.ph" in emails
+    assert "boss@test.ph" not in emails
+
+
 # --- the numbers -------------------------------------------------------------
 
 

@@ -27,8 +27,18 @@ window.OpsPage = {
       <td><b>${S.esc(r.client.name)}</b></td><td>${U.healthPill(r.health)}</td>
       <td>${r.account_manager ? S.avatar(r.account_manager, "xs") : '<span class="muted">—</span>'}</td>
       <td class="n">${r.open}</td><td class="n ${r.overdue ? "bad" : "zero"}">${r.overdue}</td><td class="n ${r.blocked ? "warn" : "zero"}">${r.blocked}</td><td class="n ${r.reviews ? "warn" : "zero"}">${r.reviews}</td></tr>`);
+    // "Now" = the card this person pressed Start Work on and has not paused (capacity_rows sorts
+    // them first). Elapsed is computed here from `started_at` so the column reads right however
+    // long the page has been open; the server's `minutes` was true only at fetch time.
+    const now = (s) => {
+      if (!s) return '<span class="muted">—</span>';
+      const mins = Math.max(0, Math.floor((Date.now() - Date.parse(s.started_at)) / 60000));
+      return `<span class="os-now"><i class="ws-pulse"></i><span><a href="/tasks?open=${s.task_id}" title="${S.esc(s.task_title || "")}">${S.esc(s.task_title || "Working")}</a><span class="os-sub">${mins ? U.fmtMin(mins) : "just started"}</span></span></span>`;
+    };
+    const working = (d.capacity || []).filter((r) => r.active_session).length;
     const cap = (d.capacity || []).filter((r) => r.user).map((r) => `<tr>
       <td><span class="os-who">${S.avatar(r.user, "sm")}<span><b>${S.esc(r.user.name)}</b>${r.stage ? ` <span class="os-sub">${S.esc(r.stage.replace("_", " "))}</span>` : ""}</span></span></td>
+      <td>${now(r.active_session)}</td>
       <td class="n">${r.open_total}</td>
       <td class="n">${r.estimate_minutes ? Math.round(r.estimate_minutes / 60) + "h" : "—"}${r.estimated_cards && r.estimated_cards < r.open_total ? `<span class="os-sub">${r.estimated_cards} of ${r.open_total} sized</span>` : ""}</td>
       <td class="n">${r.week_minutes ? U.fmtMin(r.week_minutes) : "—"}</td>
@@ -47,9 +57,9 @@ window.OpsPage = {
       <div class="os-two even os-sect">
         <div>${U.head("Client health", `<a href="/clients">All clients →</a>`)}
           <div class="card table-wrap"><table class="os-tbl"><thead><tr><th>Client</th><th>Health</th><th>AM</th><th class="n">Open</th><th class="n">Late</th><th class="n">Blocked</th><th class="n">Rev.</th></tr></thead><tbody>${clients.join("") || '<tr><td colspan="7" class="os-empty">No active clients.</td></tr>'}</tbody></table></div></div>
-        <div>${U.head("Capacity", "open cards · estimated hours · this week's sessions")}
-          <div class="card table-wrap"><table class="os-tbl"><thead><tr><th>Person</th><th class="n">Open</th><th class="n">Est.</th><th class="n">Week</th><th class="n">Late</th><th>Load</th></tr></thead><tbody>${cap.join("")}</tbody></table>
-          <div class="os-foot">Load is the Monitor's relative band — vs the team's median open work, never an hour count. "Est." only sums cards that carry an estimate.</div></div></div>
+        <div>${U.head("Capacity", `<b>${working} working now</b> · open cards · estimated hours · this week's sessions`)}
+          <div class="card table-wrap"><table class="os-tbl"><thead><tr><th>Person</th><th>Now</th><th class="n">Open</th><th class="n">Est.</th><th class="n">Week</th><th class="n">Late</th><th>Load</th></tr></thead><tbody>${cap.join("")}</tbody></table>
+          <div class="os-foot">"Now" is the card they pressed Start Work on and haven't paused. Load is the Monitor's relative band — vs the team's median open work, never an hour count. "Est." only sums cards that carry an estimate.</div></div></div>
       </div>`;
     U.wireClientRows(root);
   },

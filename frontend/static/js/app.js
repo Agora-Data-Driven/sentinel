@@ -849,19 +849,29 @@
   }
 
   async function openActAsPicker() {
-    let people = [];
-    try { people = await api("/api/people"); } catch (e) { toast(e.detail || "Couldn't load people", "err"); return; }
+    // 🔴 The dialog opens BEFORE the people fetch, not after it (2026-09-03). It used to await
+    // `/api/people` first and only then call `modal()`, so from the command palette the click did
+    // nothing for a round trip and the picker then appeared UNDER the palette (`.cmdk-ov` is
+    // z-index 300, `.overlay` 100) because the action also returned `true`, which keeps the palette
+    // open. Now the frame is on screen in the same tick as the click, with the list filling in.
     const real = (USER.acting_as && USER.acting_as.real) || USER;
+    const m = modal({
+      title: "Act as user",
+      body: `<div class="form-hint" style="margin-bottom:8px">Browse Sentinel exactly as this person — their Today page, board, nav and permissions. A banner shows while you do, the start and stop are audited, and time can't be recorded for them.</div>
+        <div class="pick-list"><div class="skeleton skel-card" style="height:120px"></div></div>`,
+    });
+    const list = qs(".pick-list", m.root);
+    let people = [];
+    try { people = await api("/api/people"); }
+    catch (e) { list.innerHTML = `<div class="empty">${esc(e.detail || "Couldn't load people")}</div>`; return; }
+    if (!document.contains(m.root)) return;   // closed while loading
     const rows = (Array.isArray(people) ? people : [])
       .filter((p) => p.is_active !== false && p.id !== real.id)
       .map((p) => `<button type="button" class="pick-row" data-id="${p.id}" style="display:flex;align-items:center;gap:10px;width:100%;text-align:left;border:none;background:none;padding:9px 6px;border-radius:10px;cursor:pointer">
         ${avatar(p, "sm")}<span><strong>${esc(p.name)}</strong><br><span class="sub" style="font-size:12px">${esc(p.role_label || p.role)}${p.team_name ? " · " + esc(p.team_name) : ""}</span></span></button>`).join("");
-    const m = modal({
-      title: "Act as user",
-      body: `<div class="form-hint" style="margin-bottom:8px">Browse Sentinel exactly as this person — their Today page, board, nav and permissions. A banner shows while you do, the start and stop are audited, and time can't be recorded for them.</div>
-        <div class="pick-list">${rows || '<div class="empty">Nobody else to act as.</div>'}</div>`,
-    });
-    qsa(".pick-row", m.root).forEach((b) => {
+    list.innerHTML = rows || '<div class="empty">Nobody else to act as.</div>';
+    const first = qs(".pick-row", list); if (first) first.focus();
+    qsa(".pick-row", list).forEach((b) => {
       b.onmouseenter = () => b.style.background = "var(--hover)";
       b.onmouseleave = () => b.style.background = "";
       b.onclick = async () => {
@@ -1498,8 +1508,11 @@
         { group: "Actions", icon: "bell", label: "Mark all notifications read", hint: "", run: async () => { try { await api("/api/notifications/read-all", { method: "PATCH" }); toast("All caught up", "ok"); setBadge(0); } catch (e) {} } },
         // Act as user — the SUPER ADMIN's door (the server refuses everyone else); Stop appears
         // whenever an act is on, whatever role the acted user has, or there'd be no way back.
-        ...(USER && USER.acting_as ? [{ group: "Actions", icon: "eye", label: "Stop acting as " + USER.name, hint: "Act as", run: () => { stopActingAs(); return true; } }] : []),
-        ...(USER && !USER.acting_as && USER.role === "super_admin" ? [{ group: "Actions", icon: "eye", label: "Act as user…", hint: "Super admin", run: () => { openActAsPicker(); return true; } }] : []),
+        // 🔴 Neither returns `true`: a `true` keeps the palette OPEN (see runItem), and the palette
+        // sits above every modal — so the picker used to open behind it, dimmed and unreachable,
+        // with Esc closing the palette but never the picker (closeTopModal defers while it is up).
+        ...(USER && USER.acting_as ? [{ group: "Actions", icon: "eye", label: "Stop acting as " + USER.name, hint: "Act as", run: () => { stopActingAs(); } }] : []),
+        ...(USER && !USER.acting_as && USER.role === "super_admin" ? [{ group: "Actions", icon: "eye", label: "Act as user…", hint: "Super admin", run: () => { openActAsPicker(); } }] : []),
         { group: "Actions", icon: "gear", label: "Change password", hint: "Account", run: () => { openChangePassword(); } },
         { group: "Actions", icon: "logout", label: "Log out", hint: "Account", run: doLogout },
       ];
@@ -1687,6 +1700,14 @@
     // Absent `caps` (an older cached /me, a partial boot) reads as "no", so the failure mode is a
     // hidden button rather than one that 403s on click.
     hasCap: (cap) => !!(USER && USER.caps && USER.caps.indexOf(cap) !== -1),
+    // 🔴 THE SUPER ADMIN HAS NO GROWTH PROFILE (owner decision, 2026-09-03). The Agora super-admin
+    // seat is an operator account, not an employee: it is not enrolled in the four dimensions, logs
+    // no engine time, keeps no mentor library. So every STAFF growth surface — the compass rings,
+    // "Time on growth", the pace band ("where you are vs where the calendar says"), the
+    // per-dimension ledger and the Mentor library — is skipped for it, and the team rollups leave
+    // it out (`team_growth.visible_users`). This is the one place that rule is spelled; branch on
+    // it, never on `role === "super_admin"` inline, so the two views cannot drift.
+    hasGrowthProfile: (u) => { const x = u || USER; return !!x && x.role !== "super_admin"; },
   };
   window.Sentinel = Sentinel;
 

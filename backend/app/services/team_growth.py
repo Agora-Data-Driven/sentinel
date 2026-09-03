@@ -90,8 +90,14 @@ def visible_users(db: Session, viewer: User) -> list[User]:
 
     Admin / super-admin see everyone; a team lead sees their own team. Anyone else gets nobody —
     the endpoint guards on role as well, this is the second half of the same rule.
+
+    🔴 The SUPER ADMIN is never a row (owner decision, 2026-09-03): that seat is an operator
+    account with no growth profile — not enrolled in the four dimensions, no engine time, no
+    mentor library — so ranking it in Team progress or the team time table would print a person
+    who is structurally at zero. The frontend half of the same rule is `S.hasGrowthProfile`
+    (app.js), which keeps the personal growth surfaces off its own Overview.
     """
-    rows = db.execute(select(User).where(User.is_active.is_(True))).scalars().all()
+    rows = db.execute(select(User).where(User.is_active.is_(True), User.role != "super_admin")).scalars().all()
     if viewer.role in ADMIN_ROLES:
         people = list(rows)
     elif viewer.role == ROLE_TEAM_LEAD and teams_svc.team_ids(viewer):
