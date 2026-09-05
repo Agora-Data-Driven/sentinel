@@ -15,12 +15,15 @@ from datetime import timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..capabilities import CAP_OPS_VIEW
 from ..constants import HOLD_KINDS, LEAVE_APPROVED, PRIORITY_URGENT, REVIEW_CHANGES, REVIEW_PENDING
 from ..models import Client, LeaveRequest, Task, TaskHistory, User
 from ..serializers import user_public
 from ..utils.time import today_ph, utcnow
 from . import client_health, task_analytics, task_config, task_perms, task_sessions
+from . import permissions as perms_svc
 from . import team_growth
+from . import teams as teams_svc
 
 CLIENT_BLOCKED_DAYS = 2
 REVIEW_STALE_HOURS = 24
@@ -40,12 +43,40 @@ def _exc(sev: str, title: str, detail: str, owner: User | None, action: str, hre
             "owner": user_public(owner), "action": action, "href": href}
 
 
-def capacity_rows(db: Session, viewer: User) -> list[dict]:
+def capacity_scope(db: Session, viewer: User) -> set[int] | None:
+    """Whose rows the viewer's capacity table holds. None = everyone (`ops.view`, the COO's seat).
+
+    Anyone else who may see it — the account manager's landing (2026-09-03) — gets THEIR TEAM: the
+    members of every department they belong to, plus whoever holds open work on an account they
+    manage. Both halves matter: an AM's department is who they sit with, but the specialists actually
+    carrying their clients' cards are often in other departments, and those are the people whose
+    load decides whether the AM's commitments land. The AM themself is always a row."""
+    if perms_svc.has_cap(viewer, CAP_OPS_VIEW):
+        return None
+    ids = set(teams_svc.member_ids(db, teams_svc.team_ids(viewer)))
+    ids.add(viewer.id)
+    client_ids = set(db.execute(
+        select(Client.id).where(Client.account_manager_id == viewer.id)).scalars().all())
+    if client_ids:
+        tasks = db.execute(select(Task).where(Task.archived.is_(False),
+                                              Task.client_id.in_(client_ids))).scalars().all()
+        stage_of = {s: task_config.stage_for(db, s) for s in {t.status for t in tasks}}
+        for t in tasks:
+            if stage_of.get(t.status) != "completed":
+                ids.update(task_perms.assigned_user_ids(t))
+    return ids
+
+
+def capacity_rows(db: Session, viewer: User, only_ids: set[int] | None = None) -> list[dict]:
     """Per active person: open cards, overdue, estimated minutes on open cards, this week's session
     minutes, the Monitor's relative band, leave, and — since 2026-09-03 — the card they pressed
     Start Work on and have not paused (`active_session`, `task_sessions.session_dict` shape, or
     None). One query for the whole table, never one per person. People working right now sort
-    first: "who is on what" is the question the Overview is asked most."""
+    first: "who is on what" is the question the Overview is asked most.
+
+    `only_ids` narrows the rows AFTER the load bands are applied (`capacity_scope`): a band is
+    "vs the team's median", and the team is the whole agency — an AM's narrowed table must show the
+    same band for a person as the COO's, or the two would disagree about who is heavy."""
     today = today_ph()
     users = db.execute(select(User).where(User.is_active.is_(True), User.role != "viewer")
                        .order_by(User.name)).scalars().all()
@@ -79,6 +110,8 @@ def capacity_rows(db: Session, viewer: User) -> list[dict]:
             "leave_days_ahead": (leave.get(u.id) or {}).get("leave_days_ahead", 0),
         })
     task_analytics.apply_load_bands(rows)
+    if only_ids is not None:
+        rows = [r for r in rows if r["user"] and r["user"]["id"] in only_ids]
     rows.sort(key=lambda r: (r["active_session"] is None, -r["open_total"],
                              r["user"]["name"] if r["user"] else ""))
     return rows

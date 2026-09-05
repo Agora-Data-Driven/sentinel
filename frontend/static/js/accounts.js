@@ -3,7 +3,10 @@
 
    Order is the AM's morning: NEEDS YOUR ACTION first (reviews, decisions parked on you, client asks
    — each one is a specialist who can't move until you do), then the accounts table with the health
-   REASON in words, then today's and tomorrow's commitments, then who on your accounts is heavy. */
+   REASON in words, then today's and tomorrow's commitments, then the CAPACITY of your team — the
+   same table the COO's Operations landing shows, narrowed server-side to your departments plus
+   whoever holds open work on your accounts (`/api/ops/capacity`, 2026-09-03; it replaced a
+   people-on-my-accounts list that had no "Now", no hours and no week). */
 window.AccountsPage = {
   async mount(S, root) {
     const U = window.OpsUI;
@@ -12,12 +15,12 @@ window.AccountsPage = {
     const PH = U.PH_TODAY();
     const tomorrow = new Date(Date.parse(PH + "T00:00:00Z") + 864e5).toISOString().slice(0, 10);
     const canReq = S.hasCap("tasks.requests");
-    const [clients, tasks, requests, cal, summary] = await Promise.all([
+    const [clients, tasks, requests, cal, capacity] = await Promise.all([
       S.api("/api/ops/clients").catch(() => null),
       S.api("/api/tasks").catch(() => []),
       canReq ? S.api("/api/tasks/requests?status=pending").catch(() => []) : Promise.resolve([]),
       S.api(`/api/ops/calendar?from=${PH}&to=${tomorrow}`).catch(() => ({ events: [] })),
-      S.api("/api/tasks/summary").catch(() => []),
+      S.api("/api/ops/capacity").catch(() => null),
     ]);
     const rows = (clients && clients.clients) || [];
     const me = S.user.id;
@@ -46,13 +49,12 @@ window.AccountsPage = {
         <span class="os-right">${U.dueChip(e.date, { parked: e.parked })}<span class="os-chev">${S.ICON.chev}</span></span>
       </a>`);
 
-    // People carrying my accounts' work: the Monitor's rows, narrowed to the leads of these clients.
-    const clientIds = new Set(shown.map((r) => r.client.id));
-    const peopleIds = new Set(open.filter((t) => clientIds.has(t.client_id) && t.assigned_to_id).map((t) => t.assigned_to_id));
-    const people = (Array.isArray(summary) ? summary : []).filter((r) => r.user && peopleIds.has(r.user.id));
-    const peopleHtml = people.length ? `<div class="card table-wrap"><table class="os-tbl"><thead><tr><th>Person</th><th class="n">Open</th><th class="n">Late</th><th>Load</th></tr></thead><tbody>
-      ${people.map((r) => `<tr><td><span class="os-who">${S.avatar(r.user, "sm")}<b>${S.esc(r.user.name)}</b></span></td><td class="n">${r.open_total}</td><td class="n ${r.overdue ? "bad" : "zero"}">${r.overdue}</td><td>${U.band(r.load_band)}${r.on_leave_today ? ' <span class="os-sub">on leave</span>' : ""}</td></tr>`).join("")}
-      </tbody></table></div>` : `<div class="card"><div class="os-empty">Nobody is holding open work on these accounts.</div></div>`;
+    // Capacity of my team: rows already narrowed by the server (operations.capacity_scope), drawn
+    // by the same OpsUI.capacityTable the COO sees so the two never disagree about a person.
+    const capRows = (capacity && capacity.capacity) || [];
+    const capacityHtml = capacity
+      ? U.capacityTable(S, capRows, { empty: "Nobody on your team has open work." })
+      : `<div class="card"><div class="os-empty">Couldn't load your team's capacity.</div></div>`;
 
     const red = shown.filter((r) => r.health === "red").length, amber = shown.filter((r) => r.health === "amber").length;
     root.innerHTML = `
@@ -65,7 +67,10 @@ window.AccountsPage = {
       </div>
       <div class="os-sect os-two">
         <div>${U.head("Commitments · today and tomorrow")}<div class="card">${U.list(commitments, "Nothing dated in the next two days.")}</div></div>
-        <div>${U.head("People on my accounts", "this week")}${peopleHtml}</div>
+      </div>
+      <div class="os-sect">
+        ${U.head("Capacity · my team", U.capacityHint(capRows))}
+        ${capacityHtml}
       </div>`;
     U.wireClientRows(root);
   },

@@ -235,6 +235,36 @@ window.OpsUI = (() => {
     };
   }
 
+  // The CAPACITY table (2026-09-03) — one drawing for the COO's Operations landing and the account
+  // manager's My accounts (its rows come from `/api/ops/capacity`, already scoped server-side).
+  // "Now" = the card the person pressed Start Work on and has not paused; elapsed is computed here
+  // from `started_at` so the column reads right however long the page has been open — the server's
+  // `minutes` was true only at fetch time.
+  function capacityTable(S, rows, opts) {
+    opts = opts || {};
+    const now = (s) => {
+      if (!s) return '<span class="muted">—</span>';
+      const mins = Math.max(0, Math.floor((Date.now() - Date.parse(s.started_at)) / 60000));
+      return `<span class="os-now"><i class="ws-pulse"></i><span><a href="/tasks?open=${s.task_id}" title="${S.esc(s.task_title || "")}">${S.esc(s.task_title || "Working")}</a><span class="os-sub">${mins ? fmtMin(mins) : "just started"}</span></span></span>`;
+    };
+    const body = (rows || []).filter((r) => r.user).map((r) => `<tr>
+      <td><span class="os-who">${S.avatar(r.user, "sm")}<span><b>${S.esc(r.user.name)}</b>${r.stage ? ` <span class="os-sub">${S.esc(r.stage.replace("_", " "))}</span>` : ""}</span></span></td>
+      <td>${now(r.active_session)}</td>
+      <td class="n">${r.open_total}</td>
+      <td class="n">${r.estimate_minutes ? Math.round(r.estimate_minutes / 60) + "h" : "—"}${r.estimated_cards && r.estimated_cards < r.open_total ? `<span class="os-sub">${r.estimated_cards} of ${r.open_total} sized</span>` : ""}</td>
+      <td class="n">${r.week_minutes ? fmtMin(r.week_minutes) : "—"}</td>
+      <td class="n ${r.overdue ? "bad" : "zero"}">${r.overdue}</td>
+      <td>${r.on_leave_today ? '<span class="os-band">On leave</span>' : band(r.load_band)}</td></tr>`).join("");
+    return `<div class="card table-wrap"><table class="os-tbl"><thead><tr><th>Person</th><th>Now</th><th class="n">Open</th><th class="n">Est.</th><th class="n">Week</th><th class="n">Late</th><th>Load</th></tr></thead><tbody>${body || `<tr><td colspan="7" class="os-empty">${opts.empty || "Nobody to show."}</td></tr>`}</tbody></table>
+      <div class="os-foot">"Now" is the card they pressed Start Work on and haven't paused. Load is the Monitor's relative band — vs the whole team's median open work, never an hour count. "Est." only sums cards that carry an estimate.</div></div>`;
+  }
+  // The head line every capacity table wears: how many are on a card right now.
+  function capacityHint(rows) {
+    const working = (rows || []).filter((r) => r.active_session).length;
+    return `<b>${working} working now</b> · open cards · estimated hours · this week's sessions`;
+  }
+
   return { PH_TODAY, dayDiff, plural, meta, stageOf, isDone, isParked, prioRank, fmtMin, dueChip,
-           taskRow, list, head, healthPill, band, clientsTable, wireClientRows, openAiPlanner };
+           taskRow, list, head, healthPill, band, clientsTable, wireClientRows, openAiPlanner,
+           capacityTable, capacityHint };
 })();
