@@ -611,7 +611,50 @@ what enforces it.
 > ([security.py:50](backend/app/security.py#L50)). Google sign-in follows the same contract.
 
 `/login` short-circuits: arriving with a valid `ag_sso` cookie *and* an active user lands you
-straight on the dashboard, minting a normal session on the way ([main.py:582](backend/app/main.py#L582)).
+straight on `?next=` (the page you were opening) or the dashboard, minting a normal session on the
+way (`main.login_page`).
+
+### 🔴 Sentinel now MINTS `ag_sso` too — in exactly one place (2026-09-05)
+
+`routers/auth._refresh_shared_cookie`, called by `GET /api/auth/me`: a signed-in person whose
+portal cookie is **missing or dead** gets one back, named for their own email (`*` clients for the
+super admin — the portal's own answer for the owner — none for anyone else). Why: the cookie lives
+12h and the portal re-mints it only when the portal is visited, but staff live here on a 7-day
+session and never go there — so ~12h after every sign-in the Mastery Engine frames on this site
+(Professional / Philosophical / Spiritual and the **Coach**) fell through their auth ladder and drew
+their own login form inside ours ("Sentinel and Agora have different logins"). Three rules keep it
+narrow: **never while acting as someone else** (identity, not target), **only on the canonical
+host** (a parent-domain cookie cannot be set from run.app), and **a live portal cookie is never
+replaced** (the portal knows client grants; we don't — a dashboard that needs them bounces through
+the portal, which re-mints its richer one). `/api/auth/me` is the hook because every page boot calls
+it before any frame is built. Pinned in `tests/test_login_sso_flow.py`.
+
+### The cold-visit path a PHONE takes (2026-09-05)
+
+Before: `/tasks` → whole dashboard shell downloaded + run → `/api/auth/me` 401 → `/login` (a form
+nobody on the canonical host should use) → `/api/auth/config` → `POST /api/auth/sso` 401 →
+portal `/login` (a second form) → tap Google → back → **`/dashboard`, deep link lost**. Now:
+
+```
+/tasks?open=12 → 302 /login?next=/tasks?open=12            (main._guarded_page: NO credential at all)
+               → 302 portal/login?prefer=google&next=…     (main.login_page, server-side, nothing drawn)
+               → portal: authed? re-mint + back : straight into Google's picker
+               → /login?next=… mints the week-long session → 302 /tasks?open=12
+```
+
+- **Page guard is presence-only.** `_guarded_page` redirects when there is no session cookie, no
+  `ag_sso` and no `Authorization` header; a present-but-dead cookie still gets the shell and the
+  client-side `/api/auth/me` redirect, exactly as before. `/kiosk` is never guarded — it must boot
+  offline from the service-worker cache on a tablet that may hold no cookie.
+- **`?next=` is validated everywhere it is read** (`main._safe_next_path`, login.js `nextPath`):
+  an absolute path on this origin only — never `//host`, a scheme, `/\`, or `/login` itself.
+- **`prefer=google`** asks the portal to skip its form: staff's door is Google (the portal defers to
+  our `users` table), a portal password is a client's. The portal's authed branch still answers
+  first, so a live portal session never round-trips to Google.
+- **The one-bounce guard has a server half**: `auth.BOUNCE_COOKIE` (`sentinel_sso_bounce`, 20s,
+  JS-readable, no secret). While present, `/login` renders the form instead of bouncing, and
+  login.js treats it like its own sessionStorage timestamp. Both halves stay — a hop made before any
+  script runs cannot mark sessionStorage.
 
 ### 🔴 Sentinel answers on TWO hosts and they behave differently — that is where lockouts come from
 
@@ -654,8 +697,8 @@ independent fixes, and **none of them is redundant**:
 | # | Fix | Why it alone is not enough |
 |---|---|---|
 | 1 | **the portal re-mints `ag_sso`** on that already-authed redirect (atrium `main.login()`) | it is the actual bug, but it lives in the OTHER repo — Sentinel can ship without it |
-| 2 | **`?next=` points at `/login`, not `/dashboard`** ([login.js](frontend/static/js/login.js)) | only `/login` mints a Sentinel session from the portal cookie; `/dashboard` merely authenticates per request, so the whole company rode the 12h cookie and came back every time it expired |
-| 3 | **the one-bounce guard** — a bounce that follows a bounce within 20s is suppressed and the password form is shown with an explanation | turns any future variant (an unset `SSO_SECRET`, a portal outage, a third app in the chain) into one wasted round trip instead of a lockout |
+| 2 | **`?next=` points at `/login`, not `/dashboard`** (`auth.portal_bounce_url`, and login.js as fallback) | only `/login` mints a Sentinel session from the portal cookie; `/dashboard` merely authenticates per request, so the whole company rode the 12h cookie and came back every time it expired |
+| 3 | **the one-bounce guard** — a bounce that follows a bounce within 20s is suppressed and the password form is shown with an explanation (server half: `auth.BOUNCE_COOKIE`; JS half: sessionStorage) | turns any future variant (an unset `SSO_SECRET`, a portal outage, a third app in the chain) into one wasted round trip instead of a lockout |
 
 The guard is a **timestamp, not a flag**, so a legitimate bounce hours later in the same tab still
 works. The manual escape hatch **`/login?local=1`** still exists and still skips the SSO branch.
