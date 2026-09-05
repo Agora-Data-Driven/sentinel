@@ -6,14 +6,16 @@ Seed first:   python seed.py
 from __future__ import annotations
 
 import threading
+import time
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from fastapi import Depends, FastAPI, Form, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 
+from . import sso
 from .assets import Assets
 from .config import settings
 from .database import create_all, get_db
@@ -587,29 +589,99 @@ def service_worker():
     return FileResponse(str(FRONTEND_DIR / "sw.js"), media_type="application/javascript")
 
 
-# --- Page routes (client-side auth: each page calls /api/auth/me) ----------
+# --- Page routes ------------------------------------------------------------
+# Auth is client-side (each page calls /api/auth/me), with ONE server-side floor: a visitor carrying
+# no credential at all is redirected to /login before the shell is served (`_guarded_page`).
 @app.get("/", include_in_schema=False)
 def root():
     return RedirectResponse(url="/dashboard")
 
 
+def _safe_next_path(raw: str | None) -> str:
+    """`?next=` as a same-origin path, or `/dashboard`.
+
+    It arrives from the query string, so it is validated rather than trusted: only an absolute PATH
+    on this origin (`/tasks?open=12`) — never `//host`, a scheme, a backslash trick, or `/login`
+    itself (which would loop). Anything else falls back to the landing page; the sign-in still
+    succeeded, and there is a correct place to send them.
+    """
+    raw = (raw or "").strip()
+    if (raw.startswith("/") and not raw.startswith(("//", "/\\"))
+            and "\r" not in raw and "\n" not in raw and raw.split("?", 1)[0] != "/login"):
+        return raw
+    return "/dashboard"
+
+
+def _should_bounce_to_portal(request: Request) -> bool:
+    """Send this /login visitor to the portal now, server-side, before drawing anything?
+
+    Yes when SSO can work on this host, there is no `ag_sso` cookie to try, and none of the escape
+    hatches is in play. An `ag_sso` cookie that IS present but did not sign anyone in is left to
+    login.js: its `POST /api/auth/sso` distinguishes "not a Sentinel user" (403 — bouncing would loop)
+    from "dead cookie" (401 — bounce), and the server cannot tell those apart any cheaper.
+    """
+    q = request.query_params
+    if q.get("local") == "1" or q.get("error"):
+        return False
+    if not auth.sso_bounce_possible(request):
+        return False
+    if request.cookies.get(sso.COOKIE_NAME):
+        return False
+    return not request.cookies.get(auth.BOUNCE_COOKIE)
+
+
 @app.get("/login", include_in_schema=False)
 def login_page(request: Request, db: Session = Depends(get_db)):
-    """Serve the login screen — but skip it entirely for anyone already signed in to Agora.
+    """Serve the login screen — or, far more often, never draw it at all.
 
-    If the visitor arrives with a valid portal `ag_sso` cookie AND is an active Sentinel user, we
-    drop them straight on the dashboard instead of showing a login form they don't need (no second
-    sign-in, no login-page flash). We mint the normal Sentinel session on the way so the app behaves
-    exactly like a password login afterwards (logout works, no per-request HMAC). Everyone else --
-    no portal session, or a portal email that isn't a Sentinel user -- still gets the login page,
-    where login.js handles the portal bounce / "not a Sentinel user" message.
+    Three outcomes, in order:
+      1. A valid portal `ag_sso` cookie naming an active Sentinel user: mint the normal week-long
+         Sentinel session and go straight to `?next=` (the page they were opening) or the dashboard.
+         No second sign-in, no login-page flash; logout works and there is no per-request HMAC.
+      2. No portal cookie on a host where SSO works: 302 to the portal's Google sign-in
+         (`auth.portal_bounce_url`), with the one-bounce cookie set so a fruitless round trip lands
+         on the form below instead of looping. Until 2026-09-05 this hop was made by login.js, which
+         meant serving the whole login page, its script, `/api/auth/config` and a failed
+         `POST /api/auth/sso` first — four extra round trips on a phone, and a visible flash of a
+         form that was never meant to be used.
+      3. Otherwise the form, where login.js handles the "not a Sentinel user" message, the password
+         login, and (as a fallback) the bounce.
     """
+    next_path = _safe_next_path(request.query_params.get("next"))
     user = user_from_sso(request, db)
     if user:
-        resp = RedirectResponse(url="/dashboard", status_code=302)
+        resp = RedirectResponse(url=next_path, status_code=302)
         _set_session_cookie(resp, user.id)
         return resp
+    if _should_bounce_to_portal(request):
+        resp = RedirectResponse(url=auth.portal_bounce_url(request, next_path), status_code=302)
+        # JS-readable on purpose (no secret in it): login.js reads it to say why the form is showing.
+        resp.set_cookie(auth.BOUNCE_COOKIE, str(int(time.time())), max_age=auth.BOUNCE_WINDOW_SECONDS,
+                        httponly=False, secure=settings.secure_cookies, samesite="lax", path="/")
+        return resp
     return _page("login.html")
+
+
+def _has_credential(request: Request) -> bool:
+    """Is there ANYTHING here that could authenticate? Presence only — validity is `/api/auth/me`'s job."""
+    return bool(request.cookies.get(settings.cookie_name) or request.cookies.get(sso.COOKIE_NAME)
+                or request.headers.get("authorization"))
+
+
+def _guarded_page(request: Request, name: str) -> Response:
+    """A page shell — unless the visitor carries no credential at all, in which case `/login` now.
+
+    Pages authenticate client-side (`/api/auth/me` in app.js), and that stays the rule: a present
+    but dead cookie still gets the shell and the script's own redirect. This is only the cold-visit
+    floor. Without it a signed-out phone downloaded the whole dashboard shell, ran it, learned it was
+    signed out, and only then went to /login — one full page of nothing, then another. The redirect
+    carries the path and query as `?next=`, so the page they opened is where they land after signing
+    in (a `/tasks?open=<id>` notification link, say) instead of the dashboard.
+    """
+    if not _has_credential(request):
+        target = request.url.path + ("?%s" % request.url.query if request.url.query else "")
+        return RedirectResponse(url="/login?next=" + quote(target, safe=""), status_code=302)
+    return _page(name)
 
 
 def _set_session_cookie(response, user_id: int) -> None:
@@ -718,10 +790,21 @@ _PAGES = {
     "/scanner": "scanner.html",
 }
 
+# The kiosk must keep booting OFFLINE from its service-worker cache (sw.js), on a tablet that may hold
+# no cookie at all — so it is served unconditionally and keeps the pure client-side auth.
+_UNGUARDED_PAGES = {"/kiosk"}
+
+
+def _page_route(file: str, guarded: bool):
+    def route(request: Request):
+        return _guarded_page(request, file) if guarded else _page(file)
+    return route
+
+
 for _route, _file in _PAGES.items():
     app.add_api_route(
         _route,
-        (lambda f=_file: (lambda: _page(f)))(),
+        _page_route(_file, _route not in _UNGUARDED_PAGES),
         methods=["GET"],
         include_in_schema=False,
     )
@@ -747,4 +830,4 @@ def dashboard_page(request: Request):
     if any(p in request.query_params for p in _BOARD_PARAMS):
         q = request.url.query
         return RedirectResponse(url="/tasks" + (f"?{q}" if q else ""))
-    return _page("dashboard.html")
+    return _guarded_page(request, "dashboard.html")

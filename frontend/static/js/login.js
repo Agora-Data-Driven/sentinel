@@ -12,11 +12,29 @@
    privacy modes, and the loop-breaker must never be the thing that breaks the page. */
 const BOUNCE_AT = "sentinel:sso-bounce-at";
 const BOUNCE_WINDOW_MS = 20000;  // a loop iteration is ~1s; a human retry is not
+// The SERVER makes the first bounce now (main.login_page, 2026-09-05) — before this page is ever
+// served — and records it in this short-lived, JS-readable cookie (auth.BOUNCE_COOKIE, 20s), because
+// a hop that happens before any script runs cannot mark sessionStorage. Either record counts.
+const BOUNCE_COOKIE = "sentinel_sso_bounce";
+const serverBounced = () => {
+  try { return document.cookie.split(";").some((c) => c.trim().indexOf(BOUNCE_COOKIE + "=") === 0); }
+  catch (e) { return false; }
+};
 const bouncedJustNow = () => {
+  if (serverBounced()) return true;
   try { return Date.now() - Number(sessionStorage.getItem(BOUNCE_AT) || 0) < BOUNCE_WINDOW_MS; }
   catch (e) { return false; }
 };
 const markBounce = () => { try { sessionStorage.setItem(BOUNCE_AT, String(Date.now())); } catch (e) {} };
+
+// Where to go once signed in: the page the visitor was opening (`?next=`, put there by app.js's 401
+// redirect and by the server's page guard), validated the same way the server validates it — an
+// absolute PATH on this origin only. Anything else is the dashboard.
+const nextPath = () => {
+  const n = new URLSearchParams(location.search).get("next") || "";
+  const ok = n.charAt(0) === "/" && n.indexOf("//") !== 0 && n.indexOf("/\\") !== 0 && n.split("?")[0] !== "/login";
+  return ok ? n : "/dashboard";
+};
 
 window.pageInit = async (S) => {
   const err = S.qs("#err");
@@ -43,7 +61,7 @@ window.pageInit = async (S) => {
     let ssoErr = null;
     try {
       await S.api("/api/auth/sso", { method: "POST" });
-      location.replace("/dashboard");
+      location.replace(nextPath());
       return;
     } catch (e) { ssoErr = e; }
 
@@ -59,10 +77,16 @@ window.pageInit = async (S) => {
          request. Landing there meant nobody coming through the portal ever got a
          `sentinel_session` — the whole company rode the portal cookie, so every one of its 12h
          expiries put them back on this page needing another round trip. Via /login they get the
-         normal week-long session and this path stops being a daily event. */
+         normal week-long session and this path stops being a daily event.
+
+         Normally the server has already made this hop (main.login_page); this is the fallback for a
+         cookie that was present but unusable. Same URL as auth.portal_bounce_url — keep them alike:
+         `prefer=google` takes the portal straight to the Google picker (staff never use a portal
+         password), and our /login keeps the page they were opening. */
       markBounce();
-      const next = encodeURIComponent(location.origin + "/login");
-      location.replace(cfg.portal_login_url + (cfg.portal_login_url.includes("?") ? "&" : "?") + "next=" + next);
+      const back = location.origin + "/login" + (nextPath() !== "/dashboard" ? "?next=" + encodeURIComponent(nextPath()) : "");
+      location.replace(cfg.portal_login_url + (cfg.portal_login_url.includes("?") ? "&" : "?")
+        + "prefer=google&next=" + encodeURIComponent(back));
       return;
     }
   }
@@ -80,7 +104,7 @@ window.pageInit = async (S) => {
       const users = await S.api("/api/auth/dev-users");
       S.qs("#user-select").innerHTML = users.map((u) => `<option value="${u.id}">${S.esc(u.name)} · ${S.esc(u.role.replace("_", " "))}</option>`).join("");
       S.qs("#devsignin").onclick = async () => {
-        try { await S.api("/api/auth/dev-login", { method: "POST", body: { user_id: Number(S.qs("#user-select").value) } }); location.href = "/dashboard"; }
+        try { await S.api("/api/auth/dev-login", { method: "POST", body: { user_id: Number(S.qs("#user-select").value) } }); location.href = nextPath(); }
         catch (e) { showErr(e.detail || "Dev sign in failed"); }
       };
     } catch (e) {}
@@ -95,7 +119,7 @@ window.pageInit = async (S) => {
     const btn = S.qs("#signin"); btn.disabled = true; btn.textContent = "Signing in…";
     try {
       await S.api("/api/auth/login", { method: "POST", body: { email: S.qs("#email").value.trim(), password: S.qs("#password").value } });
-      location.href = "/dashboard";
+      location.href = nextPath();
     } catch (e2) {
       // A request that never reached the server (offline, a dead proxy) is not a bad password, and
       // must not read as one — hand it to the form's own native post rather than accusing the user.

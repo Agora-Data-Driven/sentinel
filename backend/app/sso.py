@@ -1,4 +1,4 @@
-"""Central portal single-sign-on (`ag_sso`) — verifier only.
+"""Central portal single-sign-on (`ag_sso`) — verifier, plus ONE narrow minter.
 
 The Agora portal (portal.agoradatadriven.com) is the ONE front door. On a successful portal login it
 mints an `ag_sso` cookie: an HMAC-SHA256-signed JSON payload, scoped to `.agoradatadriven.com` so it
@@ -20,6 +20,16 @@ WHAT THIS DOES NOT DO — deliberately:
 
 Fail-CLOSED everywhere: a missing secret, a malformed/forged/expired cookie, or ANY unexpected error
 yields None, so SSO can only ever ADD a way in for someone who already has an account.
+
+MINTING (2026-09-05): Sentinel now signs this cookie in exactly one place — `routers/auth.me`
+`_refresh_shared_cookie` — and only for a person who ALREADY holds a valid Sentinel session and has
+LOST the portal's cookie. It never creates identity: the subject is the signed-in user's own email,
+so this widens nothing the session did not already prove. Why it exists: the cookie lives 12h and the
+portal re-mints it only when the portal itself is visited, but staff live in Sentinel (7-day session)
+and never touch the portal — so 12h after signing in, the Mastery Engine frames inside Sentinel (the
+Professional/Philosophical/Spiritual tabs and the Coach) fell through their auth ladder and drew
+their own login form inside ours. The wire format is the portal's; a client list is the one field
+the portal knows better (its per-client grants), which is why a LIVE portal cookie is never replaced.
 """
 from __future__ import annotations
 
@@ -30,6 +40,10 @@ import json
 import time
 
 COOKIE_NAME = "ag_sso"
+# The portal's scope: a parent-domain cookie, which any *.agoradatadriven.com host may set. Keep both
+# of these in step with atrium's platform_sso.py (COOKIE_DOMAIN there, DEFAULT_TTL_SECONDS 12h).
+COOKIE_DOMAIN = ".agoradatadriven.com"
+DEFAULT_TTL_SECONDS = 60 * 60 * 12
 
 
 def _b64e(raw: bytes) -> str:
@@ -71,10 +85,12 @@ def email_from_cookie(secret: str, raw: str | None, now: float | None = None) ->
     return str(payload.get("sub") or "").strip().lower()
 
 
-def mint(secret: str, subject: str, clients=("*",), ttl_seconds: int = 60 * 60 * 12,
+def mint(secret: str, subject: str, clients=("*",), ttl_seconds: int = DEFAULT_TTL_SECONDS,
          now: float | None = None) -> str:
-    """Mint a cookie exactly as the portal does. Sentinel never calls this in production —
-    it exists so the tests can exercise the verifier against a real signature."""
+    """Mint a cookie exactly as the portal does.
+
+    Production has ONE caller — `routers/auth._refresh_shared_cookie` (see the module docstring) —
+    and the tests use it to exercise the verifier against a real signature."""
     issued = int(now if now is not None else time.time())
     payload = {"sub": subject, "clients": list(clients), "iat": issued, "exp": issued + int(ttl_seconds)}
     payload_b64 = _b64e(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8"))

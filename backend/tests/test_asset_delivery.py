@@ -18,6 +18,7 @@ import gzip
 import pytest
 
 from app.assets import Assets
+from app.config import settings
 from app.main import ASSETS
 from app.middleware import ConditionalGZipMiddleware
 
@@ -163,8 +164,20 @@ def test_a_normal_path_with_the_same_payload_IS_compressed():
 
 # --- 3. content-versioned asset URLs ------------------------------------------------------------
 
+
+def _shell(client, path):
+    """A page shell, as a SIGNED-IN browser fetches it.
+
+    Since 2026-09-05 a visitor carrying no credential at all is redirected to `/login?next=` before
+    the shell is served (`main._guarded_page`, presence-only) — so these tests carry a cookie. Its
+    validity is irrelevant here; the shell never checks it, `/api/auth/me` does.
+    """
+    client.cookies.set(settings.cookie_name, "any-value-presence-is-all-the-shell-checks")
+    return client.get(path)
+
+
 def test_page_shells_hand_out_versioned_css_and_js(client):
-    r = client.get("/tasks")
+    r = _shell(client, "/tasks")
     assert r.status_code == 200
     html = r.text
     for asset in ("/static/js/app.js", "/static/js/taskboard.js", "/static/css/styles.css"):
@@ -174,7 +187,7 @@ def test_page_shells_hand_out_versioned_css_and_js(client):
 def test_the_shell_itself_still_revalidates(client):
     """🔴 The scheme rests on this. The document that HANDS OUT immutable URLs must never itself be
     cached, or a deploy's new URLs would never reach the browser."""
-    r = client.get("/tasks")
+    r = _shell(client, "/tasks")
     assert r.headers["cache-control"] == "no-cache"
 
 

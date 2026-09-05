@@ -1661,7 +1661,11 @@
       USER = me;
       vocabRes = v;
     } catch (e) {
-      location.href = "/login"; return;
+      // Carry the page (path + query) along, so signing in lands back HERE — a notification's
+      // /tasks?open=<id>, say — rather than on the dashboard. /login validates it (main._safe_next_path).
+      const here = location.pathname + location.search;
+      location.href = "/login" + (here && here !== "/dashboard" ? "?next=" + encodeURIComponent(here) : "");
+      return;
     }
     Sentinel.user = USER;
     setVocab(vocabRes);

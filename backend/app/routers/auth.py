@@ -74,6 +74,10 @@ def login_failure_detail(db: Session, email: str) -> str:
     return "Invalid email or password"
 
 
+def _request_host(request: Request) -> str:
+    return (request.headers.get("host") or "").split(":")[0].strip().lower()
+
+
 def _sso_reachable(request: Request) -> bool:
     """True only when the portal's cookie can actually reach THIS host.
 
@@ -83,8 +87,43 @@ def _sso_reachable(request: Request) -> bool:
     only where SSO can work, and everywhere else the normal login stands. Same fail-safe posture the
     portal's platform_sso.py documents for dashboards.
     """
-    host = (request.headers.get("host") or "").split(":")[0].strip().lower()
+    host = _request_host(request)
     return host == "agoradatadriven.com" or host.endswith(".agoradatadriven.com")
+
+
+def sso_bounce_possible(request: Request) -> bool:
+    """True when sending this visitor to the portal for a cookie can actually work."""
+    return bool(settings.platform_sso_secret and settings.portal_login_url) and _sso_reachable(request)
+
+
+# The one-bounce guard, server-side half (2026-09-05). `GET /login` now bounces to the portal BEFORE
+# rendering anything (main.login_page), so the guard login.js keeps in sessionStorage cannot see that
+# hop. This short-lived, JS-readable cookie is the same timestamp idea: while it is present, the
+# server renders the form instead of bouncing again, and login.js reads it to explain why. 20s is a
+# loop iteration (~1s) with room to spare, and far shorter than any human retry.
+BOUNCE_COOKIE = "sentinel_sso_bounce"
+BOUNCE_WINDOW_SECONDS = 20
+
+
+def portal_bounce_url(request: Request, next_path: str = "/dashboard") -> str:
+    """Where a visitor with no usable cookie is sent to sign in — the portal, straight to Google.
+
+    For staff the front door IS Google: every active Sentinel user can Google-sign-in at the portal
+    (it defers to our `users` table), while a portal PASSWORD belongs to clients and the platform
+    owner. So the bounce carries `prefer=google` — the portal skips its own form and opens the Google
+    account picker, one page and one tap fewer on a phone — and a browser that still holds a portal
+    session gets its cookie re-minted with no UI at all (atrium `main.login()`), same as before.
+
+    🔴 `next` targets OUR `/login`, never `/dashboard`: only `/login` mints a week-long Sentinel
+    session out of the portal cookie; `/dashboard` merely authenticates per request (the 2026-08-11
+    loop). It also carries the page the visitor was actually going to, so a deep link survives the
+    round trip. login.js builds the same URL for its own (fallback) bounce — keep them alike.
+    """
+    back = "https://%s/login" % _request_host(request)
+    if next_path and next_path != "/dashboard":
+        back += "?next=" + urllib.parse.quote(next_path, safe="")
+    sep = "&" if "?" in settings.portal_login_url else "?"
+    return settings.portal_login_url + sep + "prefer=google&next=" + urllib.parse.quote(back, safe="")
 
 
 @router.get("/config")
@@ -180,14 +219,48 @@ def dev_login(payload: DevLoginIn, response: Response, db: Session = Depends(get
     return {"ok": True, "user": user_full(user, team)}
 
 
+def _refresh_shared_cookie(request: Request, response: Response, user: User) -> None:
+    """Hand a signed-in Sentinel user back the estate's `ag_sso` cookie when they have lost it.
+
+    The cookie lives 12h and the portal re-mints it only when the portal is visited — but staff live
+    HERE on a 7-day session and never go there, so ~12h in, every Mastery Engine frame on this site
+    (Professional / Philosophical / Spiritual, and the Coach) lost its identity and drew its own login
+    form inside ours: "Sentinel and Agora have different logins". Runs on `/api/auth/me` because every
+    page boot calls it BEFORE any frame is built (app.js), so the frames' first request already
+    carries the new cookie.
+
+    Narrow on purpose — see sso.py's module docstring:
+      * only for the REAL signed-in person (never while a super admin is acting as someone else);
+      * only where the parent-domain cookie can be set at all (the canonical host);
+      * only when the portal's cookie is MISSING or dead. A live one is never replaced: the portal
+        knows a person's client grants and we do not, so ours carries `*` for a super admin (the
+        portal's own answer for the owner) and no clients for anyone else. If that ever matters, a
+        client dashboard bounces through the portal, which re-mints its richer cookie — self-healing.
+    """
+    if impersonator(request):
+        return
+    if not (settings.platform_sso_secret and _sso_reachable(request)):
+        return
+    if sso.verify(settings.platform_sso_secret, request.cookies.get(sso.COOKIE_NAME)):
+        return
+    clients = ("*",) if user.role == "super_admin" else ()
+    response.set_cookie(
+        key=sso.COOKIE_NAME, value=sso.mint(settings.platform_sso_secret, user.email, clients),
+        domain=sso.COOKIE_DOMAIN, secure=True, httponly=True, samesite="none",
+        max_age=sso.DEFAULT_TTL_SECONDS, path="/",
+    )
+
+
 @router.get("/me")
-def me(request: Request, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def me(request: Request, response: Response, user: User = Depends(get_current_user),
+       db: Session = Depends(get_db)):
     from ..services import permissions as perms_svc
 
     # While a super admin is ACTING, `user` is the target — the whole point — and the UI needs to
     # know, loudly. `acting_as.real` is the actual person, so the banner can say who is really here.
     real = impersonator(request)
     team = db.get(Team, user.team_id) if user.team_id else None
+    _refresh_shared_cookie(request, response, user)
     # 🔴 `caps` is added HERE, not on `user_full`. That serializer is called once per person in the
     # People directory and once per assignee/supporter on the board, and resolving capabilities needs
     # the override table — so putting it there would add a read to a hot path for an answer only the
