@@ -169,7 +169,7 @@ deploy/            deploy.ps1, seed-job.ps1, DEPLOY.md
 | `stream.py` | SSE push to the browser |
 | `dev.py` | **Local-development live reload** (`GET /api/dev/reload`, SSE). 404s in production — §5 |
 | `internal.py` | **HMAC-signed** service-to-service (Mastery Engine ↔ Sentinel, Atrium → Sentinel). Purposes: `user-lookup`, `academy-people`, `holistic-profile`, `growth-detail`, `mentor-search`, `task-request`, `task-feedback`, **`board`**, **`work-digest`**, **`work-detail`** |
-| `ops.py` | **The operating-system surfaces (2026-09-02)** — `/api/ops/today` (time + training), `/calendar` (projection), `/clients` + `/clients/{id}` (health), `/clients/{id}/account-manager`, `/exceptions` (the COO's list), `/ai/draft-tasks`, `/certifications`, `/meta`. Thin; the rules are `services/{today,calendar_view,client_health,operations,ai_draft}.py`. See §5 |
+| `ops.py` | **The operating-system surfaces (2026-09-02)** — `/api/ops/today` (time + training), `/calendar` (projection), `/clients` + `/clients/{id}` (health), `/clients/{id}/account-manager`, `/exceptions` (the COO's list), **`/capacity`** (the capacity table on its own, gated `clients.view`; every row with `ops.view`, else the AM's TEAM — `operations.capacity_scope`, 2026-09-03), `/ai/draft-tasks`, `/certifications`, `/meta`. Thin; the rules are `services/{today,calendar_view,client_health,operations,ai_draft}.py`. See §5 |
 
 Adding a router? Register it in the tuple at [main.py:513](backend/app/main.py#L513).
 

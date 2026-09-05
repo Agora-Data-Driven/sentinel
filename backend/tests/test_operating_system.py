@@ -309,6 +309,28 @@ def test_capacity_shows_who_is_working_right_now(client, db, auth, admin, worker
     assert next(r for r in rows if r["user"]["id"] == worker.id)["active_session"] is None
 
 
+def test_capacity_endpoint_is_scoped_to_the_account_managers_team(client, db, auth, admin, am, worker,
+                                                                    task, make_user):
+    """/api/ops/capacity (2026-09-03): the COO gets everyone; an AM gets their team — departments plus
+    whoever holds open work on their accounts; an employee is refused."""
+    stranger = make_user(C.ROLE_EMPLOYEE, name="Nobody Near")
+    auth(am)
+    r = client.get("/api/ops/capacity")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    ids = {row["user"]["id"] for row in body["capacity"]}
+    assert body["scope"] == "team"
+    assert worker.id in ids          # holds the open card on the AM's account
+    assert am.id in ids              # the AM is always a row
+    assert stranger.id not in ids
+    auth(admin)
+    body = client.get("/api/ops/capacity").json()
+    assert body["scope"] == "all"
+    assert stranger.id in {row["user"]["id"] for row in body["capacity"]}
+    auth(stranger)
+    assert client.get("/api/ops/capacity").status_code == 403
+
+
 def test_a_stale_review_surfaces_as_an_exception(client, db, auth, admin, worker, task):
     task.review_state = C.REVIEW_PENDING
     db.commit()

@@ -7,6 +7,7 @@ AI task drafting and certifications. Thin — every rule lives in `services/`.
     GET  /api/ops/clients/{id}                one account in depth           [clients.view]
     PATCH /api/ops/clients/{id}/account-manager                             [clients.assign_am]
     GET  /api/ops/exceptions                  the COO's list + capacity     [ops.view]
+    GET  /api/ops/capacity                    the capacity table, scoped    [clients.view; all rows with ops.view]
     POST /api/ops/ai/draft-tasks              plain words → proposals       [ai.draft]
     GET  /api/ops/certifications?user_id=     a person's credentials
     POST /api/ops/certifications/{user_id}    grant / update                [certifications.manage]
@@ -101,6 +102,16 @@ def set_account_manager(client_id: int, payload: AccountManagerIn,
 @router.get("/exceptions", dependencies=[Depends(require_cap(CAP_OPS_VIEW))])
 def exceptions(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     return operations.exceptions(db, user)
+
+
+@router.get("/capacity", dependencies=[Depends(require_cap(CAP_CLIENTS_VIEW))])
+def capacity(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """The capacity table on its own (2026-09-03). `ops.view` holders get every row — the same table
+    `/exceptions` carries. Everyone else the gate lets in (the account manager) gets their TEAM —
+    `operations.capacity_scope`. `scope` says which, so the UI can title the table honestly."""
+    ids = operations.capacity_scope(db, user)
+    return {"capacity": operations.capacity_rows(db, user, only_ids=ids),
+            "scope": "all" if ids is None else "team"}
 
 
 # --- AI drafting --------------------------------------------------------------------------------------
